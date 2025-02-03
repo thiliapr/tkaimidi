@@ -9,7 +9,6 @@ import pathlib
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from typing import Optional
 
 TIME_PRECISION = 120  # 时间精度，表示每个音符的最小时间单位
 MAX_TIME_DIFF = 960  # 两个音符之间允许的最大时间差
@@ -131,30 +130,27 @@ def save_checkpoint(model: MidiNet, optimizer: optim.SGD, train_loss: list[float
         )  # 将训练信息写入JSON文件
 
 
-def load_checkpoint(model: MidiNet, optimizer: Optional[optim.SGD], path: pathlib.Path):
+def load_checkpoint(path: pathlib.Path, optimizer: bool = False):
     """
     从指定路径加载模型的检查点，并恢复训练状态。
 
     Args:
-        model: 要加载的模型实例
-        optimizer: 可选的，用于恢复优化器状态
         path: 加载检查点的目录路径
+        optimizer: 是否加载优化器状态
 
     Returns:
-        训练、验证的损失和准确率的历史记录，和上一次数据集的长度、拆分数据集时训练集的开始索引、训练数据的索引随机采样器的生成器的状态、上次训练时的未训练完成的epoch训练了多少个batch
+        模型和优化器的状态，训练、验证的损失和准确率的历史记录，上一次数据集的长度，拆分数据集时训练集的开始索引，训练数据的索引随机采样器的生成器的状态，上次训练时的未训练完成的epoch训练了多少个batch
     """
     # 检查并加载模型权重
     model_path = path / "model.pth"
     if model_path.exists():
         # 加载模型的状态字典并更新
-        model.load_state_dict({**model.state_dict(), **torch.load(model_path, weights_only=True, map_location=torch.device("cpu"))})  # 从检查点加载权重
+        model_state = torch.load(model_path, weights_only=True, map_location=torch.device("cpu"))  # 从检查点加载权重
 
     # 检查并加载优化器权重
-    if optimizer is not None:
-        optimizer_path = path / "optimizer.pth"
-        if optimizer_path.exists():
-            # 加载优化器的状态字典并更新
-            optimizer.load_state_dict({**optimizer.state_dict(), **torch.load(optimizer_path, weights_only=True, map_location=torch.device("cpu"))})  # 从检查点加载权重
+    optimizer_state = None
+    if optimizer and (optimizer_path := path / "optimizer.pth").exists():
+        optimizer_state = torch.load(optimizer_path, weights_only=True, map_location=torch.device("cpu"))  # 从检查点加载权重
 
     # 尝试加载训练信息文件
     train_info_path = path / "train_info.json"
@@ -170,4 +166,4 @@ def load_checkpoint(model: MidiNet, optimizer: Optional[optim.SGD], path: pathli
         generator_state = ...
 
     # 返回训练损失和验证损失
-    return train_info.get("train_loss", []), train_info.get("val_loss", []), train_info.get("train_accuracy", []), train_info.get("val_accuracy", []), train_info.get("dataset_length", -1), train_info.get("train_start", 0), train_info.get("last_batch", 0), generator_state
+    return model_state, optimizer_state, train_info.get("train_loss", []), train_info.get("val_loss", []), train_info.get("train_accuracy", []), train_info.get("val_accuracy", []), train_info.get("dataset_length", -1), train_info.get("train_start", 0), train_info.get("last_batch", 0), generator_state

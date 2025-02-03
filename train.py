@@ -100,10 +100,7 @@ class MidiDataset(Dataset):
                 # 提取序列，并应用偏移量进行数据增强
                 seq_notes, seq_times = zip(*midi_notes_data[found:found + self.seq_size])
                 time_gcd = math.gcd(*seq_times)
-                seq = [
-                    (note + note_offset) * NOTE_DURATION_COUNT + (time // time_gcd * (time_offset + 1))
-                    for note, time in zip(seq_notes, seq_times)
-                ]
+                seq = [(note + note_offset) * NOTE_DURATION_COUNT + (time // time_gcd * (time_offset + 1)) for note, time in zip(seq_notes, seq_times)]
 
                 # 返回输入和目标序列
                 return torch.tensor(seq[:-1], dtype=torch.long), torch.tensor(seq[1:], dtype=torch.long)
@@ -154,20 +151,7 @@ def split_dataset(dataset: Dataset, train_length: float, train_start: int):
     return SplitDataset(dataset, train_start, train_length), SplitDataset(dataset, val_start, val_length)  # 创建并返回训练集和验证集
 
 
-def train(
-    model: MidiNet,
-    dataset: MidiDataset,
-    optimizer: optim.SGD,
-    train_batch_size: int,
-    val_batch_size: int,
-    train_length: float = 0.8,
-    val_steps: int = 256,
-    val_per_step: int = 4096,
-    steps_to_val: int = 256,
-    train_start: int = 0,
-    generator_state: torch.tensor = ...,
-    last_batch: int = 0
-) -> tuple[list[float], list[float], list[float], list[float], int, torch.tensor]:
+def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batch_size: int, val_batch_size: int, train_length: float = 0.8, val_steps: int = 256, val_per_step: int = 4096, steps_to_val: int = 256, train_start: int = 0, generator_state: torch.tensor = ..., last_batch: int = 0, device: torch.device = torch.device("cpu")) -> tuple[list[float], list[float], list[float], list[float], int, torch.tensor]:
     """
     训练模型并记录训练和验证的损失。
 
@@ -184,6 +168,7 @@ def train(
         train_start: 拆分数据集时训练集的开始索引
         generator_state: 训练数据的索引随机采样器的生成器的状态
         last_batch: 上次训练时的未训练完成的epoch训练了多少个batch
+        device: 用于训练的设备
 
     Returns:
         训练、验证损失和准确率的历史记录和生成器状态和最后训练的批次
@@ -200,15 +185,11 @@ def train(
         train_generator.set_state(generator_state)
     train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True, drop_last=True, generator=train_generator)
 
-    # 获取设备
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # 初始化加速器
     if not torch.cuda.is_available():
         print(f"train(): 使用 {cpu_count()} 个 CPU 核心进行训练。")
 
-    # 将模型、优化器的动量缓冲区移动到设备
+    # 将模型移动到设备
     model = model.to(device)
-    for param_state in optimizer.state.values():
-        param_state["momentum_buffer"] = param_state["momentum_buffer"].to(device)
 
     # 检查是否使用多GPU
     if torch.cuda.device_count() > 1:
@@ -304,13 +285,7 @@ def train(
                 train_accuracy.append(train_acc_avg)
                 val_accuracy.append(val_acc_avg)
 
-                print(
-                    f"Validation Step {step // val_per_step}:",
-                    f"train_loss={train_loss_avg:.3f},",
-                    f"val_loss={val_loss_avg:.3f},",
-                    f"train_acc={train_acc_avg:.3f},",
-                    f"val_acc={val_acc_avg:.3f}"
-                )
+                print(f"Validation Step {step // val_per_step}:", f"train_loss={train_loss_avg:.3f},", f"val_loss={val_loss_avg:.3f},", f"train_acc={train_acc_avg:.3f},", f"val_acc={val_acc_avg:.3f}")
                 train_loss_sum = train_accuracy_sum = 0  # 将训练损失、准确率计数器归零
 
                 empty_cache()  # 清理缓存
@@ -323,13 +298,7 @@ def train(
     return train_loss, val_loss, train_accuracy, val_accuracy, last_batch, train_generator.get_state()
 
 
-def plot_training_process(
-    train_loss: list[float],
-    val_loss: list[float],
-    train_accuracy: list[float],
-    val_accuracy: list[float],
-    img_path: pathlib.Path | str
-):
+def plot_training_process(train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], img_path: pathlib.Path | str):
     """
     绘制训练过程中的损失曲线，包括训练集和验证集的音符损失与时间损失。
 
@@ -385,9 +354,7 @@ def main():
     pretrained_ckpt = pathlib.Path("/kaggle/input/tkaimidi/pytorch/default/1/ckpt")
     local_ckpt = pathlib.Path("ckpt")
     local_dataset_path = pathlib.Path("/kaggle/temp/data")
-    external_datasets_path = [pathlib.Path(path) for path in [
-        "/kaggle/input/music-midi"
-    ]]
+    external_datasets_path = [pathlib.Path(path) for path in ["/kaggle/input/music-midi"]]
 
     # 如果预训练检查点存在，则复制到本地检查点路径
     if pretrained_ckpt.exists():
@@ -400,12 +367,17 @@ def main():
         shutil.copytree(path, local_dataset_path / path.name, dirs_exist_ok=True)
 
     dataset = MidiDataset(local_dataset_path, seq_size=512)  # 加载训练数据集
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # 获取设备
     model = MidiNet()  # 初始化模型
-    optimizer = optim.SGD(model.parameters(), lr=0.003548133892335713, momentum=0.9, weight_decay=1e-3)  # 初始化优化器
 
     # 尝试加载检查点
     try:
-        old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(model, optimizer, local_ckpt)
+        model_state, optimizer_state, old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(local_ckpt, optimizer=True)
+        model.load_state_dict(model_state)  # 加载模型状态
+        model = model.to(device)  # 转移到指定设备并编译模型
+        optimizer = optim.SGD(model.parameters(), lr=0.003548133892335713, momentum=0.9, weight_decay=1e-3)  # 初始化优化器
+        optimizer.load_state_dict(optimizer_state)
+
         if dataset_length != len(dataset):
             print(f"数据集大小不匹配，可能是使用了与之前不同的数据集训练: {dataset_length} 与 {len(dataset)} 不匹配", file=sys.stderr)
             train_start = random.randint(0, len(dataset) - 1)
@@ -413,17 +385,14 @@ def main():
             last_batch = 0
     except Exception as e:
         print(f"加载检查点时发生错误: {e}", file=sys.stderr)
+        optimizer = optim.SGD(model.parameters(), lr=0.003548133892335713, momentum=0.9, weight_decay=1e-3)  # 初始化优化器
         old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy = [], [], [], []
         train_start = random.randint(0, len(dataset) - 1)
         generator_state = ...
         last_batch = 0
 
     # 开始训练模型
-    train_loss, val_loss, train_accuracy, val_accuracy, last_batch, generator_state = train(
-        model, dataset, optimizer, val_steps=1,
-        train_batch_size=1, val_batch_size=4,
-        train_start=train_start, generator_state=generator_state, last_batch=last_batch
-    )
+    train_loss, val_loss, train_accuracy, val_accuracy, last_batch, generator_state = train(model, dataset, optimizer, val_steps=1, train_batch_size=1, val_batch_size=4, train_start=train_start, generator_state=generator_state, last_batch=last_batch, device=device)
 
     # 合并旧的损失记录和新的记录
     train_loss = old_train_loss + train_loss
