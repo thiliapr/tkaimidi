@@ -69,13 +69,7 @@ class MidiNet(nn.Module):
 
         self.embedding = nn.utils.skip_init(nn.Embedding, vocab_size, self.d_model)  # 嵌入层
         self.pos_encoder = PositionalEncoding(self.d_model, 0.1)
-        self.transformer_decoder = nn.TransformerDecoder(nn.TransformerDecoderLayer(
-            d_model=self.d_model,
-            nhead=8,
-            dim_feedforward=2048,
-            dropout=0.1,
-            batch_first=True
-        ), num_layers=6)  # Transformer 解码器层堆叠
+        self.transformer_decoder = nn.TransformerDecoder(nn.TransformerDecoderLayer(d_model=self.d_model, nhead=8, dim_feedforward=2048, dropout=0.1, batch_first=True), num_layers=6)  # Transformer 解码器层堆叠
         self.fc_out = nn.utils.skip_init(nn.Linear, self.d_model, vocab_size)  # 将嵌入映射到词汇大小
 
         self.register_buffer("last_mask", torch.tensor([]), persistent=False)  # CasualMask 初始化
@@ -91,26 +85,14 @@ class MidiNet(nn.Module):
         x = self.pos_encoder(x)  # 输入通过位置编码
         if mask:
             if x.size(1) != self.last_mask.size(0):
-                self.last_mask = (torch.tril(torch.ones(x.size(1), x.size(1)), diagonal=1) == 0)  # 生成CasualMask
+                self.last_mask = torch.tril(torch.ones(x.size(1), x.size(1)), diagonal=1) == 0  # 生成CasualMask
             self.last_mask = self.last_mask.to(x.device)
             x = self.transformer_decoder(x, x, tgt_mask=self.last_mask)  # 通过 Transformer 解码器
         logits = self.fc_out(x)  # 预测下一个 token
         return logits
 
 
-def save_checkpoint(
-    model: MidiNet,
-    optimizer: optim.SGD,
-    train_loss: list[float],
-    val_loss: list[float],
-    train_accuracy: list[float],
-    val_accuracy: list[float],
-    dataset_length: int,
-    train_start: int,
-    last_batch: int,
-    generator_state: torch.tensor,
-    path: pathlib.Path
-):
+def save_checkpoint(model: MidiNet, optimizer: optim.SGD, train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], dataset_length: int, train_start: int, last_batch: int, generator_state: torch.tensor, path: pathlib.Path):
     """
     保存模型的检查点到指定路径，包括模型的权重以及训练的进度信息。
 
@@ -134,16 +116,19 @@ def save_checkpoint(
     torch.save(optimizer.state_dict(), path / "optimizer.pth")  # 保存优化器权重
     # 保存训练信息
     with open(path / "train_info.json", "w") as f:
-        json.dump({
-            "train_loss": train_loss,
-            "val_loss": val_loss,
-            "train_accuracy": train_accuracy,
-            "val_accuracy": val_accuracy,
-            "dataset_length": dataset_length,
-            "train_start": train_start,
-            "last_batch": last_batch,
-            "generator_state": base64.b64encode(bytes(generator_state.tolist())).decode(),
-        }, f)  # 将训练信息写入JSON文件
+        json.dump(
+            {
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "train_accuracy": train_accuracy,
+                "val_accuracy": val_accuracy,
+                "dataset_length": dataset_length,
+                "train_start": train_start,
+                "last_batch": last_batch,
+                "generator_state": base64.b64encode(bytes(generator_state.tolist())).decode(),
+            },
+            f,
+        )  # 将训练信息写入JSON文件
 
 
 def load_checkpoint(model: MidiNet, optimizer: Optional[optim.SGD], path: pathlib.Path):
@@ -162,20 +147,14 @@ def load_checkpoint(model: MidiNet, optimizer: Optional[optim.SGD], path: pathli
     model_path = path / "model.pth"
     if model_path.exists():
         # 加载模型的状态字典并更新
-        model.load_state_dict({
-            **model.state_dict(),
-            **torch.load(model_path, weights_only=True, map_location=torch.device("cpu"))  # 从检查点加载权重
-        })
+        model.load_state_dict({**model.state_dict(), **torch.load(model_path, weights_only=True, map_location=torch.device("cpu"))})  # 从检查点加载权重
 
     # 检查并加载优化器权重
     if optimizer is not None:
         optimizer_path = path / "optimizer.pth"
         if optimizer_path.exists():
             # 加载优化器的状态字典并更新
-            optimizer.load_state_dict({
-                **optimizer.state_dict(),
-                **torch.load(optimizer_path, weights_only=True, map_location=torch.device("cpu"))  # 从检查点加载权重
-            })
+            optimizer.load_state_dict({**optimizer.state_dict(), **torch.load(optimizer_path, weights_only=True, map_location=torch.device("cpu"))})  # 从检查点加载权重
 
     # 尝试加载训练信息文件
     train_info_path = path / "train_info.json"
@@ -191,11 +170,4 @@ def load_checkpoint(model: MidiNet, optimizer: Optional[optim.SGD], path: pathli
         generator_state = ...
 
     # 返回训练损失和验证损失
-    return train_info.get("train_loss", []), \
-        train_info.get("val_loss", []), \
-        train_info.get("train_accuracy", []), \
-        train_info.get("val_accuracy", []), \
-        train_info.get("dataset_length", -1), \
-        train_info.get("train_start", 0), \
-        train_info.get("last_batch", 0), \
-        generator_state
+    return train_info.get("train_loss", []), train_info.get("val_loss", []), train_info.get("train_accuracy", []), train_info.get("val_accuracy", []), train_info.get("dataset_length", -1), train_info.get("train_start", 0), train_info.get("last_batch", 0), generator_state
