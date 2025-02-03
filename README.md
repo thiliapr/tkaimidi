@@ -37,7 +37,7 @@ graph TD
 用于寻找最佳学习率。
 ```mermaid
 graph TD
-    InitUserArgs[设置初始学习率、最终学习率、学习率调整幅度] --> Init[初始化模型、优化器、数据加载器] --> SettingInitLR[设置学习率为初始学习率] --> CalcSteps["计算步骤数: 向上取值(log<sub>学习率调整幅度</sub>(最终学习率 / 初始学习率))"] --> GetInputFromDataLoader[从数据加载器获取模型输入] --> ModelForward[模型前向传播] --> CallLoss[计算损失] --> Backward[反向传播] --> OptimizerStep[优化器优化] --> CurrentLRCheck{学习率是否大于最终学习率}
+    InitUserArgs[设置初始学习率、最终学习率、学习率调整幅度] --> Init[初始化模型、优化器、数据加载器] --> SettingInitLR[设置学习率为初始学习率] --> GetInputFromDataLoader[从数据加载器获取模型输入] --> ModelForward[模型前向传播] --> CallLoss[计算损失] --> Backward[反向传播] --> OptimizerStep[优化器优化] --> CurrentLRCheck{学习率是否大于最终学习率}
     CurrentLRCheck -->|是| PlotAndSave[绘制学习率-损失图表并保存]
     CurrentLRCheck -->|否| SettingLR[将学习率乘以学习率调整幅度] --> GetInputFromDataLoader
 ```
