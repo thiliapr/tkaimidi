@@ -78,14 +78,14 @@ def main():
     # 过滤掉包含NaN损失的记录
     result = list(filter(lambda x: not math.isnan(x[1]), lr_loss_list))
     result = [(index, lr, loss, diff) for index, (lr, loss, diff) in zip(range(len(result)), lr_loss_list)]
-    _, lrs, losses, differences = zip(*result)
+    indexes, lrs, losses, differences = zip(*result)
 
     # 保存结果为表格
-    pd.DataFrame({"lr": lrs, "loss": losses, "diff": differences}).sort_values(by="diff", ascending=False).to_csv("lr-loss-diff.csv", index=True)
+    pd.DataFrame({"index": indexes, "lr": lrs, "loss": losses, "diff": differences}).sort_values(by="diff", ascending=False).to_csv("lr-loss-diff.csv", index=False)
 
     # 平滑处理并绘制损失曲线
     y_smooth = savgol_filter(losses, window_length=min(11, len(losses) - 1), polyorder=3)
-    plt.plot(y_smooth)
+    plt.plot(indexes, y_smooth)
     plt.title("Smoothed Loss Curve")
     plt.xlabel(f"Learning Rate (lr = {init_lr} * ({lr_precision} ** x))")
     plt.ylabel("Loss")
