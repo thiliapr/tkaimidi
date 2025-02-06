@@ -60,7 +60,7 @@ def generate_midi(
     model: MidiNet,
     seed: int,
     length: int,
-    temperature: float = 0.8,
+    temperature: float = 1,
     top_p: float = 0.8,
     frequency_penalty: float = 0.0,
     presence_penalty: float = 0.0
@@ -83,10 +83,7 @@ def generate_midi(
     """
     model.eval()  # 将模型设置为评估模式
     generator = torch.Generator().manual_seed(seed)  # 固定随机种子，确保每次生成结果一致
-    input_prompt = [note * NOTE_DURATION_COUNT + time for note, time in prompt]
-
-    # 记录已生成的音符
-    generated_notes = set(note for note, _ in prompt)
+    input_prompt = [note * NOTE_DURATION_COUNT + time for note, time in prompt]  # 记录已生成的音符
 
     for i in tqdm.tqdm(range(length), desc="Generate MIDI"):
         # 将已生成的音符和时间输入模型进行预测
@@ -94,18 +91,25 @@ def generate_midi(
 
         # 获取模型预测
         with torch.no_grad():
-            prediction = model(model_input)[:, -1, :]
+            prediction = model(model_input)[0, -1, :]
 
         # 将预测值按温度调整，控制分布的平滑度
         prediction = F.softmax(prediction / temperature, dim=-1)
 
         # 应用 Frequency Penalty
-        for note in generated_notes:
-            prediction[0, note] -= frequency_penalty
+        if frequency_penalty > 0.0:
+            # 计算每个音符的频率
+            note_counts = torch.bincount(torch.tensor(input_prompt), minlength=prediction.size(-1))
+            frequency_factor = 1 - (note_counts / note_counts.sum()).clamp(max=1) * frequency_penalty
+            prediction *= frequency_factor
 
         # 应用 Presence Penalty
-        for note in set(input_prompt):
-            prediction[0, note] -= presence_penalty
+        if presence_penalty > 0.0:
+            unique_notes = set(input_prompt)
+            presence_factor = torch.ones_like(prediction)
+            for note in unique_notes:
+                presence_factor[note] *= (1 - presence_penalty)
+            prediction *= presence_factor
 
         # 确保概率不为负
         prediction = F.relu(prediction)
@@ -127,7 +131,6 @@ def generate_midi(
 
         # 获取生成的音符和时间
         input_prompt.append(token.item())
-        generated_notes.add(token.item() // NOTE_DURATION_COUNT)  # 更新已生成的音符
 
     # 将生成的音符和时间配对
     notes = list(map(lambda note: (note // NOTE_DURATION_COUNT, note % NOTE_DURATION_COUNT), input_prompt))
@@ -137,7 +140,8 @@ def generate_midi(
 def main():
     model = MidiNet()
     try:
-        load_checkpoint(model, None, pathlib.Path("ckpt"))  # 加载模型的预训练检查点
+        state = load_checkpoint(pathlib.Path("ckpt"), train=False)  # 加载模型的预训练检查点
+        model.load_state_dict(state)
     except Exception as e:
         print(f"Error in LoadCKPT: {e}")
     mido.MidiFile(tracks=[generate_midi(

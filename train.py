@@ -386,7 +386,7 @@ def main():
     create_optimizer = partial(optim.SGD, model.parameters(), lr=config["lr"], momentum=0.9, weight_decay=config["weight_decay"])
 
     try:
-        model_state, optimizer_state, old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(local_ckpt, optimizer=True)
+        model_state, optimizer_state, old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(local_ckpt, train=True)
         model.load_state_dict(model_state)  # 加载模型状态
         model = model.to(device)  # 转移到指定设备并编译模型
         optimizer = create_optimizer()  # 初始化优化器

@@ -1,11 +1,5 @@
-import mido
-import math
 import pathlib
 import argparse
-from time import sleep
-from utils import midi_to_notes, norm_data
-from model import TIME_PRECISION
-from generate import model_output_to_track
 
 
 def parse_args():
@@ -17,11 +11,7 @@ def parse_args():
     return args
 
 
-def main():
-    args = parse_args()
-
-    import pygame.midi
-
+def main(args: argparse.Namespace):
     pygame.init()
     pygame.midi.init()
     player = pygame.midi.Output(0)
@@ -48,4 +38,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+
+    import mido
+    import math
+    import pygame.midi
+    from time import sleep
+    from utils import midi_to_notes, norm_data
+    from model import TIME_PRECISION
+    from generate import model_output_to_track
+
+    main(args)

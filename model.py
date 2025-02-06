@@ -130,40 +130,44 @@ def save_checkpoint(model: MidiNet, optimizer: optim.SGD, train_loss: list[float
         )  # 将训练信息写入JSON文件
 
 
-def load_checkpoint(path: pathlib.Path, optimizer: bool = False):
+def load_checkpoint(path: pathlib.Path, train: bool = False):
     """
     从指定路径加载模型的检查点，并恢复训练状态。
 
     Args:
         path: 加载检查点的目录路径
-        optimizer: 是否加载优化器状态
+        train: 是否加载训练所需数据（优化器状态等）
 
     Returns:
-        模型和优化器的状态，训练、验证的损失和准确率的历史记录，上一次数据集的长度，拆分数据集时训练集的开始索引，训练数据的索引随机采样器的生成器的状态，上次训练时的未训练完成的epoch训练了多少个batch
+        train关闭时: 模型的状态
+        train启用时: 模型和优化器的状态，训练、验证的损失和准确率的历史记录，上一次数据集的长度，拆分数据集时训练集的开始索引，训练数据的索引随机采样器的生成器的状态，上次训练时的未训练完成的epoch训练了多少个batch
     """
     # 检查并加载模型权重
-    model_path = path / "model.pth"
-    if model_path.exists():
+    model_state = {}
+    if (model_path := path / "model.pth").exists():
         # 加载模型的状态字典并更新
         model_state = torch.load(model_path, weights_only=True, map_location=torch.device("cpu"))  # 从检查点加载权重
 
-    # 检查并加载优化器权重
-    optimizer_state = None
-    if optimizer and (optimizer_path := path / "optimizer.pth").exists():
-        optimizer_state = torch.load(optimizer_path, weights_only=True, map_location=torch.device("cpu"))  # 从检查点加载权重
+    if train:
+        # 检查并加载优化器权重
+        optimizer_state = {}
+        if (optimizer_path := path / "optimizer.pth").exists():
+            optimizer_state = torch.load(optimizer_path, weights_only=True, map_location=torch.device("cpu"))  # 从检查点加载权重
 
-    # 尝试加载训练信息文件
-    train_info_path = path / "train_info.json"
-    if train_info_path.exists():
-        with open(train_info_path, "r") as f:
-            train_info = json.load(f)  # 读取训练信息
-    else:
-        train_info = {}  # 如果文件不存在，返回空字典
+        # 尝试加载训练信息文件
+        train_info_path = path / "train_info.json"
+        if train_info_path.exists():
+            with open(train_info_path, "r") as f:
+                train_info = json.load(f)  # 读取训练信息
+        else:
+            train_info = {}  # 如果文件不存在，返回空字典
 
-    if "generator_state" in train_info:
-        generator_state = torch.tensor(list(base64.b64decode(train_info["generator_state"])), dtype=torch.uint8)
-    else:
-        generator_state = ...
+        if "generator_state" in train_info:
+            generator_state = torch.tensor(list(base64.b64decode(train_info["generator_state"])), dtype=torch.uint8)
+        else:
+            generator_state = ...
 
-    # 返回训练损失和验证损失
-    return model_state, optimizer_state, train_info.get("train_loss", []), train_info.get("val_loss", []), train_info.get("train_accuracy", []), train_info.get("val_accuracy", []), train_info.get("dataset_length", -1), train_info.get("train_start", 0), train_info.get("last_batch", 0), generator_state
+        # 返回训练损失和验证损失
+        return model_state, optimizer_state, train_info.get("train_loss", []), train_info.get("val_loss", []), train_info.get("train_accuracy", []), train_info.get("val_accuracy", []), train_info.get("dataset_length", -1), train_info.get("train_start", 0), train_info.get("last_batch", 0), generator_state
+
+    return model_state
