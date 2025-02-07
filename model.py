@@ -9,11 +9,12 @@ import pathlib
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 
 TIME_PRECISION = 120  # 时间精度，表示每个音符的最小时间单位
 MAX_TIME_DIFF = 960  # 两个音符之间允许的最大时间差
 NOTE_DURATION_COUNT = MAX_TIME_DIFF // TIME_PRECISION + 1  # 允许的音符时间长度的数量
-MAX_LENGTH = 4096
+DEFAULT_LENGTH = 4096
 
 
 class PositionalEncoding(nn.Module):
@@ -37,23 +38,56 @@ class PositionalEncoding(nn.Module):
         >>> pos_encoder = PositionalEncoding(d_model)
     """
 
-    def __init__(self, d_model, dropout=0.1, max_len=MAX_LENGTH):
+    def __init__(self, d_model: int, dropout: float = 0.1, length=DEFAULT_LENGTH):
         super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
+        self.dropout = dropout
+        self.d_model = d_model
+        self.register_buffer("pe", self._generate_pe(length), persistent=False)
 
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+    def _generate_pe(self, length: int):
+        pe = torch.zeros(length, self.d_model)
+        position = torch.arange(0, length, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * (-math.log(10000.0) / self.d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)  # 保持为 (1, max_len, d_model)
-        self.register_buffer("pe", pe, persistent=False)
+        pe = pe.unsqueeze(0)  # 保持为 (1, length, d_model)
+        return pe
 
     def forward(self, x):
         # x 的形状为 (batch_size, seq_len, d_model)
         seq_len = x.size(1)  # 获取序列长度
+        if seq_len < self.pe.size(1):
+            self.pe = self._generate_pe(seq_len)
         x = x + self.pe[:, :seq_len, :]  # 进行位置编码
-        return self.dropout(x)
+        return F.dropout(x, self.dropout)
+
+
+class MidiBlock(nn.Module):
+    """
+    类似`TransformerDecoderLayer`的模块，但没有编码器-解码器注意力层。
+    """
+
+    def __init__(self, d_model: int, num_heads: int, dim_feedforward: int, dropout: float = 0.1):
+        super().__init__()
+        self.attention = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = dropout
+        self._init_weights()
+
+    def _init_weights(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, x, tgt_mask):
+        x = self.attention(x, x, x, attn_mask=tgt_mask, need_weights=False)[0] + x
+        x = self.norm1(x)
+        x = F.dropout(self.linear2(F.relu(self.linear1(x))), self.dropout) + x
+        x = self.norm2(x)
+        return x
 
 
 class MidiNet(nn.Module):
@@ -68,7 +102,7 @@ class MidiNet(nn.Module):
 
         self.embedding = nn.utils.skip_init(nn.Embedding, vocab_size, self.d_model)  # 嵌入层
         self.pos_encoder = PositionalEncoding(self.d_model, 0.1)
-        self.transformer_decoder = nn.TransformerDecoder(nn.TransformerDecoderLayer(d_model=self.d_model, nhead=8, dim_feedforward=2048, dropout=0.1, batch_first=True), num_layers=6)  # Transformer 解码器层堆叠
+        self.blocks = nn.ModuleList(MidiBlock(self.d_model, 8, 2048, 0.1) for _ in range(6))  # Transformer 解码器层堆叠
         self.fc_out = nn.utils.skip_init(nn.Linear, self.d_model, vocab_size)  # 将嵌入映射到词汇大小
 
         self.register_buffer("last_mask", torch.tensor([]), persistent=False)  # CasualMask 初始化
@@ -86,7 +120,12 @@ class MidiNet(nn.Module):
             if x.size(1) != self.last_mask.size(0):
                 self.last_mask = torch.tril(torch.ones(x.size(1), x.size(1)), diagonal=1) == 0  # 生成CasualMask
             self.last_mask = self.last_mask.to(x.device)
-            x = self.transformer_decoder(x, x, tgt_mask=self.last_mask)  # 通过 Transformer 解码器
+            tgt_mask = self.last_mask
+        else:
+            tgt_mask = None
+
+        for block in self.blocks:
+            x = block(x, tgt_mask=tgt_mask)
         logits = self.fc_out(x)  # 预测下一个 token
         return logits
 

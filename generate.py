@@ -62,8 +62,8 @@ def generate_midi(
     length: int,
     temperature: float = 1,
     top_p: float = 0.8,
-    frequency_penalty: float = 0.0,
-    presence_penalty: float = 0.0
+    frequency_penalty: float = 0.,
+    presence_penalty: float = 0.
 ) -> mido.MidiTrack:
     """
     生成 MIDI 音乐轨道。
@@ -97,14 +97,14 @@ def generate_midi(
         prediction = F.softmax(prediction / temperature, dim=-1)
 
         # 应用 Frequency Penalty
-        if frequency_penalty > 0.0:
+        if frequency_penalty > 0:
             # 计算每个音符的频率
             note_counts = torch.bincount(torch.tensor(input_prompt), minlength=prediction.size(-1))
             frequency_factor = 1 - (note_counts / note_counts.sum()).clamp(max=1) * frequency_penalty
             prediction *= frequency_factor
 
         # 应用 Presence Penalty
-        if presence_penalty > 0.0:
+        if presence_penalty > 0:
             unique_notes = set(input_prompt)
             presence_factor = torch.ones_like(prediction)
             for note in unique_notes:

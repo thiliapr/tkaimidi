@@ -71,7 +71,7 @@ class MidiDataset(Dataset):
                 offsets: list[tuple[int, int]] = []
                 for i in range(len(data) - seq_size):
                     seq_notes, seq_times = zip(*data[i:i + seq_size])
-                    note_offsets = 128 - max(seq_notes)
+                    note_offsets = 128 - max(seq_notes) + min(seq_notes)
                     time_offsets = (NOTE_DURATION_COUNT - 1) // (max(seq_times) // math.gcd(*seq_times))
                     offsets.append((note_offsets, time_offsets))
                     self.length += note_offsets * time_offsets
@@ -101,8 +101,9 @@ class MidiDataset(Dataset):
             if found is not None:
                 # 提取序列，并应用偏移量进行数据增强
                 seq_notes, seq_times = zip(*midi_notes_data[found:found + self.seq_size])
+                note_min = min(seq_notes)
                 time_gcd = math.gcd(*seq_times)
-                seq = [(note + note_offset) * NOTE_DURATION_COUNT + (time // time_gcd * (time_offset + 1)) for note, time in zip(seq_notes, seq_times)]
+                seq = [(note - note_min + note_offset) * NOTE_DURATION_COUNT + (time // time_gcd * (time_offset + 1)) for note, time in zip(seq_notes, seq_times)]
 
                 # 返回输入和目标序列
                 return torch.tensor(seq[:-1], dtype=torch.long), torch.tensor(seq[1:], dtype=torch.long)
@@ -230,8 +231,6 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
             inputs, labels = inputs.to(device), labels.to(device).view(-1)
             optimizer.zero_grad()  # 清空优化器中的梯度
             outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * 128)  # 前向传播
-
-            # 计算损失并进行反向传播
             loss = F.cross_entropy(outputs, labels)  # 计算交叉熵损失
 
             # 检查损失是否为 NaN
@@ -388,7 +387,7 @@ def main():
     try:
         model_state, optimizer_state, old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(local_ckpt, train=True)
         model.load_state_dict(model_state)  # 加载模型状态
-        model = model.to(device)  # 转移到指定设备并编译模型
+        model = model.to(device)  # 转移到指定设备
         optimizer = create_optimizer()  # 初始化优化器
         optimizer.load_state_dict(optimizer_state)
 
@@ -399,6 +398,7 @@ def main():
             last_batch = 0
     except Exception as e:
         print(f"加载检查点时发生错误: {e}", file=sys.stderr)
+        model = model.to(device)  # 转移到指定设备
         optimizer = create_optimizer()  # 初始化优化器
         old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy = [], [], [], []
         train_start = random.randint(0, len(dataset) - 1)
