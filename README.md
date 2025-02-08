@@ -34,7 +34,7 @@ graph TD
 训练用的函数、数据集。
 
 ### `find_lr.py`
-用于寻找最佳学习率。
+用于寻找最佳学习率。在使用这个的时候，建议将`train.py`中`if __name__ == "__main__": main()`的`main()`改为`pass`以节省时间。
 ```mermaid
 graph TD
     InitUserArgs[设置初始学习率、最终学习率、学习率调整幅度] --> Init[初始化模型、优化器、数据加载器] --> SettingInitLR[设置学习率为初始学习率] --> GetInputFromDataLoader[从数据加载器获取模型输入] --> ModelForward[模型前向传播] --> CallLoss[计算损失] --> Backward[反向传播] --> OptimizerStep[优化器优化] --> CurrentLRCheck{学习率是否大于最终学习率}
