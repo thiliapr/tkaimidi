@@ -40,7 +40,7 @@ def main():
     optimizer = optim.SGD(model.parameters(), momentum=0.9, weight_decay=1e-3)  # 初始化优化器
 
     # 准备数据加载器
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, drop_last=True)  # 创建数据加载器
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, drop_last=True)  # 创建数据加载器
 
     # 检查是否使用多GPU
     if torch.cuda.device_count() > 1:
