@@ -214,6 +214,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
     model.train()  # 确保模型在训练模式下
     train_begin = True  # 刚开始训练
     while step < val_steps * val_per_step:  # 训练直到达到验证步骤上限
+        generator_state = train_generator.get_state()  # 获取当前生成器状态
         loader_iter = iter(train_loader)  # 获取该 epoch 的 DataloderIter 对象
 
         # 将 iter 调整到上次训练结束时的状态
@@ -291,7 +292,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
 
     progress_bar.close()  # 关闭进度条
 
-    return train_loss, val_loss, train_accuracy, val_accuracy, last_batch, train_generator.get_state()
+    return train_loss, val_loss, train_accuracy, val_accuracy, last_batch, generator_state
 
 
 def plot_training_process(train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], img_path: pathlib.Path | str):
