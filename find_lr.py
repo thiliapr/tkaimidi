@@ -18,6 +18,9 @@ from scipy.signal import savgol_filter
 if "get_ipython" not in globals():
     from model import MidiNet, NOTE_DURATION_COUNT
     from train import MidiDataset
+    display = print
+else:
+    from IPython.display import display
 
 
 def main():
@@ -27,21 +30,17 @@ def main():
     lr_precision = 10 ** (1 / 100)  # 学习率调整的步长比例
 
     # 定义文件路径
-    local_dataset_path = pathlib.Path("/kaggle/temp/data")  # 数据集路径
+    local_dataset_path = pathlib.Path("/kaggle/input/music-midi")  # 数据集路径
 
     # 加载数据集和初始化模型
     dataset = MidiDataset(local_dataset_path, seq_size=512)  # 创建数据集实例
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")  # 初始化加速器
     model = MidiNet()  # 初始化模型
+    model = model.to(device)  # 将模型移动到设备
     optimizer = optim.SGD(model.parameters(), momentum=0.9, weight_decay=1e-3)  # 初始化优化器
 
     # 准备数据加载器
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True, drop_last=True)  # 创建数据加载器
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")  # 初始化加速器
-
-    # 将模型、优化器的动量缓冲区移动到设备
-    model = model.to(device)
-    for param_state in optimizer.state.values():
-        param_state["momentum_buffer"] = param_state["momentum_buffer"].to(device)
 
     # 检查是否使用多GPU
     if torch.cuda.device_count() > 1:
@@ -54,9 +53,11 @@ def main():
     lr_loss_list = []
 
     # 使用tqdm来显示进度条
-    for i, (inputs, labels) in enumerate(tqdm.tqdm(dataloader)):
-        optimizer.zero_grad()  # 清零梯度
+    dataloader_iter = iter(dataloader)
+    for i in tqdm.tqdm(range(math.ceil(math.log(final_lr / init_lr, lr_precision)))):
+        inputs, labels = next(dataloader_iter)
         inputs, labels = inputs.to(device), labels.to(device).view(-1)  # 调整标签形状
+        optimizer.zero_grad()  # 清零梯度
         outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * 128)  # 前向传播，调整输出形状
         loss = F.cross_entropy(outputs, labels)  # 计算损失
         loss.backward()  # 反向传播
@@ -67,10 +68,6 @@ def main():
             lr_loss_list.append((optimizer.param_groups[0]["lr"], loss.item(), lr_loss_list[-1][1] - loss.item()))
         else:
             lr_loss_list.append((optimizer.param_groups[0]["lr"], loss.item(), 0))
-
-        # 跳出循环
-        if optimizer.param_groups[0]["lr"] > final_lr:
-            break
 
         # 调整学习率
         optimizer.param_groups[0]["lr"] *= lr_precision
@@ -96,7 +93,9 @@ def main():
     # 将损失变化最大的前 10 位转化为 DataFrame 并显示
     sorted_result = sorted(result, key=lambda x: x[3], reverse=True)
     indexes, lrs, losses, differences = zip(*sorted_result[:10])
-    print(pd.DataFrame({"index": indexes, "lr": lrs, "loss": losses, "diff": differences}))
+
+    df = pd.DataFrame({"index": indexes, "lr": lrs, "loss": losses, "diff": differences})
+    display(df)
 
 
 if __name__ == "__main__":

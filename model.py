@@ -56,7 +56,7 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         # x 的形状为 (batch_size, seq_len, d_model)
         seq_len = x.size(1)  # 获取序列长度
-        if seq_len < self.pe.size(1):
+        if seq_len > self.pe.size(1):
             self.pe = self._generate_pe(seq_len)
         x = x + self.pe[:, :seq_len, :]  # 进行位置编码
         return F.dropout(x, self.dropout)
@@ -114,8 +114,6 @@ class MidiNet(nn.Module):
         nn.init.zeros_(self.fc_out.bias)
 
     def forward(self, x, mask: bool = True):
-        x = self.embedding(x) * math.sqrt(self.d_model)  # 输入通过嵌入层
-        x = self.pos_encoder(x)  # 输入通过位置编码
         if mask:
             if x.size(1) != self.last_mask.size(0):
                 self.last_mask = torch.tril(torch.ones(x.size(1), x.size(1)), diagonal=1) == 0  # 生成CasualMask
@@ -124,6 +122,8 @@ class MidiNet(nn.Module):
         else:
             tgt_mask = None
 
+        x = self.embedding(x) * math.sqrt(self.d_model)  # 输入通过嵌入层
+        x = self.pos_encoder(x)  # 输入通过位置编码
         for block in self.blocks:
             x = block(x, tgt_mask=tgt_mask)
         logits = self.fc_out(x)  # 预测下一个 token
