@@ -210,9 +210,10 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
     # 创建进度条，显示训练进度
     progress_bar = tqdm.tqdm(desc="Training", total=val_steps * (val_per_step + steps_to_val))
 
-    step = train_loss_sum = train_accuracy_sum = 0
+    step = train_accuracy_sum = 0
     model.train()  # 确保模型在训练模式下
     train_begin = True  # 刚开始训练
+    epoch_train_loss = []  # 一次验证中训练的损失，用于计算训练损失标准差
     while step < val_steps * val_per_step:  # 训练直到达到验证步骤上限
         generator_state = train_generator.get_state()  # 获取当前生成器状态
         loader_iter = iter(train_loader)  # 获取该 epoch 的 DataloderIter 对象
@@ -240,7 +241,8 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
                 progress_bar.update(1 - unsaved_steps)
                 model.load_state_dict(last_normal_state[0])  # 回退模型参数
                 optimizer.load_state_dict(last_normal_state[1])  # 回退优化器参数
-                train_loss_sum = train_accuracy_sum = 0
+                train_accuracy_sum = 0
+                epoch_train_loss.clear()
                 print(f"Step {step}: loss=nan, 模型回退 {unsaved_steps} 步")
                 step -= unsaved_steps  # 调整步骤计数
                 continue
@@ -248,7 +250,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
             loss.backward()  # 反向传播
             optimizer.step()  # 更新模型参数
 
-            train_loss_sum += loss.item()  # 累积训练损失
+            epoch_train_loss.append(loss.item())  # 累积训练损失
             train_accuracy_sum += (torch.argmax(outputs) == labels).sum().item()  # 累积训练准确率
             progress_bar.update()  # 更新进度条
 
@@ -257,7 +259,8 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
                 last_normal_state = copy.deepcopy(model.state_dict()), copy.deepcopy(optimizer.state_dict())
 
                 model.eval()  # 切换到评估模式
-                val_loss_sum = val_accuracy_sum = 0
+                epoch_val_loss = []
+                val_accuracy_sum = 0
                 with torch.no_grad():  # 在验证阶段禁用梯度计算
                     val_loader = DataLoader(val_dataset, batch_size=val_batch_size, shuffle=True, drop_last=True, generator=torch.Generator().manual_seed(random.randint(1 - 2**59, 2**64 - 1)))
                     for val_step, (inputs, labels) in enumerate(val_loader):
@@ -267,14 +270,16 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
 
                         outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * 128)  # 前向传播
                         loss = F.cross_entropy(outputs, labels)  # 计算验证损失
-                        val_loss_sum += loss.item()  # 累计验证损失
+                        epoch_val_loss.append(loss.item())  # 累计验证损失
                         val_accuracy_sum += (torch.argmax(outputs) == labels).sum().item()  # 累积验证准确率
                         progress_bar.update()
 
                 # 计算并记录平均损失
-                train_loss_avg = train_loss_sum / val_per_step
-                val_loss_avg = val_loss_sum / steps_to_val
+                train_loss_avg = sum(epoch_train_loss) / val_per_step
+                train_loss_standrad_deviation = sum((loss - train_loss_avg) ** 2 for loss in epoch_train_loss) / val_per_step
                 train_acc_avg = train_accuracy_sum / val_per_step / labels.size(0)
+                val_loss_avg = sum(epoch_val_loss) / steps_to_val
+                val_loss_standrad_deviation = sum((loss - val_loss_avg) ** 2 for loss in epoch_val_loss) / steps_to_val
                 val_acc_avg = val_accuracy_sum / steps_to_val / labels.size(0)
 
                 train_loss.append(train_loss_avg)
@@ -282,8 +287,17 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
                 train_accuracy.append(train_acc_avg)
                 val_accuracy.append(val_acc_avg)
 
-                print(f"Validation Step {step // val_per_step}:", f"train_loss={train_loss_avg:.3f},", f"val_loss={val_loss_avg:.3f},", f"train_acc={train_acc_avg:.3f},", f"val_acc={val_acc_avg:.3f}")
-                train_loss_sum = train_accuracy_sum = 0  # 将训练损失、准确率计数器归零
+                print(
+                    f"Validation Step {step // val_per_step}:",
+                    f"train_loss={train_loss_avg:.3f},",
+                    f"train_loss_standrad_deviation={train_loss_standrad_deviation}",
+                    f"train_acc={train_acc_avg:.3f},",
+                    f"val_loss={val_loss_avg:.3f},",
+                    f"val_loss_standrad_deviation={val_loss_standrad_deviation}",
+                    f"val_acc={val_acc_avg:.3f}"
+                )
+                epoch_train_loss.clear()  # 将损失清空
+                train_accuracy_sum = 0  # 将准确率计数器归零
 
                 empty_cache()  # 清理缓存
                 if step >= val_steps * val_per_step:
