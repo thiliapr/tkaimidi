@@ -276,10 +276,10 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
 
                 # 计算并记录平均损失
                 train_loss_avg = sum(epoch_train_loss) / val_per_step
-                train_loss_standrad_deviation = sum((loss - train_loss_avg) ** 2 for loss in epoch_train_loss) / val_per_step
+                train_loss_std = sum((loss - train_loss_avg) ** 2 for loss in epoch_train_loss) / val_per_step
                 train_acc_avg = train_accuracy_sum / val_per_step / labels.size(0)
                 val_loss_avg = sum(epoch_val_loss) / steps_to_val
-                val_loss_standrad_deviation = sum((loss - val_loss_avg) ** 2 for loss in epoch_val_loss) / steps_to_val
+                val_loss_std = sum((loss - val_loss_avg) ** 2 for loss in epoch_val_loss) / steps_to_val
                 val_acc_avg = val_accuracy_sum / steps_to_val / labels.size(0)
 
                 train_loss.append(train_loss_avg)
@@ -290,10 +290,10 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
                 print(
                     f"Validation Step {step // val_per_step}:",
                     f"train_loss={train_loss_avg:.3f},",
-                    f"train_loss_standrad_deviation={train_loss_standrad_deviation}",
+                    f"train_loss_std={train_loss_std}",
                     f"train_acc={train_acc_avg:.3f},",
                     f"val_loss={val_loss_avg:.3f},",
-                    f"val_loss_standrad_deviation={val_loss_standrad_deviation}",
+                    f"val_loss_std={val_loss_std}",
                     f"val_acc={val_acc_avg:.3f}"
                 )
                 epoch_train_loss.clear()  # 将损失清空
@@ -311,13 +311,13 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
 
 def plot_training_process(train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], img_path: pathlib.Path | str):
     """
-    绘制训练过程中的损失曲线，包括训练集和验证集的音符损失与时间损失。
+    绘制训练过程中的损失、准确率曲线。
 
     Args:
-        train_loss: 每一验证步数过程中的训练损失值。
-        val_loss: 每一验证步数过程中的验证损失值。
-        train_accuracy: 每一验证步数过程中的训练准确率值。
-        val_accuracy: 每一验证步数过程中的验证准确率值。
+        train_loss: 两次验证之间的训练损失平均值。
+        val_loss: 一次验证的验证损失平均值。
+        train_accuracy: 两次验证之间的训练准确率平均值。
+        val_accuracy: 一次验证的的验证准确率平均值。
         img_path: 图形保存的文件路径，可以是字符串或Path对象。
     """
     fig, ax1 = plt.subplots(figsize=(10, 6))  # 创建一个图形和一组坐标轴
@@ -359,7 +359,7 @@ def plot_training_process(train_loss: list[float], val_loss: list[float], train_
 
 def main():
     """
-    训练 MIDI 模型并绘制训练过程中的损失曲线。
+    训练 MIDI 模型并绘制训练过程中的损失、准确率曲线。
     """
     # 用户定义的配置字典
     config = {
@@ -392,13 +392,19 @@ def main():
     for path in external_datasets_path:
         shutil.copytree(path, local_dataset_path / path.name, dirs_exist_ok=True)
 
-    dataset = MidiDataset(local_dataset_path, seq_size=config["seq_size"])  # 加载训练数据集
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # 获取设备
-    model = MidiNet()  # 初始化模型
+    # 加载训练数据集
+    dataset = MidiDataset(local_dataset_path, seq_size=config["seq_size"])
 
-    # 尝试加载检查点
+    # 获取设备（GPU 或 CPU）
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # 初始化模型
+    model = MidiNet()
+
+    # 创建优化器
     create_optimizer = partial(optim.SGD, model.parameters(), lr=config["lr"], momentum=0.9, weight_decay=config["weight_decay"])
 
+    # 尝试加载检查点
     try:
         model_state, optimizer_state, old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(local_ckpt, train=True)
         model.load_state_dict(model_state)  # 加载模型状态
@@ -406,22 +412,35 @@ def main():
         optimizer = create_optimizer()  # 初始化优化器
         optimizer.load_state_dict(optimizer_state)
 
+        # 检查数据集大小是否匹配
         if dataset_length != len(dataset):
             print(f"数据集大小不匹配，可能是使用了与之前不同的数据集训练: {dataset_length} 与 {len(dataset)} 不匹配", file=sys.stderr)
-            train_start = random.randint(0, len(dataset) - 1)
-            generator_state = ...
-            last_batch = 0
+            train_start = random.randint(0, len(dataset) - 1)  # 随机选择新的训练起点
+            generator_state = ...  # 重置随机数生成器状态
+            last_batch = 0  # 重置批次计数
     except Exception as e:
         print(f"加载检查点时发生错误: {e}", file=sys.stderr)
         model = model.to(device)  # 转移到指定设备
         optimizer = create_optimizer()  # 初始化优化器
-        old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy = [], [], [], []
-        train_start = random.randint(0, len(dataset) - 1)
-        generator_state = ...
-        last_batch = 0
+        old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy = [], [], [], []  # 初始化损失和准确率记录
+        train_start = random.randint(0, len(dataset) - 1)  # 随机选择训练起点
+        generator_state = ...  # 初始化随机数生成器状态
+        last_batch = 0  # 初始化批次计数
 
     # 开始训练模型
-    train_loss, val_loss, train_accuracy, val_accuracy, last_batch, generator_state = train(model, dataset, optimizer, val_steps=config["val_steps"], train_batch_size=config["train_batch_size"], val_batch_size=config["val_batch_size"], train_length=config["train_length"], val_per_step=config["val_per_step"], steps_to_val=config["steps_to_val"], train_start=train_start, generator_state=generator_state, last_batch=last_batch, device=device)
+    train_loss, val_loss, train_accuracy, val_accuracy, last_batch, generator_state = train(
+        model, dataset, optimizer,
+        val_steps=config["val_steps"],
+        train_batch_size=config["train_batch_size"],
+        val_batch_size=config["val_batch_size"],
+        train_length=config["train_length"],
+        val_per_step=config["val_per_step"],
+        steps_to_val=config["steps_to_val"],
+        train_start=train_start,
+        generator_state=generator_state,
+        last_batch=last_batch,
+        device=device
+    )
 
     # 合并旧的损失记录和新的记录
     train_loss = old_train_loss + train_loss
@@ -429,8 +448,14 @@ def main():
     train_accuracy = old_train_accuracy + train_accuracy
     val_accuracy = old_val_accuracy + val_accuracy
 
-    save_checkpoint(model, optimizer, train_loss, val_loss, train_accuracy, val_accuracy, len(dataset), train_start, last_batch, generator_state, local_ckpt)  # 保存当前模型的检查点
-    plot_training_process(train_loss, val_loss, train_accuracy, val_accuracy, "statistics.png")  # 绘制变化曲线
+    # 保存当前模型的检查点
+    save_checkpoint(
+        model, optimizer, train_loss, val_loss, train_accuracy, val_accuracy,
+        len(dataset), train_start, last_batch, generator_state, local_ckpt
+    )
+
+    # 绘制训练过程中的损失和准确率曲线
+    plot_training_process(train_loss, val_loss, train_accuracy, val_accuracy, "statistics.png")
 
 
 if __name__ == "__main__":
