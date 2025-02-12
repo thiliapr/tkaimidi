@@ -251,7 +251,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
             optimizer.step()  # 更新模型参数
 
             epoch_train_loss.append(loss.item())  # 累积训练损失
-            epoch_train_acc.append((torch.argmax(outputs) == labels).sum().item())  # 累积训练准确率
+            epoch_train_acc.append((torch.argmax(outputs) == labels).sum().item() / labels.size(-1))  # 累积训练准确率
             progress_bar.update()  # 更新进度条
 
             # 验证阶段
@@ -271,7 +271,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
                         outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * 128)  # 前向传播
                         loss = F.cross_entropy(outputs, labels)  # 计算验证损失
                         epoch_val_loss.append(loss.item())  # 累计验证损失
-                        epoch_val_acc.append((torch.argmax(outputs) == labels).sum().item())  # 累积验证准确率
+                        epoch_val_acc.append((torch.argmax(outputs) == labels).sum().item() / labels.size(-1))  # 累积验证准确率
                         progress_bar.update()
 
                 # 计算并记录损失、准确率的平均值和标准差
