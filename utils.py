@@ -98,12 +98,10 @@ def norm_data(data: list[tuple[int, int]], time_precision: int, max_time_diff: i
         return loss_all
 
     notes, times = (list(d) for d in zip(*data))  # 分离音符和时间
-    lowest_dnote = min(notes)  # 计算音符的最低音高
 
-    # 将音符降低到最低音域、计算每一个音符与前一个音符的开始时间差
+    # 计算每一个音符与前一个音符的开始时间差
     now = times[0]
-    for i, (note, time) in enumerate(data):
-        notes[i] = note - lowest_dnote
+    for i, (_, time) in enumerate(data):
         times[i] -= now
         now = time
 
