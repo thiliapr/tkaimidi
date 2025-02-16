@@ -1,4 +1,15 @@
-# 模型的代码
+# 模型、训练的加载和保存
+"""
+模型、训练的加载和保存。
+
+本模块定义了一个基于Transformer架构的神经网络模型，用于音乐生成任务。该模块还提供了模型的保存和加载功能，以便在训练过程中保存模型状态和训练信息。
+
+使用示例:
+- 创建模型实例: `model = MidiNet()`
+- 保存模型检查点: `save_checkpoint(model, optimizer, train_loss, val_loss, train_accuracy, val_accuracy, dataset_length, train_start, last_batch, generator_state, path)`
+- 加载模型检查点: `model_state, optimizer_state, train_loss, val_loss, train_accuracy, val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(path, train=True)`
+"""
+
 # Copyright (C)  thiliapr 2024-2025
 # License: AGPLv3-or-later
 
@@ -15,6 +26,7 @@ TIME_PRECISION = 120  # 时间精度，表示每个音符的最小时间单位
 MAX_TIME_DIFF = 960  # 两个音符之间允许的最大时间差
 NOTE_DURATION_COUNT = MAX_TIME_DIFF // TIME_PRECISION + 1  # 允许的音符时间长度的数量
 DEFAULT_LENGTH = 4096
+MAX_NOTE = 72  # 允许的最高音高与最低音高的差。在原始 MIDI 格式中，这个值为127，但大部分文件最高音高与最低音高的差不会达到这么高，所以这里不使用127
 
 
 class PositionalEncoding(nn.Module):
@@ -97,7 +109,7 @@ class MidiNet(nn.Module):
 
     def __init__(self):
         super().__init__()
-        vocab_size = 128 * NOTE_DURATION_COUNT
+        vocab_size = MAX_NOTE * NOTE_DURATION_COUNT
         self.d_model = 768
 
         self.embedding = nn.utils.skip_init(nn.Embedding, vocab_size, self.d_model)  # 嵌入层

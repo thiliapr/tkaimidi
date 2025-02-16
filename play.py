@@ -20,12 +20,12 @@ def main(args: argparse.Namespace):
         for mid in playlist:
             print(mid.relative_to(args.path) if args.path.is_dir() else mid)
             notes = [(note, time) for _, note, time, _ in midi_to_notes(mido.MidiFile(mid, clip=True))]
-            notes = norm_data(notes, TIME_PRECISION, 960, strict=args.strict)
+            notes = normalize_times(notes, TIME_PRECISION, 960, strict=args.strict)
             notes_offest = max(0, int(args.medium_mote - sum(note for note, _ in notes) / len(notes)))
             for i, (note, time) in enumerate(notes):
                 note = note + notes_offest
-                if note > 127:
-                    note -= math.ceil((note - 127) / 12) * 12
+                if note > MAX_NOTE:
+                    note -= math.ceil((note - MAX_NOTE) / 12) * 12
                 notes[i] = (note, time)
 
             track = model_output_to_track(notes)
@@ -44,8 +44,8 @@ if __name__ == "__main__":
     import math
     import pygame.midi
     from time import sleep
-    from utils import midi_to_notes, norm_data
-    from model import TIME_PRECISION
+    from utils import midi_to_notes, normalize_times
+    from model import TIME_PRECISION, MAX_NOTE
     from generate import model_output_to_track
 
     main(args)

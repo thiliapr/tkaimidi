@@ -1,4 +1,8 @@
-# 一些训练和推理会用到的工具
+# 训练和推理工具集
+"""
+训练和推理工具集: 包含MIDI处理、数据规范化和音高标准化等功能。
+"""
+
 # Copyright (C)  thiliapr 2024-2025
 # License: AGPLv3-or-later
 
@@ -8,150 +12,162 @@ import mido
 
 def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int, int, int]]:
     """
-    将 MIDI 文件转换为音符列表。
+    将MIDI文件解析为结构化音符数据，支持多轨道处理和打击乐通道检测。
 
     Args:
-        midi_file: 要解析的 MIDI 文件对象。
+        midi_file: 输入的MIDI文件对象
 
     Returns:
-        list: 包含音符信息的列表，每个元组包含：
-            - 通道号 (int)
-            - 音高 (int)
-            - 开始时间 (int) - 从MIDI文件开始到音符开始的时间
-            - 持续时间 (int) - 音符持续的时间
+        音符列表，每个元组包含:
+            - 通道号 (0-15)
+            - 音高 (0-127)
+            - 起始时间 (绝对时间，单位ticks)
+            - 持续时间 (单位ticks)
+
+    实现说明:
+        1. 合并所有轨道并按时间顺序处理事件
+        2. 自动检测打击乐通道 (从1开始数, 始终包含通道10)
+        3. 支持MIDI Program Change事件动态更新打击乐通道
+        4. 处理音符重叠和持续事件
     """
-    notes = []  # 存储解析得到的音符信息
-    drum_channels = {9}
-    for track in midi_file.tracks:  # 遍历每个音轨
-        now = 0  # 当前时间，从0开始
-        pool: dict[tuple[int, int], int] = {}  # 存储音符的开始时间
+    notes = []
+    drum_channels = {9}  # MIDI通道10(索引9)默认作为打击乐通道
+    active_notes = {}  # 跟踪未结束的音符: {(channel, note): start_time}
 
-        for message in track:  # 遍历音轨中的每个消息
-            now += message.time * 480 // midi_file.ticks_per_beat  # 更新当前时间
+    # 合并所有轨道并按时间排序
+    merged_track = mido.merge_tracks(midi_file.tracks)
+    now = 0  # 当前绝对时间(基于四分音符 480 ticks 的时基)
 
-            # 将通道标为打击乐器
-            if message.type == "program_change" and message.channel != 9:
-                if (96 <= message.program <= 103) or (112 <= message.program):
-                    drum_channels.add(message.channel)
-                else:
-                    drum_channels.discard(message.channel)
+    for msg in merged_track:
+        # 更新绝对时间(将delta时间转换为标准时基)
+        now += msg.time * 480 // midi_file.ticks_per_beat
 
-            # 仅处理音符相关的消息
-            if not message.type.startswith("note_"):
-                continue
-            # 去除打击乐器
-            if message.channel in drum_channels:
-                continue
+        # 处理音色变化事件(动态更新打击乐通道)
+        if msg.type == "program_change":
+            # 音色96-103和>=112为打击乐类
+            if (96 <= msg.program <= 103) or msg.program >= 112:
+                drum_channels.add(msg.channel)
+            else:
+                drum_channels.discard(msg.channel)
 
-            message_key = (message.channel, message.note)  # 唯一标识音符的键
+        # 跳过非音符事件和打击乐通道
+        if not msg.type.startswith("note_") or msg.channel in drum_channels:
+            continue
 
-            # 处理音符结束的情况
-            if (message.type == "note_off" or message.velocity == 0) and message_key in pool:
-                start_at = pool[message_key]  # 获取音符的开始时间
-                # 添加音符信息到结果列表
-                notes.append((message.channel, message.note, start_at, now - start_at))
-                del pool[message_key]  # 从池中移除已结束的音符
+        key = (msg.channel, msg.note)
 
-            # 处理音符开始的情况
-            elif message.type == "note_on":
-                pool[message_key] = now  # 记录音符开始的时间
+        # 处理音符结束(note_off 或 velocity=0 的 note_on)
+        if (msg.type == "note_off" or msg.velocity == 0) and key in active_notes:
+            start = active_notes.pop(key)
+            notes.append((msg.channel, msg.note, start, now - start))
 
-    # 根据音符的开始时间进行排序
-    notes.sort(key=lambda info: info[2])
-    return notes  # 返回解析得到的音符列表
+        # 处理音符开始
+        elif msg.type == "note_on":
+            active_notes[key] = now
+
+    # 按起始时间排序并返回
+    notes.sort(key=lambda x: x[2])
+    return notes
 
 
-def norm_data(data: list[tuple[int, int]], time_precision: int, max_time_diff: int, strict: bool = True) -> list[tuple[int, int]]:
+def normalize_times(
+    data: list[tuple[int, int]],
+    time_precision: int,
+    max_time_diff: int,
+    strict: bool = True
+) -> list[tuple[int, int]]:
     """
-    规范化音符数据。
+    规范化时序数据，优化时间分布并适配模型输入要求。
 
     Args:
-        data: 输入的音符数据
-            - 音符编号：音符的音高。
-            - 开始时间：音符的开始时间。
-        time_precision: 用于对齐音符开始时间的时间精度。所有开始时间都会四舍五入到该精度。
-        max_time_diff: 两个音符之间允许的最大时间差。如果相邻音符之间的时间差大于此值，则会插入音符来填充时间。
-        strict: 尽量保留MIDI原来的节奏
+        data: 原始数据列表，元素为 (音高, 绝对时间)
+        time_precision: 时间量化精度 (单位ticks)
+        max_time_diff: 相邻音符最大允许间隔
+        strict: 是否严格保持节奏特征
 
     Returns:
-        list: 规范化后的音符数据，格式与输入相同，包含调整后的音符音高和时间。
+        规范化后的 (音高, 相对时间) 列表
+
+    处理流程:
+        1. 转换为相对时间序列
+        2. 寻找最优时间缩放因子
+        3. 时间量化与间隔修正
+        4. 插入间隔音符并去重
     """
-    def time_loss(times: list[int]) -> float:
-        "计算时间损失，用于评估时间调整的效果。"
-        precision_loss = 0  # 时间精度损失
-        max_time_loss = 0  # 最大时间差损失
-        variance = 0  # 时间标准差
-        zero_time = 0  # 被四舍五入后无时间差音符的数量
-        mean = sum(times) / len(times)  # 时间的平均值
+    # 分离音高和时间序列
+    pitches, abs_times = zip(*data)
 
-        for time in times:
-            precision_loss += 1 / (1 + math.exp(-abs(time / time_precision - math.ceil(time / time_precision)))) - 0.5  # 计算时间精度损失
-            variance += (time - mean) ** 2  # 计算标准差
-            zero_time += time < (time_precision // 2)
+    # 转换为相对时间(时间间隔序列)
+    rel_times = [abs_times[0]] + [abs_times[i] - abs_times[i - 1] for i in range(1, len(abs_times))]
 
-            # 计算最大时间差损失
-            if time > max_time_diff:
-                max_time_loss += 1 / (1 + math.exp(-math.floor(time / max_time_diff)))
-        variance = (variance / len(times)) ** (1 / 2)  # 计算标准差
+    def calculate_time_loss(time_seq: list[float]) -> float:
+        """
+        计算时间序列的损失值，用于评估缩放因子质量。
 
-        loss_all = precision_loss + max_time_loss + variance * 1.2 + zero_time * 0.5
-        return loss_all
+        损失组成:
+        - 量化误差: 时间值偏离量化网格的程度
+        - 大间隔惩罚: 超过max_time_diff的时间间隔
+        - 时间分布方差: 时间值的离散程度
+        - 零时间惩罚: 过多相邻音符零间隔
+        """
+        quant_error = 0.0  # 量化误差
+        variance = 0.0  # 时间方差
+        zero_penalty = 0  # 零间隔计数
+        max_gap_penalty = 0.0  # 大间隔惩罚
 
-    notes, times = (list(d) for d in zip(*data))  # 分离音符和时间
+        mean = sum(time_seq) / len(time_seq)
 
-    # 计算每一个音符与前一个音符的开始时间差
-    now = times[0]
-    for i, (_, time) in enumerate(data):
-        times[i] -= now
-        now = time
+        for t in time_seq:
+            quant_error += 1 / (1 + math.exp(-abs(t / time_precision - round(t / time_precision))))  # 量化误差 (sigmoid加权)
+            variance += (t - mean) ** 2  # 统计方差
+            zero_penalty += int(t < time_precision / 2)  # 零间隔计数
+            # 大间隔惩罚 (指数衰减)
+            if t > max_time_diff:
+                max_gap_penalty += 1 - math.exp(-(t - max_time_diff) / max_time_diff)
 
-    # 寻找最佳的乘数以最小化时间损失
-    best_multiple, best_multiple_loss = 1, math.inf
-    i = 9 if strict else 0  # 严格模式下，时间乘数从 1 开始算起
+        return quant_error * 0.5 + math.sqrt(variance / len(time_seq)) * 1.2 + max_gap_penalty * 2.0 + zero_penalty * 0.3
+
+    # 寻找最佳时间缩放因子
+    best_scale, min_loss = 1, math.inf
+    i = 9 if strict else 0  # 严格模式下，时间缩放因子从 1 开始算起 ( math: (9 + 1) / 10 = 1 )
     failed_counter = 0
     while True:
-        cur_multiple = (i := i + 1) / 10
-        tmp_times = [time * cur_multiple for time in times]
-        cur_loss = time_loss(tmp_times)
-        if cur_loss < best_multiple_loss:
-            best_multiple = cur_multiple
-            best_multiple_loss = cur_loss
+        scale = (i := i + 1) / 10
+        tmp_times = [time * scale for time in rel_times]
+        cur_loss = calculate_time_loss(tmp_times)
+        if cur_loss < min_loss:
+            best_scale = scale
+            min_loss = cur_loss
             failed_counter = 0  # 重置失败计数
         elif failed_counter < 10:
             failed_counter += 1  # 增加失败计数
         else:
             break  # 超过失败次数，退出循环
 
-    # 根据最佳乘数调整时间
-    times = [time * best_multiple for time in times]
+    # 应用最佳缩放并量化
+    processed_times = [round(t * best_scale / time_precision) * time_precision for t in rel_times]
 
-    # 按照时间精度四舍五入音符的开始时间
-    for i, time in enumerate(times):
-        div, mod = divmod(time, time_precision)
-        times[i] = int(time_precision * (div + int(mod >= time_precision // 2)))
+    # 计算最大公约数来压缩时间轴
+    time_gcd = math.gcd(*processed_times) if len(processed_times) > 0 else 1
+    compressed_times = [t // time_gcd for t in processed_times]
 
-    # 将时间除以公因数
-    time_gcd = math.gcd(*times) // time_precision
-    times = [time // time_gcd for time in times]
+    # 插入间隔音符并清理重复
+    result = []
+    prev_pitch = None
+    for pitch, time in zip(pitches, compressed_times):
+        # 处理大间隔
+        while time > max_time_diff:
+            result.append((pitch if prev_pitch is None else prev_pitch, max_time_diff))
+            time -= max_time_diff
 
-    # 插入音符以填充时间差，并移除重复音符
-    i = 1  # 索引指针
-    while i < len(times):
-        if times[i] > max_time_diff:
-            # 插入音符以填充时间差
-            notes.insert(i, notes[i])
-            times.insert(i, max_time_diff)
-            times[i + 1] -= max_time_diff
-            i += 1
-        elif notes[i - 1] == notes[i] and times[i] == 0:
-            # 移除重复音符
-            notes.pop(i)
-            times.pop(i)
-        else:
-            i += 1
+        # 跳过重复零间隔音符
+        if time == 0 and pitch == prev_pitch:
+            continue
 
-    times = [time // time_precision for time in times]  # 归一化
-    return list(zip(notes, times))
+        result.append((pitch, time))
+        prev_pitch = pitch
+
+    return result
 
 
 def empty_cache():

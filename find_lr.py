@@ -1,9 +1,22 @@
-# 寻找最佳学习率
+"""
+学习率探索工具: 基于损失曲线变化寻找最佳学习率范围
+
+实现方法:
+1. 采用指数增长学习率策略逐步增大学习率
+2. 监控损失函数值及其变化率
+3. 使用Savitzky-Golay滤波器平滑损失曲线
+4. 通过损失变化率确定最佳学习率区间
+
+参考: https://sgugger.github.io/how-do-you-find-a-good-learning-rate.html
+"""
+
 # Copyright (C) thiliapr 2025
 # License: AGPLv3-or-later
 
 import math
 import pathlib
+import itertools
+
 import tqdm
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -14,88 +27,199 @@ from torch.nn import DataParallel
 from torch.utils.data import DataLoader
 from scipy.signal import savgol_filter
 
+# 常量定义
+INIT_LR = 1e-6  # 初始学习率 (建议范围: 1e-8 ~ 1e-5)
+FINAL_LR = 1e-1  # 终止学习率 (建议范围: 1e-2 ~ 1.0)
+LR_GROWTH_FACTOR = 1.02  # 学习率增长因子 (建议范围: 1.01 ~ 1.05)
+BATCH_SIZE = 4  # 批处理大小 (根据显存调整)
+SEQ_LENGTH = 512  # 序列长度 (需与训练参数一致)
+DATASET_PATH = pathlib.Path("/kaggle/input/music-midi")
+
 # 在非Jupyter环境下导入模型和工具库
 if "get_ipython" not in globals():
-    from model import MidiNet, NOTE_DURATION_COUNT
+    from model import MidiNet, NOTE_DURATION_COUNT, MAX_NOTE
     from train import MidiDataset
     display = print
 else:
     from IPython.display import display
 
 
-def main():
-    # 初始化学习率相关参数
-    init_lr = 1e-6  # 初始学习率
-    final_lr = 1e-1  # 最终学习率
-    lr_precision = 10 ** (1 / 100)  # 学习率调整的步长比例
+def setup_environment():
+    """
+    初始化训练环境
 
-    # 定义文件路径
-    local_dataset_path = pathlib.Path("/kaggle/input/music-midi")  # 数据集路径
+    Returns:
+        设备对象和数据加载器
 
-    # 加载数据集和初始化模型
-    dataset = MidiDataset(local_dataset_path, seq_size=512)  # 创建数据集实例
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")  # 初始化加速器
-    model = MidiNet()  # 初始化模型
-    model = model.to(device)  # 将模型移动到设备
-    optimizer = optim.SGD(model.parameters(), momentum=0.9, weight_decay=1e-3)  # 初始化优化器
+    Raises:
+        当数据集路径不存在时抛出
+    """
+    # 检查数据集路径
+    if not DATASET_PATH.exists():
+        raise FileNotFoundError(f"数据集路径不存在: {DATASET_PATH}")
 
-    # 准备数据加载器
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, drop_last=True)  # 创建数据加载器
+    # 设备初始化
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 检查是否使用多GPU
+    # 数据加载配置
+    dataset = MidiDataset(DATASET_PATH, seq_size=SEQ_LENGTH)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        drop_last=True
+    )
+
+    return device, dataloader
+
+
+def initialize_model(device: torch.device) -> torch.nn.Module:
+    """
+    初始化模型并配置并行训练
+
+    Args:
+        device: 训练设备
+
+    Returns:
+        配置好的模型实例
+    """
+    model = MidiNet().to(device)
+
+    # 多GPU并行配置
     if torch.cuda.device_count() > 1:
-        model = DataParallel(model)  # 使用 DataParallel 进行多GPU训练
+        print(f"使用 {torch.cuda.device_count()} GPUs 进行并行训练")
+        model = DataParallel(model)
 
-    # 设置初始学习率
-    optimizer.param_groups[0]["lr"] = init_lr
+    return model
 
-    # 记录学习率和损失
-    lr_loss_list = []
 
-    # 使用tqdm来显示进度条
-    dataloader_iter = iter(dataloader)
-    for i in tqdm.tqdm(range(math.ceil(math.log(final_lr / init_lr, lr_precision)))):
+def lr_exploration_loop(
+    model: torch.nn.Module,
+    optimizer: optim.Optimizer,
+    dataloader: DataLoader,
+    device: torch.device
+) -> list[tuple[float, float, float]]:
+    """
+    执行学习率探索循环
+
+    Args:
+        model: 待训练模型
+        optimizer: 优化器
+        dataloader: 数据加载器
+        device: 训练设备
+
+    Returns:
+        学习率记录 (学习率，损失值，损失变化率)
+    """
+    learning_records = []
+    previous_loss = None
+
+    # 创建循环迭代器避免数据耗尽
+    dataloader_iter = itertools.cycle(dataloader)
+
+    # 计算总迭代次数
+    total_steps = math.ceil(math.log(FINAL_LR / INIT_LR, LR_GROWTH_FACTOR))
+
+    for _ in tqdm.tqdm(range(total_steps), desc="Test LR"):
+        # 获取数据批次
         inputs, labels = next(dataloader_iter)
-        inputs, labels = inputs.to(device), labels.to(device).view(-1)  # 调整标签形状
-        optimizer.zero_grad()  # 清零梯度
-        outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * 128)  # 前向传播，调整输出形状
-        loss = F.cross_entropy(outputs, labels)  # 计算损失
-        loss.backward()  # 反向传播
-        optimizer.step()  # 更新模型参数
+        inputs = inputs.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True).view(-1)
 
-        # 计算并记录学习率、损失和损失变化
-        if i != 0:
-            lr_loss_list.append((optimizer.param_groups[0]["lr"], loss.item(), lr_loss_list[-1][1] - loss.item()))
-        else:
-            lr_loss_list.append((optimizer.param_groups[0]["lr"], loss.item(), 0))
+        # 前向传播
+        optimizer.zero_grad(set_to_none=True)  # 更高效的梯度清零
+        outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * MAX_NOTE)
+        loss = F.cross_entropy(outputs, labels)
 
-        # 调整学习率
-        optimizer.param_groups[0]["lr"] *= lr_precision
+        # 反向传播
+        loss.backward()
+        optimizer.step()
 
-    # 过滤掉包含NaN损失的记录
-    result = list(filter(lambda x: not math.isnan(x[1]), lr_loss_list))
-    result = [(index, lr, loss, diff) for index, (lr, loss, diff) in zip(range(len(result)), lr_loss_list)]
-    indexes, lrs, losses, differences = zip(*result)
+        # 记录训练指标
+        current_lr = optimizer.param_groups[0]["lr"]
+        loss_value = loss.item()
 
-    # 保存结果为表格
-    pd.DataFrame({"index": indexes, "lr": lrs, "loss": losses, "diff": differences}).sort_values(by="diff", ascending=False).to_csv("lr-loss-diff.csv", index=False)
+        # 计算损失变化率
+        loss_diff = previous_loss - loss_value if previous_loss is not None else 0
+        learning_records.append((current_lr, loss_value, loss_diff))
+        previous_loss = loss_value
 
-    # 平滑处理并绘制损失曲线
-    y_smooth = savgol_filter(losses, window_length=min(11, len(losses) - 1), polyorder=3)
-    plt.plot(indexes, y_smooth)
-    plt.title("Smoothed Loss Curve")
-    plt.xlabel(f"Learning Rate (lr = {init_lr} * ({lr_precision} ** x))")
-    plt.ylabel("Loss")
+        # 更新学习率 (指数增长)
+        optimizer.param_groups[0]["lr"] *= LR_GROWTH_FACTOR
+
+    return learning_records
+
+
+def analyze_results(records: list[tuple[float, float, float]]):
+    """
+    分析并可视化结果
+
+    Args:
+        records: 学习率探索记录
+    """
+    # 数据清洗
+    clean_records = [x for x in records if not math.isnan(x[1])]
+
+    # 转换为DataFrame
+    df = pd.DataFrame(clean_records, columns=["lr", "loss", "loss_diff"])
+    df["log_lr"] = df["lr"].apply(math.log10)
+
+    # 保存原始数据
+    df.to_csv("lr_exploration.csv", index=False)
+
+    # 损失曲线平滑
+    window_size = min(21, len(df) // 2)  # 自适应窗口大小
+    if window_size % 2 == 0:
+        window_size -= 1  # 确保窗口大小为奇数
+
+    df["smooth_loss"] = savgol_filter(df["loss"], window_size, 3)
+
+    # 绘制双对数曲线
+    plt.figure(figsize=(12, 6))
+    plt.plot(df["log_lr"], df["smooth_loss"], linewidth=2)
+    plt.title("LR & Loss", fontsize=14)
+    plt.xlabel("log10(Learning Rate)", fontsize=12)
+    plt.ylabel("Smoothed Loss", fontsize=12)
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig("LR-Loss Curve.png", dpi=300, bbox_inches="tight")
+    plt.savefig("lr_exploration_curve.png", dpi=300, bbox_inches="tight")
     plt.show()
 
-    # 将损失变化最大的前 10 位转化为 DataFrame 并显示
-    sorted_result = sorted(result, key=lambda x: x[3], reverse=True)
-    indexes, lrs, losses, differences = zip(*sorted_result[:10])
+    # 显示最佳候选学习率
+    df_top = df.nsmallest(10, "smooth_loss")
+    display(df_top[["lr", "loss", "smooth_loss"]].style.format({
+        "lr": "{:.2e}",
+        "loss": "{:.4f}",
+        "smooth_loss": "{:.4f}"
+    }))
 
-    df = pd.DataFrame({"index": indexes, "lr": lrs, "loss": losses, "diff": differences})
-    display(df)
+
+def main():
+    """主执行流程"""
+    try:
+        # 环境初始化
+        device, dataloader = setup_environment()
+
+        # 模型初始化
+        model = initialize_model(device)
+
+        # 优化器配置
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=INIT_LR,
+            momentum=0.9,
+            weight_decay=1e-3,
+            nesterov=True
+        )
+
+        # 执行学习率探索
+        records = lr_exploration_loop(model, optimizer, dataloader, device)
+
+        # 结果分析
+        analyze_results(records)
+    except Exception as e:
+        print(f"程序执行出错: {str(e)}")
+        raise
 
 
 if __name__ == "__main__":
