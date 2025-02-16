@@ -392,7 +392,7 @@ def plot_training_process(train_loss: list[float], val_loss: list[float], train_
     ax1.plot(train_loss, label="Train Loss", color="red")
 
     # 绘制验证过程中的损失曲线
-    val_steps = range(1, len(train_loss) + 1)
+    val_steps = [x + 0.5 for x in range(len(train_loss))]
     ax1.plot(val_steps, val_loss, label="Validation Loss", color="blue")
 
     # 设置第一个Y轴的标签
@@ -413,14 +413,15 @@ def plot_training_process(train_loss: list[float], val_loss: list[float], train_
     ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{round(x * 100, 2)}%"))  # 格式化为百分比
 
     # 设置标题和图例
-    ax1.set_title("Training Process")
-    ax1.legend(loc="upper left")  # 为损失曲线添加图例，并设置位置
-    ax2.legend(loc="upper right")  # 为准确率曲线添加图例，并设置位置
+    ax1.set_title("Training Process")  # 设置标题
+    ax1.legend(loc="upper left")  # 为损失曲线添加图例
+    ax2.legend(loc="upper right")  # 为准确率曲线添加图例
 
     plt.tight_layout()  # 自动调整布局，防止标签重叠
     pathlib.Path(img_path).parent.mkdir(parents=True, exist_ok=True)  # 确保保存路径存在
     plt.savefig(img_path, dpi=300, bbox_inches="tight")  # 保存图形
     plt.show()  # 显示图形
+    plt.close()
 
 
 def main():
