@@ -421,7 +421,6 @@ def plot_training_process(train_loss: list[float], val_loss: list[float], train_
     pathlib.Path(img_path).parent.mkdir(parents=True, exist_ok=True)  # 确保保存路径存在
     plt.savefig(img_path, dpi=300, bbox_inches="tight")  # 保存图形
     plt.show()  # 显示图形
-    plt.close()
 
 
 def main():

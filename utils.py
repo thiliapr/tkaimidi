@@ -125,7 +125,7 @@ def normalize_times(
             if t > max_time_diff:
                 max_gap_penalty += 1 - math.exp(-(t - max_time_diff) / max_time_diff)
 
-        return quant_error * 0.5 + math.sqrt(variance / len(time_seq)) * 1.2 + max_gap_penalty * 2.0 + zero_penalty * 0.3
+        return quant_error * 0.5 + math.sqrt(variance / len(time_seq)) * 1.2 + max_gap_penalty + zero_penalty
 
     # 寻找最佳时间缩放因子
     best_scale, min_loss = 1, math.inf
