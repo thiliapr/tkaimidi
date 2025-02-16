@@ -1,6 +1,6 @@
 # Tk AI MIDI
 ## 简介
-这是一个基于`TransformerDecoder`的MIDI生成模型。该模型利用`Transformer`架构的解码器部分。
+这是一个基于`TransformerEncoder`的MIDI生成模型。该模型利用`Transformer`架构的编码器部分。
 
 ## License
 ![GNU Affero General Public License Version 3 Logo](https://www.gnu.org/graphics/agplv3-with-text-162x68.png)
@@ -14,7 +14,7 @@
 graph TD
     subgraph MidiNet:
         direction TB
-        Embedding[嵌入层] --> PositionalEncoding[位置编码] --> TransformerDecoder[Transformer 解码器] --> Linear[全连接层]
+        Embedding[嵌入层] --> PositionalEncoding[位置编码] --> TransformerEncoder[Transformer 编码器] --> Linear[全连接层]
     end
 ```
 
