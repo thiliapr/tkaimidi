@@ -83,7 +83,7 @@ class MidiNet(nn.Module):
 
     def __init__(self):
         super().__init__()
-        vocab_size = MAX_NOTE * NOTE_DURATION_COUNT
+        vocab_size = (MAX_NOTE + 1) * NOTE_DURATION_COUNT
         self.d_model = 768
 
         self.embedding = nn.utils.skip_init(nn.Embedding, vocab_size, self.d_model)  # 嵌入层

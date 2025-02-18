@@ -106,7 +106,7 @@ class MidiDataset(Dataset):
                     seq_notes = [note - (note - MAX_NOTE + 11) // 12 * 12 if note > MAX_NOTE else note for note in seq_notes]
 
                     # 计算可平移的音符偏移量 (数据增强潜力)
-                    note_offsets = MAX_NOTE - max(seq_notes)    # 剩余可上移空间
+                    note_offsets = MAX_NOTE + 1 - max(seq_notes)    # 剩余可上移空间 (包括原来的空间, 所以加1)
 
                     # 计算时间缩放因子 (基于时间的最大公约数)
                     time_offsets = (NOTE_DURATION_COUNT - 1) // (max(seq_times) // math.gcd(*seq_times))
@@ -156,7 +156,7 @@ class MidiDataset(Dataset):
                 seq_notes = [note - (note - MAX_NOTE + 11) // 12 * 12 if note > MAX_NOTE else note for note in seq_notes]
 
                 # 应用音符偏移 (数据增强)
-                seq_notes = [note + note_offset if note > MAX_NOTE else note for note in seq_notes]
+                seq_notes = [note + note_offset for note in seq_notes]
 
                 # 假装这是音乐的开始
                 seq_times[0] = 0
@@ -295,7 +295,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
             # 训练阶段
             inputs, labels = inputs.to(device), labels.to(device).view(-1)
             optimizer.zero_grad()  # 清空优化器中的梯度
-            outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * MAX_NOTE)  # 前向传播
+            outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * (MAX_NOTE + 1))  # 前向传播
             loss = F.cross_entropy(outputs, labels)  # 计算交叉熵损失
 
             # 检查损失是否为 NaN
@@ -331,7 +331,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
                         if val_step >= steps_to_val:
                             break  # 达到验证批次上限，停止验证
 
-                        outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * MAX_NOTE)  # 前向传播
+                        outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * (MAX_NOTE + 1))  # 前向传播
                         loss = F.cross_entropy(outputs, labels)  # 计算验证损失
                         epoch_val_loss.append(loss.item())  # 累计验证损失
                         epoch_val_acc.append((torch.argmax(outputs) == labels).sum().item() / labels.size(-1))  # 累积验证准确率

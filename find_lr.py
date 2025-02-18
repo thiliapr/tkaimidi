@@ -128,7 +128,7 @@ def lr_exploration_loop(
 
         # 前向传播
         optimizer.zero_grad(set_to_none=True)  # 更高效的梯度清零
-        outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * MAX_NOTE)
+        outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * (MAX_NOTE + 1))
         loss = F.cross_entropy(outputs, labels)
 
         # 反向传播
