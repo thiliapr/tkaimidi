@@ -158,6 +158,9 @@ class MidiDataset(Dataset):
                 # 应用音符偏移 (数据增强)
                 seq_notes = [note + note_offset if note > MAX_NOTE else note for note in seq_notes]
 
+                # 假装这是音乐的开始
+                seq_times[0] = 0
+
                 # 时间缩放增强
                 time_gcd = math.gcd(*seq_times)
                 seq_times = [time // time_gcd * (time_offset + 1) for time in seq_times]
