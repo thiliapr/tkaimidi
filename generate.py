@@ -2,6 +2,7 @@
 # Copyright (C)  thiliapr 2024-2025
 # License: AGPLv3-or-later
 
+import math
 import pathlib
 import mido
 import tqdm
@@ -90,7 +91,7 @@ def normalize_pitches(pitches: list[int]) -> tuple[list[int], int]:
     # 处理超出上限的音高
     for i, p in enumerate(base_shifted):
         if p > MAX_NOTE:
-            base_shifted[i] -= (p - MAX_NOTE + 11) // 12 * 12  # 降低若干个八度数使音高处于范围之中
+            base_shifted[i] -= math.ceil((p + 1 - MAX_NOTE) / 12) * 12  # 降低若干个八度数使音高处于范围之中
 
     # 使音高范围居中
     current_max = max(base_shifted)

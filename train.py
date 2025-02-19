@@ -103,7 +103,7 @@ class MidiDataset(Dataset):
                     seq_notes = [note - min_note for note in seq_notes]
 
                     # 通过八度移调保持在 [0, MAX_NOTE] 范围内
-                    seq_notes = [note - (note - MAX_NOTE + 11) // 12 * 12 if note > MAX_NOTE else note for note in seq_notes]
+                    seq_notes = [note - math.ceil((note + 1 - MAX_NOTE) / 12) * 12 if note > MAX_NOTE else note for note in seq_notes]
 
                     # 计算可平移的音符偏移量 (数据增强潜力)
                     note_offsets = MAX_NOTE + 1 - max(seq_notes)    # 剩余可上移空间 (包括原来的空间, 所以加1)
@@ -153,12 +153,13 @@ class MidiDataset(Dataset):
                 seq_notes = [note - min_note for note in seq_notes]
 
                 # 音高越界处理 (确保在范围内)
-                seq_notes = [note - (note - MAX_NOTE + 11) // 12 * 12 if note > MAX_NOTE else note for note in seq_notes]
+                seq_notes = [note - math.ceil((note + 1 - MAX_NOTE) / 12) * 12 if note > MAX_NOTE else note for note in seq_notes]
 
                 # 应用音符偏移 (数据增强)
                 seq_notes = [note + note_offset for note in seq_notes]
 
                 # 假装这是音乐的开始
+                seq_times = list(seq_times)
                 seq_times[0] = 0
 
                 # 时间缩放增强

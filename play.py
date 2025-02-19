@@ -25,7 +25,7 @@ def main(args: argparse.Namespace):
             for i, (note, time) in enumerate(notes):
                 note = note + notes_offest
                 if note > MAX_NOTE:
-                    note -= math.ceil((note - MAX_NOTE) / 12) * 12
+                    note -= math.ceil((note + 1 - MAX_NOTE) / 12) * 12
                 notes[i] = (note, time)
 
             track = model_output_to_track(notes)

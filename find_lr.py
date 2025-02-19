@@ -123,11 +123,11 @@ def lr_exploration_loop(
     for _ in tqdm.tqdm(range(total_steps), desc="Test LR"):
         # 获取数据批次
         inputs, labels = next(dataloader_iter)
-        inputs = inputs.to(device, non_blocking=True)
-        labels = labels.to(device, non_blocking=True).view(-1)
+        inputs = inputs.to(device)
+        labels = labels.to(device).view(-1)
 
         # 前向传播
-        optimizer.zero_grad(set_to_none=True)  # 更高效的梯度清零
+        optimizer.zero_grad()
         outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * (MAX_NOTE + 1))
         loss = F.cross_entropy(outputs, labels)
 
