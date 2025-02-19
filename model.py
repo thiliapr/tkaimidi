@@ -7,7 +7,7 @@
 使用示例:
 - 创建模型实例: `model = MidiNet()`
 - 保存模型检查点: `save_checkpoint(model, optimizer, train_loss, val_loss, train_accuracy, val_accuracy, dataset_length, train_start, last_batch, generator_state, path)`
-- 加载模型检查点: 
+- 加载模型检查点:
   - `model_state, optimizer_state, train_loss, val_loss, train_accuracy, val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(path, train=True)`
   - `model = load_checkpoint(path, train=False)`
 """

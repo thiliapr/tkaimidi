@@ -167,7 +167,7 @@ class MidiDataset(Dataset):
                 seq_times = [time // time_gcd * (time_offset + 1) for time in seq_times]
 
                 # 将音符和时间编码为单一整数, 公式: note * 时间类别数 + time
-                seq = [(note + note_offset) * NOTE_DURATION_COUNT + (time) for note, time in zip(seq_notes, seq_times)]
+                seq = [note * NOTE_DURATION_COUNT + time for note, time in zip(seq_notes, seq_times)]
 
                 # 返回输入和目标序列
                 return torch.tensor(seq[:-1], dtype=torch.long), torch.tensor(seq[1:], dtype=torch.long)
