@@ -37,7 +37,7 @@ DATASET_PATH = pathlib.Path("/kaggle/input/music-midi")
 
 # 在非Jupyter环境下导入模型和工具库
 if "get_ipython" not in globals():
-    from model import MidiNet, NOTE_DURATION_COUNT, MAX_NOTE
+    from model import MidiNet, VOCAB_SIZE
     from train import MidiDataset
     display = print
 else:
@@ -128,7 +128,7 @@ def lr_exploration_loop(
 
         # 前向传播
         optimizer.zero_grad()
-        outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * (MAX_NOTE + 1))
+        outputs = model(inputs).view(-1, VOCAB_SIZE)
         loss = F.cross_entropy(outputs, labels)
 
         # 反向传播

@@ -27,8 +27,9 @@ import torch.nn.functional as F
 TIME_PRECISION = 120  # 时间精度，表示每个音符的最小时间单位
 MAX_TIME_DIFF = 960  # 两个音符之间允许的最大时间差
 NOTE_DURATION_COUNT = MAX_TIME_DIFF // TIME_PRECISION + 1  # 允许的音符时间长度的数量
-DEFAULT_LENGTH = 4096
 MAX_NOTE = 72  # 允许的最高音高与最低音高的差。在原始 MIDI 格式中，这个值为127，但大部分文件最高音高与最低音高的差不会达到这么高，所以这里不使用127
+VOCAB_SIZE = (MAX_NOTE + 1) * NOTE_DURATION_COUNT
+DEFAULT_LENGTH = 4096
 
 
 class PositionalEncoding(nn.Module):
@@ -83,13 +84,12 @@ class MidiNet(nn.Module):
 
     def __init__(self):
         super().__init__()
-        vocab_size = (MAX_NOTE + 1) * NOTE_DURATION_COUNT
         self.d_model = 768
 
-        self.embedding = nn.utils.skip_init(nn.Embedding, vocab_size, self.d_model)  # 嵌入层
+        self.embedding = nn.utils.skip_init(nn.Embedding, VOCAB_SIZE, self.d_model)  # 嵌入层
         self.pos_encoder = PositionalEncoding(self.d_model, 0.1)
         self.blocks = nn.ModuleList(nn.TransformerEncoderLayer(self.d_model, 8, 2048, 0.1, batch_first=True) for _ in range(6))  # Transformer 编码器层堆叠
-        self.fc_out = nn.utils.skip_init(nn.Linear, self.d_model, vocab_size)  # 将嵌入映射到词汇大小
+        self.fc_out = nn.utils.skip_init(nn.Linear, self.d_model, VOCAB_SIZE)  # 将嵌入映射到词汇大小
 
         self.register_buffer("last_mask", torch.tensor([]), persistent=False)  # CasualMask 初始化
         self.init_weights()  # 初始化权重

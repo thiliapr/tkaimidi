@@ -30,12 +30,14 @@ import tempfile
 import mido
 import tqdm
 import torch
+import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from torch.nn import DataParallel
 from functools import partial
+from typing import Callable
 
 import warnings
 import os
@@ -49,8 +51,27 @@ torch.set_num_threads(cpu_count())
 
 # 在非Jupyter环境下导入模型和工具库
 if "get_ipython" not in globals():
-    from model import MidiNet, TIME_PRECISION, MAX_TIME_DIFF, NOTE_DURATION_COUNT, MAX_NOTE, load_checkpoint, save_checkpoint
+    from model import MidiNet, TIME_PRECISION, MAX_TIME_DIFF, NOTE_DURATION_COUNT, MAX_NOTE, VOCAB_SIZE, load_checkpoint, save_checkpoint
     from utils import midi_to_notes, normalize_times, empty_cache
+
+
+class FloodLoss(nn.Module):
+    """
+    FloodLoss 是一个自定义的损失函数，用于根据损失值与给定阈值 alpha 的比较来调整梯度方向。
+    该损失函数的设计目的是在损失值大于 alpha 时进行梯度下降，而在损失值小于等于 alpha 时进行梯度上升。
+    """
+
+    def __init__(self, critetion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor], alpha: float):
+        super(FloodLoss, self).__init__()
+        self.alpha = alpha
+        self.critetion = critetion
+
+    def forward(self, inputs, labels):
+        loss = self.critetion(inputs, labels)
+        if loss.item() > self.alpha:
+            return loss  # 梯度下降
+        else:
+            return -loss  # 梯度上升
 
 
 class MidiDataset(Dataset):
@@ -73,7 +94,8 @@ class MidiDataset(Dataset):
         self.length = 0  # 经过数据增强后的总样本数
 
         # 遍历目录获取MIDI文件 (按文件名排序保证可重复性)
-        midi_files = sorted(list(path.glob("**/*.mid")), key=lambda x: x.name)
+        # midi_files = sorted(list(path.glob("**/*.mid")), key=lambda x: x.name)
+        midi_files = list(filter(lambda x: x.name.startswith("Touhou"), path.glob("**/*.mid")))
         progress_bar = tqdm.tqdm(desc="Load Dataset", total=len(midi_files))
 
         for filepath in midi_files:
@@ -262,6 +284,9 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
     if torch.cuda.device_count() > 1:
         model = DataParallel(model)  # 使用 DataParallel 进行多GPU训练
 
+    # 初始化损失函数
+    critetion = FloodLoss(F.cross_entropy, alpha=3)
+
     # 初始化记录
     train_loss = []
     val_loss = []
@@ -296,8 +321,8 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
             # 训练阶段
             inputs, labels = inputs.to(device), labels.to(device).view(-1)
             optimizer.zero_grad()  # 清空优化器中的梯度
-            outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * (MAX_NOTE + 1))  # 前向传播
-            loss = F.cross_entropy(outputs, labels)  # 计算交叉熵损失
+            outputs = model(inputs).view(-1, VOCAB_SIZE)  # 前向传播
+            loss = critetion(outputs, labels)  # 计算交叉熵损失
 
             # 检查损失是否为 NaN
             if torch.isnan(loss):
@@ -332,7 +357,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
                         if val_step >= steps_to_val:
                             break  # 达到验证批次上限，停止验证
 
-                        outputs = model(inputs).view(-1, NOTE_DURATION_COUNT * (MAX_NOTE + 1))  # 前向传播
+                        outputs = model(inputs).view(-1, VOCAB_SIZE)  # 前向传播
                         loss = F.cross_entropy(outputs, labels)  # 计算验证损失
                         epoch_val_loss.append(loss.item())  # 累计验证损失
                         epoch_val_acc.append((torch.argmax(outputs) == labels).sum().item() / labels.size(-1))  # 累积验证准确率
