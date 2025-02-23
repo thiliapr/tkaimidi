@@ -462,7 +462,8 @@ def main():
         "val_batch_size": 4,  # 验证时的批量大小，越大验证结果越准确，但是资源使用倍数增加，验证时间也增加（但没有资源使用增加得多）
         "train_length": 0.8,  # 训练集占数据集的比例，用来保证用来验证的数据不被训练
         "val_per_step": 4096,  # 每多少个训练步骤进行一次验证
-        "steps_to_val": 256  # 抽样验证，每一次验证使用多少个批次，越大验证结果越准确，但是验证时间倍数增加，资源使用不增加
+        "steps_to_val": 256,  # 抽样验证，每一次验证使用多少个批次，越大验证结果越准确，但是验证时间倍数增加，资源使用不增加
+        "flooding_level": 0  # 允许训练最低的损失值。训练损失低于该值则执行梯度上升，否则执行梯度下降
     }
 
     # 定义路径
@@ -524,6 +525,7 @@ def main():
         train_length=config["train_length"],
         val_per_step=config["val_per_step"],
         steps_to_val=config["steps_to_val"],
+        flooding_level=config["flooding_level"],
         train_start=train_start,
         generator_state=generator_state,
         last_batch=last_batch,
