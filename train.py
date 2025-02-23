@@ -55,23 +55,37 @@ if "get_ipython" not in globals():
     from utils import midi_to_notes, normalize_times, empty_cache
 
 
+class ReverseGradientBelowThreshold(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, threshold):
+        ctx.save_for_backward(input)
+        ctx.threshold = torch.tensor(threshold, dtype=input.dtype, device=input.device)
+        return input
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        threshold = ctx.threshold
+        mask = (input <= threshold).float()
+        grad_input = grad_output * (1.0 - 2.0 * mask)
+        return grad_input, None
+
+
 class FloodLoss(nn.Module):
     """
-    FloodLoss 是一个自定义的损失函数，用于根据损失值与给定阈值 alpha 的比较来调整梯度方向。
-    该损失函数的设计目的是在损失值大于 alpha 时进行梯度下降，而在损失值小于等于 alpha 时进行梯度上升。
+    FloodLoss 是一个自定义的损失函数，用于根据损失值与给定阈值 threshold 的比较来调整梯度方向。
+    该损失函数的设计目的是在损失值大于 threshold 时进行梯度下降，而在损失值小于等于 threshold 时进行梯度上升。
     """
 
-    def __init__(self, critetion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor], alpha: float):
-        super(FloodLoss, self).__init__()
-        self.alpha = alpha
+    def __init__(self, critetion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor], threshold: float):
+        super().__init__()
         self.critetion = critetion
+        self.threshold = threshold
 
-    def forward(self, inputs, labels):
-        loss = self.critetion(inputs, labels)
-        if loss.item() > self.alpha:
-            return loss  # 梯度下降
-        else:
-            return -loss  # 梯度上升
+    def forward(self, outputs, labels):
+        original_loss = self.critetion(outputs, labels)
+        adjusted_loss = ReverseGradientBelowThreshold.apply(original_loss, self.threshold)
+        return adjusted_loss
 
 
 class MidiDataset(Dataset):
@@ -79,13 +93,13 @@ class MidiDataset(Dataset):
     MIDI 数据集类，用于加载和处理MIDI文件生成训练序列
 
     特性:
-        - 自动处理不同长度的MIDI文件
+    - 自动处理不同长度的MIDI文件
     - 支持音符平移和时间缩放
     - 自动填充短序列，保证数据可用性
 
     Args:
         path: MIDI文件存储路径（支持嵌套目录结构）
-        seq_size: 输入序列长度（单位：音符事件数），实际生成的序列长度为 seq_size+1
+        seq_size: 输入序列长度（单位：音符事件数），实际生成的序列长度为 seq_size + 1
     """
 
     def __init__(self, path: pathlib.Path, seq_size: int):
@@ -285,7 +299,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
         model = DataParallel(model)  # 使用 DataParallel 进行多GPU训练
 
     # 初始化损失函数
-    critetion = FloodLoss(F.cross_entropy, alpha=3)
+    critetion = FloodLoss(F.cross_entropy, 3)
 
     # 初始化记录
     train_loss = []
@@ -462,9 +476,9 @@ def main():
         "local_ckpt": "ckpt",  # 在本地保存的检查点的路径，训练结束后会保存到这里
         "external_datasets_path": ["/kaggle/input/music-midi"],  # 外部数据集的路径列表
         "lr": 0.00019952623149688647,  # 学习率
-        "weight_decay": 1e-3,  # 权重衰减系数
+        "weight_decay": 1e-5,  # 权重衰减系数
         "seq_size": 512,  # 输入序列的大小 - 1
-        "val_steps": 1,  # 进行多少次验证步骤（因为 Dataset 进行了数据增强，一个 Epoch 训练数据变得很多，Kaggle GPU 12个小时跑不完，所以用验证步骤代替）
+        "val_steps": 24,  # 进行多少次验证步骤（因为 Dataset 进行了数据增强，一个 Epoch 训练数据变得很多，Kaggle GPU 12个小时跑不完，所以用验证步骤代替）
         "train_batch_size": 4,  # 训练时的批量大小
         "val_batch_size": 4,  # 验证时的批量大小，越大验证结果越准确，但是资源使用倍数增加，验证时间也增加（但没有资源使用增加得多）
         "train_length": 0.8,  # 训练集占数据集的比例，用来保证用来验证的数据不被训练
