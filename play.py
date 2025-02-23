@@ -20,7 +20,7 @@ def main(args: argparse.Namespace):
         for mid in playlist:
             print(mid.relative_to(args.path) if args.path.is_dir() else mid)
             notes = [(note, time) for _, note, time, _ in midi_to_notes(mido.MidiFile(mid, clip=True))]
-            notes = normalize_times(notes, TIME_PRECISION, 960, strict=args.strict)
+            notes = normalize_times(notes, TIME_PRECISION, strict=args.strict)
             notes_offest = max(0, int(args.medium_mote - sum(note for note, _ in notes) / len(notes)))
             for i, (note, time) in enumerate(notes):
                 note = note + notes_offest

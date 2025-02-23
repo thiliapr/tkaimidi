@@ -14,15 +14,16 @@ LOVE_TRADING_MIDI = [(45, 0), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 
 
 # 在非Jupyter环境下导入模型库
 if "get_ipython" not in globals():
-    from model import MidiNet, TIME_PRECISION, NOTE_DURATION_COUNT, MAX_NOTE, load_checkpoint
+    from model import MidiNet, TIME_PRECISION, MAX_NOTE, load_checkpoint
+    from utils import notes_to_note_intervals
 
 
-def model_output_to_track(notes: list[tuple[int, int]]) -> mido.MidiTrack:
+def model_output_to_track(note_intervals: list[int]) -> mido.MidiTrack:
     """
     将音符和时间信息转换为 MIDI 轨道。
 
     Args:
-        notes: 音符和时间的元组列表，格式为 [(音高1, 时间1), (音高2, 时间2), ...]
+        note_intervals: 音符间隔格式的列表
 
     Returns:
         包含音符事件及结束标记的 MIDI 轨道
@@ -31,19 +32,20 @@ def model_output_to_track(notes: list[tuple[int, int]]) -> mido.MidiTrack:
     events = []
     cumulative_time = 0  # 累计时间
 
-    for note, time_delta in notes:
-        # 计算事件绝对时间
-        cumulative_time += time_delta * TIME_PRECISION
-
-        # 添加音符开启和关闭事件
-        events.append(("note_on", note, cumulative_time))
-        events.append(("note_off", note, cumulative_time + TIME_PRECISION))
+    for event in note_intervals:
+        if event == MAX_NOTE + 1:
+            # 计算事件绝对时间
+            cumulative_time += TIME_PRECISION
+        else:
+            # 添加音符开启和关闭事件
+            events.append(("note_on", event, cumulative_time))
+            events.append(("note_off", event, cumulative_time + TIME_PRECISION))
 
     # 按事件发生时间排序（确保事件顺序正确）
     events.sort(key=lambda x: x[2])
 
     # 构建 MIDI 轨道
-    track = []
+    track = [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(128))]
     last_event_time = 0  # 上一个事件的绝对时间
 
     for event_type, note, event_time in events:
@@ -74,7 +76,7 @@ def normalize_pitches(pitches: list[int]) -> tuple[list[int], int]:
         pitches: 原始音高列表
 
     Returns:
-        (标准化后的音高列表, 总偏移量)
+        标准化后的音高列表, 总偏移量
 
     处理步骤:
         1. 整体平移使最低音为0
@@ -107,9 +109,7 @@ def generate_midi(
     seed: int,
     length: int,
     temperature: float = 1,
-    top_p: float = 0.8,
-    frequency_penalty: float = 0.,
-    presence_penalty: float = 0.
+    top_p: float = 0.8
 ) -> mido.MidiTrack:
     """
     使用模型生成 MIDI 音乐轨道
@@ -121,8 +121,6 @@ def generate_midi(
         length: 需要生成的音符数量
         temperature: 采样温度（大于1增加多样性，小于1减少随机性）
         top_p: 核采样概率阈值，范围是0至1
-        frequency_penalty: 频率惩罚（抑制重复出现的音符）
-        presence_penalty: 存在惩罚（抑制已出现的音符）
 
     Returns:
         生成的 MIDI 轨道
@@ -131,7 +129,7 @@ def generate_midi(
     normalized_pitches, pitch_offset = normalize_pitches(original_pitches)  # 标准化音高范围
 
     # 将音符和时间编码为模型输入序列
-    input_prompt = [(pitch * NOTE_DURATION_COUNT) + time for pitch, time in zip(normalized_pitches, original_times)]
+    input_prompt = notes_to_note_intervals(zip(normalized_pitches, original_times), MAX_NOTE + 1)
 
     model.eval()  # 将模型设置为评估模式
     generator = torch.Generator().manual_seed(seed)  # 固定随机种子，确保每次生成结果一致
@@ -147,35 +145,6 @@ def generate_midi(
 
         # 应用温度缩放
         probs = F.softmax(logits / temperature, dim=-1)
-
-        # 解码当前序列中的音符信息
-        decoded_notes = [token // NOTE_DURATION_COUNT for token in input_prompt]
-
-        # 应用频率惩罚（抑制重复音符）
-        if frequency_penalty > 0:
-            # 统计每个音符的出现次数
-            note_counts = torch.bincount(
-                torch.tensor(decoded_notes),
-                minlength=probs.size(-1) // NOTE_DURATION_COUNT
-            )
-
-            # 构建频率惩罚因子
-            note_indices = torch.arange(probs.size(-1)) // NOTE_DURATION_COUNT
-            penalties = frequency_penalty * (note_counts[note_indices].float() / len(decoded_notes))
-            probs = probs * (1 - penalties).clamp(min=0)
-
-        # 应用存在惩罚（抑制已出现的音符）
-        if presence_penalty > 0:
-            unique_notes = set(decoded_notes)
-            presence_mask = torch.isin(
-                torch.arange(probs.size(-1)) // NOTE_DURATION_COUNT,
-                torch.tensor(list(unique_notes), dtype=torch.long)
-            )
-            probs = torch.where(presence_mask, probs * (1 - presence_penalty), probs)
-
-        # 确保概率有效性
-        probs = F.relu(probs)
-        probs /= probs.sum()
 
         # 核采样
         sorted_probs, sorted_indices = torch.sort(probs, descending=True)
@@ -193,12 +162,12 @@ def generate_midi(
         input_prompt.append(selected_token.item())
 
     # 解码生成的序列
-    decoded_notes = [
-        (token // NOTE_DURATION_COUNT - pitch_offset, token % NOTE_DURATION_COUNT)  # 补偿音高偏移
-        for token in input_prompt
+    decoded_note_intervals = [
+        event if (event == MAX_NOTE + 1) else (event - pitch_offset)  # 补偿音高偏移
+        for event in input_prompt
     ]
 
-    return model_output_to_track(decoded_notes)  # 转化为 MIDI 轨道
+    return model_output_to_track(decoded_note_intervals)  # 转化为 MIDI 轨道
 
 
 def main():

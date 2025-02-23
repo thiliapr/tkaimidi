@@ -73,7 +73,6 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int, int, int]]:
 def normalize_times(
     data: list[tuple[int, int]],
     time_precision: int,
-    max_time_diff: int,
     strict: bool = True
 ) -> list[tuple[int, int]]:
     """
@@ -82,7 +81,6 @@ def normalize_times(
     Args:
         data: 原始数据列表，元素为 (音高, 绝对时间)
         time_precision: 时间量化精度 (单位ticks)
-        max_time_diff: 相邻音符最大允许间隔
         strict: 是否严格保持节奏特征
 
     Returns:
@@ -106,7 +104,6 @@ def normalize_times(
 
         损失组成:
         - 量化误差: 时间值偏离量化网格的程度
-        - 大间隔惩罚: 超过max_time_diff的时间间隔
         - 时间分布方差: 时间值的离散程度
         - 零时间惩罚: 过多相邻音符零间隔
         """
@@ -121,9 +118,6 @@ def normalize_times(
             quant_error += 1 / (1 + math.exp(-abs(t / time_precision - round(t / time_precision))))  # 量化误差 (sigmoid加权)
             variance += (t - mean) ** 2  # 统计方差
             zero_penalty += int(t < time_precision / 2)  # 零间隔计数
-            # 大间隔惩罚 (指数衰减)
-            if t > max_time_diff:
-                max_gap_penalty += 1 - math.exp(-(t - max_time_diff) / max_time_diff)
 
         return quant_error * 0.5 + math.sqrt(variance / len(time_seq)) * 1.2 + max_gap_penalty + zero_penalty
 
@@ -155,11 +149,6 @@ def normalize_times(
     result = []
     prev_pitch = None
     for pitch, time in zip(pitches, compressed_times):
-        # 处理大间隔
-        while time > max_time_diff:
-            result.append((pitch if prev_pitch is None else prev_pitch, max_time_diff))
-            time -= max_time_diff
-
         # 跳过重复零间隔音符
         if time == 0 and pitch == prev_pitch:
             continue
@@ -168,6 +157,35 @@ def normalize_times(
         prev_pitch = pitch
 
     return result
+
+
+def notes_to_note_intervals(notes: list[tuple[int, int]], interval: int) -> list[int]:
+    """
+    将MIDI音符列表转化为音符间隔格式。
+
+    MIDI音符格式: [(音高, 与上一个音符的时间差), ...]
+    音符间隔格式: [音高, 1个时间单位的停顿 (用`最大音高 + 1`表示), 音高, 音高, ...]
+
+    举个例子 (假设最大音高是23):
+    输入: `[(1, 0), (2, 3), (4, 0), (9, 0), (12, 2)]`
+    输出: `[1, 24, 24, 24, 2, 4, 9, 24, 24, 12]`
+
+    Args:
+        notes: 原MIDI音符列表，包含音高和与上一个音符的时间差
+        interval: 表示停顿的值
+
+    Returns:
+        音符间隔格式的列表
+    """
+    note_intervals = []  # 初始化音符间隔列表
+
+    for pitch, time in notes:
+        note_intervals.append(pitch)  # 添加当前音高
+
+        # 添加与上一个音符的时间差对应的停顿
+        note_intervals.extend([interval] * time)  # 添加时间差对应的停顿
+
+    return note_intervals  # 返回最终的音符间隔列表
 
 
 def empty_cache():

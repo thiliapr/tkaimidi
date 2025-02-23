@@ -49,8 +49,8 @@ torch.set_num_threads(cpu_count())
 
 # 在非Jupyter环境下导入模型和工具库
 if "get_ipython" not in globals():
-    from model import MidiNet, TIME_PRECISION, MAX_TIME_DIFF, NOTE_DURATION_COUNT, MAX_NOTE, VOCAB_SIZE, load_checkpoint, save_checkpoint
-    from utils import midi_to_notes, normalize_times, empty_cache
+    from model import MidiNet, TIME_PRECISION, MAX_NOTE, VOCAB_SIZE, load_checkpoint, save_checkpoint
+    from utils import midi_to_notes, normalize_times, notes_to_note_intervals, empty_cache
 
 
 class MidiDataset(Dataset):
@@ -65,17 +65,21 @@ class MidiDataset(Dataset):
     Args:
         path: MIDI文件存储路径（支持嵌套目录结构）
         seq_size: 输入序列长度 + 1
+        interval_repeat: 音符过少重复时，两段音乐的时间间隔
+        show_progress: 显示进度条
     """
 
-    def __init__(self, path: pathlib.Path, seq_size: int):
-        self.data: list[tuple[list[tuple[int, int]], list[tuple[int, int]]]] = []  # 存储每个 MIDI 文件的数据
+    def __init__(self, path: pathlib.Path, seq_size: int, interval_repeat: int = 8, show_progress: bool = True):
+        self.data: list = []  # 存储每个 MIDI 文件的数据
         self.seq_size = seq_size  # 基础序列长度 (用于模型输入的上下文窗口)
         self.length = 0  # 经过数据增强后的总样本数
 
         # 遍历目录获取MIDI文件 (按文件名排序保证可重复性)
         # midi_files = sorted(list(path.glob("**/*.mid")), key=lambda x: x.name)
         midi_files = list(filter(lambda x: x.name.startswith("Touhou"), path.glob("**/*.mid")))
-        progress_bar = tqdm.tqdm(desc="Load Dataset", total=len(midi_files))
+
+        if show_progress:
+            progress_bar = tqdm.tqdm(desc="Load Dataset", total=len(midi_files))
 
         for filepath in midi_files:
             # 解析 MIDI 文件，提取音符信息
@@ -84,42 +88,52 @@ class MidiDataset(Dataset):
             # 使用两种时间归一化模式 (严格/宽松) 增加数据多样性
             for param_strict in [False, True]:
                 # 规范化时间
-                data = normalize_times(parsed_data, TIME_PRECISION, MAX_TIME_DIFF, strict=param_strict)
+                data = normalize_times(parsed_data, TIME_PRECISION, strict=param_strict)
+
+                # 转换格式
+                data = notes_to_note_intervals(data, -1)
 
                 # 通过循环填充达到最小长度要求
                 if len(data) < seq_size:
-                    data[0] = (data[0][0], NOTE_DURATION_COUNT - 1)  # 修正第一个音符的时间
-                    new_data = data * (seq_size // len(data) + 1)  # 重复数据，确保序列长度足够
-                    new_data[0] = (new_data[0][0], 0)  # 还原第一个音符的时间
-                    data = new_data
+                    data += [-1] * interval_repeat
+                    data *= seq_size // len(data) + 1  # 重复数据，确保序列长度足够
+                    data = data[:-interval_repeat]
 
                 # 计算每个子序列的数据增强潜力
-                offsets: list[tuple[int, int]] = []
+                offsets: list[int] = []
                 for i in range(len(data) - seq_size):
                     # 提取当前窗口的序列数据
-                    seq_notes, seq_times = zip(*data[i:i + seq_size])
+                    seq = data[i:i + seq_size]
+                    if seq[0] == -1:
+                        continue  # 跳过以间隔为开头的序列
+
+                    # 提取序列的音高
+                    pitches = [pitch for pitch in seq if pitch != -1]
 
                     # 平移至最小音符为0 (保留相对音高关系)
-                    min_note = min(seq_notes)
-                    seq_notes = [note - min_note for note in seq_notes]
+                    min_pitch = min(pitches)
+                    pitches = [pitch - min_pitch for pitch in pitches]
 
                     # 通过八度移调保持在 [0, MAX_NOTE] 范围内
-                    seq_notes = [note - math.ceil((note + 1 - MAX_NOTE) / 12) * 12 if note > MAX_NOTE else note for note in seq_notes]
+                    pitches = [
+                        (pitch - math.ceil((pitch + 1 - MAX_NOTE) / 12) * 12) if (pitch > MAX_NOTE) else pitch
+                        for pitch in pitches
+                    ]
 
                     # 计算可平移的音符偏移量 (数据增强潜力)
-                    note_offsets = MAX_NOTE + 1 - max(seq_notes)    # 剩余可上移空间 (包括原来的空间, 所以加1)
+                    note_offsets = MAX_NOTE - max(pitches) + 1  # 剩余可上移空间 (包括原来的空间, 所以加1)
 
-                    # 计算时间缩放因子 (基于时间的最大公约数)
-                    time_offsets = (NOTE_DURATION_COUNT - 1) // (max(seq_times) // math.gcd(*seq_times))
-
-                    offsets.append((note_offsets, time_offsets))
-                    self.length += note_offsets * time_offsets  # 累加增强后的样本数
+                    offsets.append(note_offsets)
+                    self.length += note_offsets  # 累加增强后的样本数
 
                 # 存储处理后的数据, 每个文件保存两种时间归一化版本
                 self.data.append((offsets, data))
-            progress_bar.update()
 
-        progress_bar.close()
+            if show_progress:
+                progress_bar.update()
+
+        if show_progress:
+            progress_bar.close()
 
     def __len__(self):
         return self.length
@@ -132,46 +146,44 @@ class MidiDataset(Dataset):
         3. 通过偏移量计算定位具体增强参数
         4. 应用数据增强生成最终序列
         """
-        for offsets, midi_notes_data in self.data:
-            found = None
+        for offsets, filedata in self.data:
+            found = False
             # 通过递减法找到目标所在的序列
-            for seq_index, (note_offsets, time_offsets) in enumerate(offsets):
-                seq_offsets = note_offsets * time_offsets  # 当前序列的增强潜力
-                if index >= seq_offsets:
-                    index -= seq_offsets  # 不在当前序列范围，调整剩余索引
+            seq_offsets_index = 0
+            for seq_index in range(len(filedata) - self.seq_size):
+                if filedata[seq_index] == -1:
+                    continue  # 跳过以间隔为开头的序列
+
+                if index >= offsets[seq_offsets_index]:
+                    index -= offsets[seq_offsets_index]  # 不在当前序列范围，调整剩余索引
                 else:
-                    # 分解索引为时间偏移和音符偏移分量
-                    time_offset, note_offset = divmod(index, note_offsets)
-                    found = seq_index
+                    note_offset = index
+                    found = True
                     break
 
-            if found is not None:
+                seq_offsets_index += 1
+            if found:
                 # 提取原始序列数据
-                seq_notes, seq_times = zip(*midi_notes_data[found:found + self.seq_size])
+                seq = filedata[seq_index:seq_index + self.seq_size]
+                break
+        if not found:
+            raise Exception(f"404 Not Found: {index}")
 
-                # 音符平移增强
-                min_note = min(seq_notes)
-                seq_notes = [note - min_note for note in seq_notes]
+        # 音符下移至最低
+        min_note = min(note for note in seq if note != -1)
+        seq = [note if (note == -1) else (note - min_note) for note in seq]
 
-                # 音高越界处理 (确保在范围内)
-                seq_notes = [note - math.ceil((note + 1 - MAX_NOTE) / 12) * 12 if note > MAX_NOTE else note for note in seq_notes]
+        # 音高越界处理 (确保在范围内)
+        seq = [note - math.ceil((note + 1 - MAX_NOTE) / 12) * 12 if note > MAX_NOTE else note for note in seq]
 
-                # 应用音符偏移 (数据增强)
-                seq_notes = [note + note_offset for note in seq_notes]
+        # 应用音符偏移 (数据增强)
+        seq = [note if (note == -1) else (note + note_offset) for note in seq]
 
-                # 假装这是音乐的开始
-                seq_times = list(seq_times)
-                seq_times[0] = 0
+        # 将 -1 替换为模型输入
+        seq = [MAX_NOTE if interval == -1 else interval for interval in seq]
 
-                # 时间缩放增强
-                time_gcd = math.gcd(*seq_times)
-                seq_times = [time // time_gcd * (time_offset + 1) for time in seq_times]
-
-                # 将音符和时间编码为单一整数, 公式: note * 时间类别数 + time
-                seq = [note * NOTE_DURATION_COUNT + time for note, time in zip(seq_notes, seq_times)]
-
-                # 返回输入和目标序列
-                return torch.tensor(seq[:-1], dtype=torch.long), torch.tensor(seq[1:], dtype=torch.long)
+        # 返回输入和目标序列
+        return torch.tensor(seq[:-1], dtype=torch.long), torch.tensor(seq[1:], dtype=torch.long)
 
 
 class SplitDataset(Dataset):
@@ -454,10 +466,10 @@ def main():
         "pretrained_ckpt": "/kaggle/input/tkaimidi/pytorch/default/1/ckpt",  # 预训练模型的检查点路径，可以为空
         "local_ckpt": "ckpt",  # 在本地保存的检查点的路径，训练结束后会保存到这里
         "external_datasets_path": ["/kaggle/input/music-midi"],  # 外部数据集的路径列表
-        "lr": 0.00019952623149688647,  # 学习率
+        "lr": 1e-4,  # 学习率
         "weight_decay": 1e-5,  # 权重衰减系数
         "seq_size": 512,  # 输入序列的大小 - 1
-        "val_steps": 24,  # 进行多少次验证步骤（因为 Dataset 进行了数据增强，一个 Epoch 训练数据变得很多，Kaggle GPU 12个小时跑不完，所以用验证步骤代替）
+        "val_steps": 12,  # 进行多少次验证步骤（因为 Dataset 进行了数据增强，一个 Epoch 训练数据变得很多，Kaggle GPU 12个小时跑不完，所以用验证步骤代替）
         "train_batch_size": 4,  # 训练时的批量大小
         "val_batch_size": 4,  # 验证时的批量大小，越大验证结果越准确，但是资源使用倍数增加，验证时间也增加（但没有资源使用增加得多）
         "train_length": 0.8,  # 训练集占数据集的比例，用来保证用来验证的数据不被训练
