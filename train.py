@@ -180,7 +180,7 @@ class MidiDataset(Dataset):
         seq = [note if (note == -1) else (note + note_offset) for note in seq]
 
         # 将 -1 替换为模型输入
-        seq = [MAX_NOTE if interval == -1 else interval for interval in seq]
+        seq = [MAX_NOTE + 1 if interval == -1 else interval for interval in seq]
 
         # 返回输入和目标序列
         return torch.tensor(seq[:-1], dtype=torch.long), torch.tensor(seq[1:], dtype=torch.long)

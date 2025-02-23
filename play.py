@@ -12,7 +12,6 @@ def parse_args():
 
 
 def main(args: argparse.Namespace):
-    pygame.init()
     pygame.midi.init()
     player = pygame.midi.Output(0)
     playlist: list[pathlib.Path] = list(args.path.glob("**/*.mid")) if args.path.is_dir() else [args.path]
@@ -28,10 +27,10 @@ def main(args: argparse.Namespace):
                     note -= math.ceil((note + 1 - MAX_NOTE) / 12) * 12
                 notes[i] = (note, time)
 
-            track = model_output_to_track(notes)
+            track = model_output_to_track(notes_to_note_intervals(notes, MAX_NOTE + 1))
             file = mido.MidiFile(tracks=[track])
             for message in file.play():
-                if message.is_meta:
+                if not message.type.startswith("note_o"):
                     continue
                 player.write_short(message.bytes()[0], message.note, message.velocity)
             sleep(4)
@@ -44,7 +43,7 @@ if __name__ == "__main__":
     import math
     import pygame.midi
     from time import sleep
-    from utils import midi_to_notes, normalize_times
+    from utils import midi_to_notes, normalize_times, notes_to_note_intervals
     from model import TIME_PRECISION, MAX_NOTE
     from generate import model_output_to_track
 

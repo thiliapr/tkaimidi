@@ -42,8 +42,11 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int, int, int]]:
         # 更新绝对时间(将delta时间转换为标准时基)
         now += msg.time * 480 // midi_file.ticks_per_beat
 
-        # 处理音色变化事件(动态更新打击乐通道)
+        # 处理音色变化事件 (动态更新打击乐通道)
         if msg.type == "program_change":
+            if msg.channel == 9:
+                continue  # 不对通道10做任何操作
+
             # 音色96-103和>=112为打击乐类
             if (96 <= msg.program <= 103) or msg.program >= 112:
                 drum_channels.add(msg.channel)
@@ -180,10 +183,8 @@ def notes_to_note_intervals(notes: list[tuple[int, int]], interval: int) -> list
     note_intervals = []  # 初始化音符间隔列表
 
     for pitch, time in notes:
+        note_intervals.extend([interval] * time)  # 添加与上一个音符的时间差对应的停顿
         note_intervals.append(pitch)  # 添加当前音高
-
-        # 添加与上一个音符的时间差对应的停顿
-        note_intervals.extend([interval] * time)  # 添加时间差对应的停顿
 
     return note_intervals  # 返回最终的音符间隔列表
 
