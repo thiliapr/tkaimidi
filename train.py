@@ -64,7 +64,7 @@ class MidiDataset(Dataset):
 
     Args:
         path: MIDI文件存储路径（支持嵌套目录结构）
-        seq_size: 输入序列长度（单位: 音符事件数），实际生成的序列长度为 seq_size + 1
+        seq_size: 输入序列长度 + 1
     """
 
     def __init__(self, path: pathlib.Path, seq_size: int):
