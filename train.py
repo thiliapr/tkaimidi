@@ -5,10 +5,10 @@ MIDI 音乐生成模型训练模块
 本模块提供完整的MIDI音乐生成模型训练流程，包含数据集处理、模型训练、验证评估及可视化功能
 
 特性:
-- 高效内存管理：支持TB级MIDI数据处理
-- 容错机制：自动回退异常训练状态
-- 可重复性：通过生成器状态保存实现实验复现
-- 多精度训练：自动混合精度支持(需硬件支持)
+- 高效内存管理: 支持TB级MIDI数据处理
+- 容错机制: 自动回退异常训练状态
+- 可重复性: 通过生成器状态保存实现实验复现
+- Flooding Loss: 训练损失低于某值时执行梯度上升，有利于提高泛化性能。论文见: https://arxiv.org/abs/2002.08709
 
 使用示例:
 >>> from train import main
@@ -30,14 +30,12 @@ import tempfile
 import mido
 import tqdm
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from torch.nn import DataParallel
 from functools import partial
-from typing import Callable
 
 import warnings
 import os
@@ -55,39 +53,6 @@ if "get_ipython" not in globals():
     from utils import midi_to_notes, normalize_times, empty_cache
 
 
-class ReverseGradientBelowThreshold(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, threshold):
-        ctx.save_for_backward(input)
-        ctx.threshold = torch.tensor(threshold, dtype=input.dtype, device=input.device)
-        return input
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        input, = ctx.saved_tensors
-        threshold = ctx.threshold
-        mask = (input <= threshold).float()
-        grad_input = grad_output * (1.0 - 2.0 * mask)
-        return grad_input, None
-
-
-class FloodLoss(nn.Module):
-    """
-    FloodLoss 是一个自定义的损失函数，用于根据损失值与给定阈值 threshold 的比较来调整梯度方向。
-    该损失函数的设计目的是在损失值大于 threshold 时进行梯度下降，而在损失值小于等于 threshold 时进行梯度上升。
-    """
-
-    def __init__(self, critetion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor], threshold: float):
-        super().__init__()
-        self.critetion = critetion
-        self.threshold = threshold
-
-    def forward(self, outputs, labels):
-        original_loss = self.critetion(outputs, labels)
-        adjusted_loss = ReverseGradientBelowThreshold.apply(original_loss, self.threshold)
-        return adjusted_loss
-
-
 class MidiDataset(Dataset):
     """
     MIDI 数据集类，用于加载和处理MIDI文件生成训练序列
@@ -99,7 +64,7 @@ class MidiDataset(Dataset):
 
     Args:
         path: MIDI文件存储路径（支持嵌套目录结构）
-        seq_size: 输入序列长度（单位：音符事件数），实际生成的序列长度为 seq_size + 1
+        seq_size: 输入序列长度（单位: 音符事件数），实际生成的序列长度为 seq_size + 1
     """
 
     def __init__(self, path: pathlib.Path, seq_size: int):
@@ -254,7 +219,22 @@ def split_dataset(dataset: Dataset, train_length: float, train_start: int):
     return SplitDataset(dataset, train_start, train_length), SplitDataset(dataset, val_start, val_length)  # 创建并返回训练集和验证集
 
 
-def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batch_size: int, val_batch_size: int, train_length: float = 0.8, val_steps: int = 256, val_per_step: int = 4096, steps_to_val: int = 256, train_start: int = 0, generator_state: torch.tensor = ..., last_batch: int = 0, device: torch.device = torch.device("cpu")) -> tuple[list[float], list[float], list[float], list[float], int, torch.tensor]:
+def train(
+    model: MidiNet,
+    dataset: MidiDataset,
+    optimizer: optim.SGD,
+    train_batch_size: int,
+    val_batch_size: int,
+    train_length: float = 0.8,
+    val_steps: int = 256,
+    val_per_step: int = 4096,
+    steps_to_val: int = 256,
+    flooding_level: float = 0,
+    train_start: int = 0,
+    generator_state: torch.tensor = ...,
+    last_batch: int = 0,
+    device: torch.device = torch.device("cpu")
+) -> tuple[list[float], list[float], list[float], list[float], int, torch.tensor]:
     """
     训练模型并记录训练和验证的损失。
 
@@ -268,6 +248,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
         val_steps: 进行多少次验证，决定了训练过程中训练的步数 (train_steps = val_steps * val_per_step)
         val_per_step: 每多少个训练步骤后进行一次验证，决定了训练过程中验证的频率
         steps_to_val: 每次验证时验证多少个批次，决定了验证时使用的数据量
+        flooding_level: 允许训练最低的损失值。训练损失低于该值则执行梯度上升，否则执行梯度下降
         train_start: 拆分数据集时训练集的开始索引
         generator_state: 训练数据的索引随机采样器的生成器的状态
         last_batch: 上次训练时的未训练完成的epoch训练了多少个batch
@@ -297,9 +278,6 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
     # 检查是否使用多GPU
     if torch.cuda.device_count() > 1:
         model = DataParallel(model)  # 使用 DataParallel 进行多GPU训练
-
-    # 初始化损失函数
-    critetion = FloodLoss(F.cross_entropy, 3)
 
     # 初始化记录
     train_loss = []
@@ -336,7 +314,8 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
             inputs, labels = inputs.to(device), labels.to(device).view(-1)
             optimizer.zero_grad()  # 清空优化器中的梯度
             outputs = model(inputs).view(-1, VOCAB_SIZE)  # 前向传播
-            loss = critetion(outputs, labels)  # 计算交叉熵损失
+            loss = F.cross_entropy(outputs, labels)  # 计算交叉熵损失
+            flood = (loss - flooding_level).abs() + flooding_level  # 梯度下降或上升
 
             # 检查损失是否为 NaN
             if torch.isnan(loss):
@@ -350,7 +329,7 @@ def train(model: MidiNet, dataset: MidiDataset, optimizer: optim.SGD, train_batc
                 step -= unsaved_steps  # 调整步骤计数
                 continue
 
-            loss.backward()  # 反向传播
+            flood.backward()  # 反向传播
             optimizer.step()  # 更新模型参数
 
             epoch_train_loss.append(loss.item())  # 累积训练损失
