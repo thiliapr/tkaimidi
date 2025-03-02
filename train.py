@@ -234,7 +234,7 @@ def split_dataset(dataset: Dataset, train_length: float, train_start: int):
 def train(
     model: MidiNet,
     dataset: MidiDataset,
-    optimizer: optim.SGD,
+    optimizer: optim.Adam,
     train_batch_size: int,
     val_batch_size: int,
     train_length: float = 0.8,
@@ -503,7 +503,7 @@ def main():
     model = MidiNet()
 
     # 创建优化器
-    create_optimizer = partial(optim.SGD, model.parameters(), lr=config["lr"], momentum=0.9, weight_decay=config["weight_decay"])
+    create_optimizer = partial(optim.Adam, model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"])
 
     # 尝试加载检查点
     try:
