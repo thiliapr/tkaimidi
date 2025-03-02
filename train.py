@@ -85,48 +85,46 @@ class MidiDataset(Dataset):
             # 解析 MIDI 文件，提取音符信息
             parsed_data = [(note, start_at) for _, note, start_at, _ in midi_to_notes(mido.MidiFile(filepath, clip=True))]
 
-            # 使用两种时间归一化模式 (严格/宽松) 增加数据多样性
-            for param_strict in [False, True]:
-                # 规范化时间
-                data = normalize_times(parsed_data, TIME_PRECISION, strict=param_strict)
+            # 规范化时间
+            data = normalize_times(parsed_data, TIME_PRECISION, strict=True)
 
-                # 转换格式
-                data = notes_to_note_intervals(data, -1)
+            # 转换格式
+            data = notes_to_note_intervals(data, -1)
 
-                # 通过循环填充达到最小长度要求
-                if len(data) < seq_size:
-                    data += [-1] * interval_repeat
-                    data *= seq_size // len(data) + 1  # 重复数据，确保序列长度足够
-                    data = data[:-interval_repeat]
+            # 通过循环填充达到最小长度要求
+            if len(data) < seq_size:
+                data += [-1] * interval_repeat
+                data *= seq_size // len(data) + 1  # 重复数据，确保序列长度足够
+                data = data[:-interval_repeat]
 
-                # 计算每个子序列的数据增强潜力
-                offsets: list[int] = []
-                for i in range(len(data) - seq_size):
-                    # 提取当前窗口的序列数据
-                    seq = data[i:i + seq_size]
-                    if seq[0] == -1:
-                        continue  # 跳过以间隔为开头的序列
+            # 计算每个子序列的数据增强潜力
+            offsets: list[int] = []
+            for i in range(len(data) - seq_size):
+                # 提取当前窗口的序列数据
+                seq = data[i:i + seq_size]
+                if seq[0] == -1:
+                    continue  # 跳过以间隔为开头的序列
 
-                    # 提取序列的音高
-                    pitches = [pitch for pitch in seq if pitch != -1]
+                # 提取序列的音高
+                pitches = [pitch for pitch in seq if pitch != -1]
 
-                    # 平移至最小音符为0 (保留相对音高关系)
-                    min_pitch = min(pitches)
-                    pitches = [pitch - min_pitch for pitch in pitches]
+                # 平移至最小音符为0 (保留相对音高关系)
+                min_pitch = min(pitches)
+                pitches = [pitch - min_pitch for pitch in pitches]
 
-                    # 通过八度移调保持在 [0, MAX_NOTE] 范围内
-                    pitches = [
-                        (pitch - math.ceil((pitch + 1 - MAX_NOTE) / 12) * 12) if (pitch > MAX_NOTE) else pitch
-                        for pitch in pitches
-                    ]
+                # 通过八度移调保持在 [0, MAX_NOTE] 范围内
+                pitches = [
+                    (pitch - math.ceil((pitch + 1 - MAX_NOTE) / 12) * 12) if (pitch > MAX_NOTE) else pitch
+                    for pitch in pitches
+                ]
 
-                    # 计算可平移的音符偏移量 (数据增强潜力)
-                    note_offsets = MAX_NOTE - max(pitches) + 1  # 剩余可上移空间 (包括原来的空间, 所以加1)
+                # 计算可平移的音符偏移量 (数据增强潜力)
+                note_offsets = MAX_NOTE - max(pitches) + 1  # 剩余可上移空间 (包括原来的空间, 所以加1)
 
-                    offsets.append(note_offsets)
-                    self.length += note_offsets  # 累加增强后的样本数
+                offsets.append(note_offsets)
+                self.length += note_offsets  # 累加增强后的样本数
 
-                # 存储处理后的数据, 每个文件保存两种时间归一化版本
+                # 存储处理后的数据
                 self.data.append((offsets, data))
 
             if show_progress:
