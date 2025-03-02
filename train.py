@@ -181,7 +181,7 @@ class MidiDataset(Dataset):
         seq = [MAX_NOTE + 1 if interval == -1 else interval for interval in seq]
 
         # 返回输入和目标序列
-        return torch.tensor(seq[:-1], dtype=torch.long), torch.tensor(seq[1:], dtype=torch.long)
+        return seq[:-1], seq[1:]
 
 
 class SplitDataset(Dataset):
