@@ -99,11 +99,17 @@ class MidiDataset(Dataset):
 
             # 计算每个子序列的数据增强潜力
             offsets: list[int] = []
+            after_interval = True
             for i in range(len(data) - seq_size):
+                if data[i] == -1:
+                    after_interval = True
+                    continue  # 跳过以间隔为开头的序列
+                if not after_interval:
+                    continue  # 跳过以同一时间的音符为开头的序列
+                after_interval = False
+
                 # 提取当前窗口的序列数据
                 seq = data[i:i + seq_size]
-                if seq[0] == -1:
-                    continue  # 跳过以间隔为开头的序列
 
                 # 提取序列的音高
                 pitches = [pitch for pitch in seq if pitch != -1]
@@ -148,9 +154,14 @@ class MidiDataset(Dataset):
             found = False
             # 通过递减法找到目标所在的序列
             seq_offsets_index = 0
+            after_interval = True
             for seq_index in range(len(filedata) - self.seq_size):
                 if filedata[seq_index] == -1:
-                    continue  # 跳过以间隔为开头的序列
+                    after_interval = True
+                    continue
+                if not after_interval:
+                    continue
+                after_interval = False
 
                 if index >= offsets[seq_offsets_index]:
                     index -= offsets[seq_offsets_index]  # 不在当前序列范围，调整剩余索引
@@ -325,7 +336,6 @@ def train(
             optimizer.zero_grad()  # 清空优化器中的梯度
             outputs = model(inputs).view(-1, VOCAB_SIZE)  # 前向传播
             loss = F.cross_entropy(outputs, labels)  # 计算交叉熵损失
-            flood = (loss - flooding_level).abs() + flooding_level  # 梯度下降或上升
 
             # 检查损失是否为 NaN
             if torch.isnan(loss):
@@ -339,6 +349,7 @@ def train(
                 step -= unsaved_steps  # 调整步骤计数
                 continue
 
+            flood = (loss - flooding_level).abs() + flooding_level  # 梯度下降或上升
             flood.backward()  # 反向传播
             optimizer.step()  # 更新模型参数
 
