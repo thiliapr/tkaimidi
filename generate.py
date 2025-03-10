@@ -88,7 +88,6 @@ def generate_midi(
     """
     # 将音符和时间转换为电子乐谱
     sheet = notes_to_sheet(prompt)
-    offset = next(filter(lambda x: x[0] == "note", sheet))[0] - prompt[0][0]  # 计算音符偏移量
 
     # 将音符和时间编码为模型输入序列
     input_prompt = sheet_to_model(sheet)
@@ -114,8 +113,10 @@ def generate_midi(
     # 模型输出转换为音符时间
     output_notes = sheet_to_notes(model_to_sheet(input_prompt))
 
-    # 还原音高偏移
-    output_notes = [(pitch - offset, interval) for pitch, interval in output_notes]
+    # 调整到音高平均值到中间
+    pitches = list(zip(*output_notes))[0]
+    offset = 64 - int(sum(pitches) / len(pitches))
+    output_notes = [(pitch + offset, interval) for pitch, interval in output_notes]
 
     return notes_to_track(output_notes)  # 转化为 MIDI 轨道
 
@@ -131,7 +132,7 @@ def main():
         prompt=LOVE_TRADING_MIDI,
         model=model,
         seed=42,
-        length=256)
+        length=16)
     ]).save("example.mid")
 
 
