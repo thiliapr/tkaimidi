@@ -85,7 +85,7 @@ class MidiNet(nn.Module):
 
         self.embedding = nn.utils.skip_init(nn.Embedding, VOCAB_SIZE, self.d_model, device=device)  # 嵌入层
         self.pos_encoder = PositionalEncoding(self.d_model, 0.1, device=device)
-        self.blocks = nn.ModuleList(nn.TransformerEncoderLayer(self.d_model, 8, 1024, 0.1, batch_first=True, device=device) for _ in range(6))  # Transformer 编码器层堆叠
+        self.blocks = nn.ModuleList(nn.TransformerEncoderLayer(self.d_model, 12, 768, 0.1, batch_first=True, device=device) for _ in range(12))  # Transformer 编码器层堆叠
         self.fc_out = nn.utils.skip_init(nn.Linear, self.d_model, VOCAB_SIZE, device=device)  # 将嵌入映射到词汇大小
 
         self.register_buffer("last_mask", torch.tensor([], device=device), persistent=False)  # CasualMask 初始化
