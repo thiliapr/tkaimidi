@@ -9,6 +9,8 @@
 import math
 import mido
 
+NATURAL_SCALE = {0, 2, 4, 5, 7, 9, 11}
+
 
 def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int, int, int]]:
     """
@@ -75,7 +77,7 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int, int, int]]:
 
 def normalize_times(
     data: list[tuple[int, int]],
-    time_precision: int,
+    interval_precision: int,
     strict: bool = True
 ) -> list[tuple[int, int]]:
     """
@@ -83,7 +85,7 @@ def normalize_times(
 
     Args:
         data: 原始数据列表，元素为 (音高, 绝对时间)
-        time_precision: 时间量化精度 (单位ticks)
+        interval_precision: 时间间隔量化精度 (单位ticks)
         strict: 是否严格保持节奏特征
 
     Returns:
@@ -99,9 +101,9 @@ def normalize_times(
     pitches, abs_times = zip(*data)
 
     # 转换为相对时间(时间间隔序列)
-    rel_times = [abs_times[0]] + [abs_times[i] - abs_times[i - 1] for i in range(1, len(abs_times))]
+    rel_intervals = [abs_times[0]] + [abs_times[i] - abs_times[i - 1] for i in range(1, len(abs_times))]
 
-    def calculate_time_loss(time_seq: list[float]) -> float:
+    def calculate_interval_loss(interval_seq: list[float]) -> float:
         """
         计算时间序列的损失值，用于评估缩放因子质量。
 
@@ -115,14 +117,14 @@ def normalize_times(
         zero_penalty = 0  # 零间隔计数
         max_gap_penalty = 0.0  # 大间隔惩罚
 
-        mean = sum(time_seq) / len(time_seq)
+        mean = sum(interval_seq) / len(interval_seq)
 
-        for t in time_seq:
-            quant_error += 1 / (1 + math.exp(-abs(t / time_precision - round(t / time_precision))))  # 量化误差 (sigmoid加权)
+        for t in interval_seq:
+            quant_error += 1 / (1 + math.exp(-abs(t / interval_precision - round(t / interval_precision))))  # 量化误差 (sigmoid加权)
             variance += (t - mean) ** 2  # 统计方差
-            zero_penalty += int(t < time_precision / 2)  # 零间隔计数
+            zero_penalty += int(t < interval_precision / 2)  # 零间隔计数
 
-        return quant_error * 0.5 + math.sqrt(variance / len(time_seq)) * 1.2 + max_gap_penalty + zero_penalty
+        return quant_error * 0.5 + math.sqrt(variance / len(interval_seq)) * 1.2 + max_gap_penalty + zero_penalty
 
     # 寻找最佳时间缩放因子
     best_scale, min_loss = 1, math.inf
@@ -130,8 +132,8 @@ def normalize_times(
     failed_counter = 0
     while True:
         scale = (i := i + 1) / 10
-        tmp_times = [time * scale for time in rel_times]
-        cur_loss = calculate_time_loss(tmp_times)
+        tmp_intervals = [interval * scale for interval in rel_intervals]
+        cur_loss = calculate_interval_loss(tmp_intervals)
         if cur_loss < min_loss:
             best_scale = scale
             min_loss = cur_loss
@@ -142,51 +144,254 @@ def normalize_times(
             break  # 超过失败次数，退出循环
 
     # 应用最佳缩放并量化
-    processed_times = [round(t * best_scale / time_precision) * time_precision for t in rel_times]
+    processed_intervals = [round(t * best_scale / interval_precision) * interval_precision for t in rel_intervals]
 
     # 计算最大公约数来压缩时间轴
-    time_gcd = math.gcd(*processed_times) if len(processed_times) > 0 else 1
-    compressed_times = [t // time_gcd for t in processed_times]
+    interval_gcd = math.gcd(*processed_intervals) if len(processed_intervals) > 0 else 1
+    compressed_intervals = [t // interval_gcd for t in processed_intervals]
 
     # 插入间隔音符并清理重复
     result = []
     prev_pitch = None
-    for pitch, time in zip(pitches, compressed_times):
+    for pitch, interval in zip(pitches, compressed_intervals):
         # 跳过重复零间隔音符
-        if time == 0 and pitch == prev_pitch:
+        if interval == 0 and pitch == prev_pitch:
             continue
 
-        result.append((pitch, time))
+        result.append((pitch, interval))
         prev_pitch = pitch
 
     return result
 
 
-def notes_to_note_intervals(notes: list[tuple[int, int]], interval: int) -> list[int]:
+def notes_to_sheet(notes: list[tuple[int, int]], check_notes: int = 64) -> list[tuple[str, int]]:
     """
-    将MIDI音符列表转化为音符间隔格式。
-
-    MIDI音符格式: [(音高, 与上一个音符的时间差), ...]
-    音符间隔格式: [音高, 1个时间单位的停顿 (用`最大音高 + 1`表示), 音高, 音高, ...]
-
-    举个例子 (假设最大音高是23):
-    输入: `[(1, 0), (2, 3), (4, 0), (9, 0), (12, 2)]`
-    输出: `[1, 24, 24, 24, 2, 4, 9, 24, 24, 12]`
+    将MIDI音符列表转换为电子乐谱，通过调整音高使其尽可能符合自然音阶并集中在一个八度范围内。
 
     Args:
-        notes: 原MIDI音符列表，包含音高和与上一个音符的时间差
-        interval: 表示停顿的值
+        notes: MIDI音符列表，每个元组格式为(音高, 时间间隔)
+        check_notes: 调整音高时检查后续音符的数量。
 
     Returns:
-        音符间隔格式的列表
+        电子乐谱事件列表，包含以下事件类型:
+            - note: 音符 (0-11表示音阶中的音高)
+            - key_shift: 全局音高偏移的半音数
+            - octave_jump: 一个音符跳跃的八度数
+            - interval: 两个音符的时间间隔
     """
-    note_intervals = []  # 初始化音符间隔列表
+    # 分离音高和时间间隔
+    pitches, intervals = (list(item) for item in zip(*notes))
 
-    for pitch, time in notes:
-        note_intervals.extend([interval] * time)  # 添加与上一个音符的时间差对应的停顿
-        note_intervals.append(pitch)  # 添加当前音高
+    # 将音高调整为相对最小音高的偏移
+    min_pitch = min(pitches)
+    pitches = [pitch - min_pitch for pitch in pitches]
 
-    return note_intervals  # 返回最终的音符间隔列表
+    # 调整音高使其尽量落在自然音阶
+    offset, _ = max(
+        [(offset, sum(((pitch + offset) % 12) in NATURAL_SCALE for pitch in pitches[:check_notes])) for offset in range(12)],
+        key=lambda x: x[1]
+    )
+    pitches = [pitch + offset for pitch in pitches]
+
+    # 调整音高使其尽量集中在一个八度范围内
+    octave_offset, _ = max(
+        [(octave_offset, sum(0 <= (pitch + octave_offset * 12) < 12 for pitch in pitches[:check_notes])) for octave_offset in range(-2, 2)],
+        key=lambda x: x[1]
+    )
+    pitches = [pitch + octave_offset * 12 for pitch in pitches]
+
+    # 开始转化
+    sheet: list[tuple[str, int]] = []
+    for i in range(len(pitches)):
+        original_pitch = pitches[i]
+        offset_sum = 0
+
+        # 如果当前音高不在自然音阶内，调整音高
+        if (original_pitch % 12) not in NATURAL_SCALE:
+            offset, _ = max(
+                [(offset, sum(((pitch + offset) % 12) in NATURAL_SCALE for pitch in pitches[i:i + check_notes]) * check_notes + int(offset == 0)) for offset in range(12)],
+                key=lambda x: x[1]
+            )
+            offset_sum += offset
+            pitches = [pitch + offset for pitch in pitches]
+
+        # 如果当前音高不在一个八度范围内，调整音高
+        if original_pitch < 0 or original_pitch > 11:
+            octave_offset, _ = max(
+                [(octave_offset, sum(0 <= (pitch + octave_offset * 12) < 12 for pitch in pitches[i:i + check_notes]) * check_notes + int(octave_offset == 0)) for octave_offset in range(-2, 2)],
+                key=lambda x: x[1]
+            )
+            offset_sum += octave_offset * 12
+            pitches = [pitch + octave_offset * 12 for pitch in pitches]
+
+        # 如果有音高偏移，在乐谱中做标记
+        if offset_sum:
+            sheet.append(("key_shift", offset_sum))
+
+        # 将当前音高调整到0-11范围内，并记录八度跳跃
+        cur_pitch = pitches[i]
+        if cur_pitch < 0 or cur_pitch > 11:
+            sheet.append(("octave_jump", cur_pitch // 12))
+            cur_pitch %= 12
+
+        # 记录音符和时间间隔
+        sheet.append(("interval", intervals[i]))
+        sheet.append(("note", cur_pitch))
+
+    # 返回结果
+    return sheet
+
+
+def sheet_to_notes(sheet: list[tuple[str, int]]) -> list[tuple[int, int]]:
+    """
+    将电子乐谱转换为MIDI音符列表。
+
+    Args:
+        sheet: 由`notes_to_sheet(notes)`生成的电子乐谱
+
+    Returns:
+        MIDI音符列表，每个元组格式为(音高, 时间间隔)
+    """
+    notes = []
+    global_offset = 0  # 全局音高偏移
+    octave_offset = 0  # 八度偏移
+    interval_sum = 0  # 累计时间间隔
+
+    for event, value in sheet:
+        if event == "key_shift":
+            global_offset += value  # 更新全局音高偏移
+        elif event == "octave_jump":
+            octave_offset += value  # 更新八度偏移
+        elif event == "note":
+            # 计算最终音高并添加到音符列表
+            final_pitch = value - global_offset + octave_offset * 12
+            notes.append([final_pitch, interval_sum])
+            octave_offset = interval_sum = 0  # 重置八度偏移和累计时间间隔
+        elif event == "interval":
+            interval_sum += value
+        else:
+            raise ValueError(f"Unknown event type: {event}")
+
+    # 调整音高，使其最小音高为0
+    min_pitch = min(pitch for pitch, _ in notes)
+    notes = [(pitch - min_pitch, interval) for pitch, interval in notes]
+
+    return notes
+
+
+def sheet_to_model(sheet: list[tuple[str, int]]) -> list[int]:
+    """
+    将电子乐谱转换为模型的输入/输出格式。
+
+    Args:
+        sheet: 由`notes_to_sheet(notes)`生成的电子乐谱
+
+    Returns:
+        模型数据:
+            - 0-11: 音符 (0-11表示音阶中的音高)
+            - 12-23: 全局音高向下偏移的半音数。如果乐谱中小于-12，被转换成多个向下跳跃。
+            - 24-35: 全局音高向上偏移的半音数。如果乐谱中大于12，被转换成多个向下跳跃。
+            - 36-37: 一个音符向下跳跃的八度数。如果乐谱中小于-2，被转换成多个向下跳跃。
+            - 38-39: 一个音符向上跳跃的八度数。如果乐谱中大于2，被转换成多个向上跳跃。
+            - 40: 时间间隔单位。乐谱中的时间间隔(值大于1)，被转换成多个时间间隔单位。
+    """
+    model_data = []
+
+    for event, value in sheet:
+        if event == "key_shift":
+            # 处理全局音高偏移
+            if value < 0:
+                # 向下偏移
+                while value < -12:
+                    model_data.append(23)
+                    value += 12
+                if value:
+                    model_data.append(11 - value)  # 12-23表示全局音高向下偏移1-12个半音
+            else:
+                # 向上偏移
+                while value > 12:
+                    model_data.append(35)
+                    value -= 12
+                if value:
+                    model_data.append(23 + value)  # 24-35表示全局音高向上偏移1-12个半音
+        elif event == "octave_jump":
+            # 处理八度跳跃
+            if value < 0:
+                # 向下跳跃
+                while value < -2:
+                    model_data.append(37)
+                    value += 2
+                if value:
+                    model_data.append(35 - value)  # 36-37表示一个音符向下跳跃1-2个八度
+            else:
+                # 向上跳跃
+                while value > 2:
+                    model_data.append(39)
+                    value -= 2
+                if value:
+                    model_data.append(37 + value)  # 38-39表示一个音符向上跳跃1-2个八度
+        elif event == "note":
+            # 处理音符
+            model_data.append(value)  # 0-11表示音阶中的音高
+        elif event == "interval":
+            # 处理时间间隔
+            for _ in range(value):
+                model_data.append(40)  # 40表示时间间隔单位
+        else:
+            raise ValueError(f"Unknown event type: {event}")
+
+    return model_data
+
+
+def model_to_sheet(model_data: list[int]) -> list[tuple[str, int]]:
+    """
+    将模型的输入/输出格式转换回电子乐谱。
+
+    Args:
+        model_data: 由`sheet_to_model(sheet)`生成的模型数据
+
+    Returns:
+        电子乐谱
+    """
+    sheet = []
+    i = 0
+    n = len(model_data)
+
+    while i < n:
+        value = model_data[i]
+
+        if 0 <= value <= 11:
+            # 处理音符
+            sheet.append(("note", value))
+        elif 12 <= value <= 23:
+            # 处理全局音高向下偏移
+            offset = 11 - value
+            sheet.append(("key_shift", offset))
+        elif 24 <= value <= 35:
+            # 处理全局音高向上偏移
+            offset = value - 23
+            sheet.append(("key_shift", offset))
+        elif 36 <= value <= 37:
+            # 处理一个音符向下跳跃的八度数
+            octave_jump = 35 - value
+            sheet.append(("octave_jump", octave_jump))
+        elif 38 <= value <= 39:
+            # 处理一个音符向上跳跃的八度数
+            octave_jump = value - 37
+            sheet.append(("octave_jump", octave_jump))
+        elif value == 40:
+            # 处理时间间隔单位
+            interval_count = 1
+            while i + 1 < n and model_data[i + 1] == 40:
+                interval_count += 1
+                i += 1
+            sheet.append(("interval", interval_count))
+        else:
+            raise ValueError(f"Unknown model data value: {value}")
+
+        i += 1
+
+    return sheet
 
 
 def empty_cache():

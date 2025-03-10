@@ -25,8 +25,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 TIME_PRECISION = 120  # 时间精度，表示每个音符的最小时间单位
-MAX_NOTE = 72  # 允许的最高音高与最低音高的差。在原始 MIDI 格式中，这个值为127，但大部分文件最高音高与最低音高的差不会达到这么高，所以这里不使用127
-VOCAB_SIZE = MAX_NOTE + 2
+VOCAB_SIZE = 12 + 12 + 12 + 2 + 2 + 1
 DEFAULT_LENGTH = 4096
 
 

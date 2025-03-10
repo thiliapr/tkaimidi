@@ -49,8 +49,8 @@ torch.set_num_threads(cpu_count())
 
 # 在非Jupyter环境下导入模型和工具库
 if "get_ipython" not in globals():
-    from model import MidiNet, TIME_PRECISION, MAX_NOTE, VOCAB_SIZE, load_checkpoint, save_checkpoint
-    from utils import midi_to_notes, normalize_times, notes_to_note_intervals, empty_cache
+    from model import MidiNet, TIME_PRECISION, VOCAB_SIZE, load_checkpoint, save_checkpoint
+    from utils import midi_to_notes, normalize_times, notes_to_sheet, sheet_to_model, empty_cache
 
 
 class MidiDataset(Dataset):
@@ -86,56 +86,44 @@ class MidiDataset(Dataset):
             parsed_data = [(note, start_at) for _, note, start_at, _ in midi_to_notes(mido.MidiFile(filepath, clip=True))]
 
             # 规范化时间
-            data = normalize_times(parsed_data, TIME_PRECISION, strict=True)
+            normalized_data = normalize_times(parsed_data, TIME_PRECISION, strict=True)
 
             # 转换格式
-            data = notes_to_note_intervals(data, -1)
+            data = sheet_to_model(notes_to_sheet(normalized_data, 128))
 
             # 通过循环填充达到最小长度要求
             if len(data) < seq_size:
-                data += [-1] * interval_repeat
-                data *= seq_size // len(data) + 1  # 重复数据，确保序列长度足够
-                data = data[:-interval_repeat]
+                normalized_data[0] = (normalized_data[0][0], interval_repeat)
+                normalized_data *= seq_size // len(data) + 1  # 重复数据，确保序列长度足够
+                normalized_data[0] = (normalized_data[0][0], 0)
+                data = sheet_to_model(notes_to_sheet(normalized_data, 128))
 
-            # 计算每个子序列的数据增强潜力
-            offsets: list[int] = []
-            after_interval = True
+            # 探测每个子序列的位置
+            seq_indexes: list[int] = []
+            after_interval = True  # 指针在至少一个时间间隔之后
+            allow_note = True  # 是否允许音符
             for i in range(len(data) - seq_size):
-                if data[i] == -1:
+                cont = False
+                if 36 <= data[i] <= 39 and after_interval and allow_note:
+                    allow_note = False
+                    cont = True
+                elif data[i] == 40:
                     after_interval = True
-                    continue  # 跳过以间隔为开头的序列
-                if not after_interval:
-                    continue  # 跳过以同一时间的音符为开头的序列
-                after_interval = False
+                elif data[i] < 12:
+                    if after_interval and allow_note:
+                        cont = True
+                    allow_note = True
+                    after_interval = False
+                if not cont:
+                    continue
 
-                # 提取当前窗口的序列数据
-                seq = data[i:i + seq_size]
+                seq_indexes.append(i)
 
-                # 提取序列的音高
-                pitches = [pitch for pitch in seq if pitch != -1]
-
-                # 平移至最小音符为0 (保留相对音高关系)
-                min_pitch = min(pitches)
-                pitches = [pitch - min_pitch for pitch in pitches]
-
-                # 通过八度移调保持在 [0, MAX_NOTE] 范围内
-                pitches = [
-                    (pitch - math.ceil((pitch + 1 - MAX_NOTE) / 12) * 12) if (pitch > MAX_NOTE) else pitch
-                    for pitch in pitches
-                ]
-
-                # 计算可平移的音符偏移量 (数据增强潜力)
-                note_offsets = MAX_NOTE - max(pitches) + 1  # 剩余可上移空间 (包括原来的空间, 所以加1)
-
-                offsets.append(note_offsets)
-                self.length += note_offsets  # 累加增强后的样本数
-
-                # 存储处理后的数据
-                self.data.append((offsets, data))
+            self.length += len(seq_indexes)
+            self.data.append((data, seq_indexes))
 
             if show_progress:
                 progress_bar.update()
-
         if show_progress:
             progress_bar.close()
 
@@ -143,53 +131,12 @@ class MidiDataset(Dataset):
         return self.length
 
     def __getitem__(self, index: int):
-        """
-        索引访问实现逻辑:
-        1. 遍历所有文件数据
-        2. 在单个文件内遍历所有序列
-        3. 通过偏移量计算定位具体增强参数
-        4. 应用数据增强生成最终序列
-        """
-        for offsets, filedata in self.data:
-            found = False
-            # 通过递减法找到目标所在的序列
-            seq_offsets_index = 0
-            after_interval = True
-            for seq_index in range(len(filedata) - self.seq_size):
-                if filedata[seq_index] == -1:
-                    after_interval = True
-                    continue
-                if not after_interval:
-                    continue
-                after_interval = False
-
-                if index >= offsets[seq_offsets_index]:
-                    index -= offsets[seq_offsets_index]  # 不在当前序列范围，调整剩余索引
-                else:
-                    note_offset = index
-                    found = True
-                    break
-
-                seq_offsets_index += 1
-            if found:
-                # 提取原始序列数据
-                seq = filedata[seq_index:seq_index + self.seq_size]
-                break
-        if not found:
-            raise Exception(f"404 Not Found: {index}")
-
-        # 音符下移至最低
-        min_note = min(note for note in seq if note != -1)
-        seq = [note if (note == -1) else (note - min_note) for note in seq]
-
-        # 音高越界处理 (确保在范围内)
-        seq = [note - math.ceil((note + 1 - MAX_NOTE) / 12) * 12 if note > MAX_NOTE else note for note in seq]
-
-        # 应用音符偏移 (数据增强)
-        seq = [note if (note == -1) else (note + note_offset) for note in seq]
-
-        # 将 -1 替换为模型输入
-        seq = [MAX_NOTE + 1 if interval == -1 else interval for interval in seq]
+        for filedata, seq_indexes in self.data:
+            if index > len(seq_indexes):
+                index -= len(seq_indexes)
+                continue
+            seq_index = seq_indexes[index]
+            seq = filedata[seq_index:seq_index + self.seq_size]
 
         # 返回输入和目标序列
         return torch.tensor(seq[:-1]), torch.tensor(seq[1:])
@@ -477,7 +424,7 @@ def main():
         "external_datasets_path": ["/kaggle/input/music-midi"],  # 外部数据集的路径列表
         "lr": 1e-4,  # 学习率
         "weight_decay": 1e-5,  # 权重衰减系数
-        "seq_size": 512,  # 输入序列的大小 - 1
+        "seq_size": 1024,  # 输入序列的大小 - 1
         "val_steps": 12,  # 进行多少次验证步骤（因为 Dataset 进行了数据增强，一个 Epoch 训练数据变得很多，Kaggle GPU 12个小时跑不完，所以用验证步骤代替）
         "train_batch_size": 8,  # 训练时的批量大小
         "val_batch_size": 16,  # 验证时的批量大小，越大验证结果越准确，但是资源使用倍数增加，验证时间也增加（但没有资源使用增加得多）
