@@ -88,7 +88,7 @@ def generate_midi(
     """
     # 将音符和时间转换为电子乐谱
     sheet = notes_to_sheet(prompt)
-    offset = next(filter(lambda x: x[0] == "note"))[0] - prompt[0][0]  # 计算音符偏移量
+    offset = next(filter(lambda x: x[0] == "note", sheet))[0] - prompt[0][0]  # 计算音符偏移量
 
     # 将音符和时间编码为模型输入序列
     input_prompt = sheet_to_model(sheet)

@@ -50,16 +50,16 @@ class PositionalEncoding(nn.Module):
         >>> pos_encoder = PositionalEncoding(d_model)
     """
 
-    def __init__(self, d_model: int, dropout: float = 0.1, length=DEFAULT_LENGTH):
+    def __init__(self, d_model: int, dropout: float = 0.1, length=DEFAULT_LENGTH, device=torch.device("cpu")):
         super(PositionalEncoding, self).__init__()
         self.dropout = dropout
         self.d_model = d_model
         self.register_buffer("pe", self._generate_pe(length), persistent=False)
 
-    def _generate_pe(self, length: int):
+    def _generate_pe(self, length: int, device=torch.device("cpu")):
         pe = torch.zeros(length, self.d_model)
-        position = torch.arange(0, length, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * (-math.log(10000.0) / self.d_model))
+        position = torch.arange(0, length, dtype=torch.float, device=device).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.d_model, 2, device=device).float() * (-math.log(10000.0) / self.d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0)  # 保持为 (1, length, d_model)
@@ -79,16 +79,16 @@ class MidiNet(nn.Module):
     基于音符和时间信息，预测下一个音符的时间和音符编号的神经网络模型。
     """
 
-    def __init__(self):
+    def __init__(self, device=torch.device("cpu")):
         super().__init__()
         self.d_model = 512
 
-        self.embedding = nn.utils.skip_init(nn.Embedding, VOCAB_SIZE, self.d_model)  # 嵌入层
-        self.pos_encoder = PositionalEncoding(self.d_model, 0.1)
-        self.blocks = nn.ModuleList(nn.TransformerEncoderLayer(self.d_model, 8, 1024, 0.1, batch_first=True) for _ in range(6))  # Transformer 编码器层堆叠
-        self.fc_out = nn.utils.skip_init(nn.Linear, self.d_model, VOCAB_SIZE)  # 将嵌入映射到词汇大小
+        self.embedding = nn.utils.skip_init(nn.Embedding, VOCAB_SIZE, self.d_model, device=device)  # 嵌入层
+        self.pos_encoder = PositionalEncoding(self.d_model, 0.1, device=device)
+        self.blocks = nn.ModuleList(nn.TransformerEncoderLayer(self.d_model, 8, 1024, 0.1, batch_first=True, device=device) for _ in range(6))  # Transformer 编码器层堆叠
+        self.fc_out = nn.utils.skip_init(nn.Linear, self.d_model, VOCAB_SIZE, device=device)  # 将嵌入映射到词汇大小
 
-        self.register_buffer("last_mask", torch.tensor([]), persistent=False)  # CasualMask 初始化
+        self.register_buffer("last_mask", torch.tensor([], device=device), persistent=False)  # CasualMask 初始化
         self.init_weights()  # 初始化权重
 
     def init_weights(self):
@@ -139,13 +139,13 @@ def save_checkpoint(model: MidiNet, optimizer: optim.Adam, train_loss: list[floa
     with open(path / "train_info.json", "w") as f:
         json.dump(
             {
+                "dataset_length": dataset_length,
+                "train_start": train_start,
+                "last_batch": last_batch,
                 "train_loss": train_loss,
                 "val_loss": val_loss,
                 "train_accuracy": train_accuracy,
                 "val_accuracy": val_accuracy,
-                "dataset_length": dataset_length,
-                "train_start": train_start,
-                "last_batch": last_batch,
                 "generator_state": base64.b64encode(bytes(generator_state.tolist())).decode(),
             },
             f,

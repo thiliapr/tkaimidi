@@ -235,7 +235,8 @@ def notes_to_sheet(notes: list[tuple[int, int]], check_notes: int = 64) -> list[
             cur_pitch %= 12
 
         # 记录音符和时间间隔
-        sheet.append(("interval", intervals[i]))
+        if intervals[i]:
+            sheet.append(("interval", intervals[i]))
         sheet.append(("note", cur_pitch))
 
     # 返回结果
