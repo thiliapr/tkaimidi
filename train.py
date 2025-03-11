@@ -422,8 +422,8 @@ def main():
         "pretrained_ckpt": "/kaggle/input/tkaimidi/pytorch/default/1/ckpt",  # 预训练模型的检查点路径，可以为空
         "local_ckpt": "ckpt",  # 在本地保存的检查点的路径，训练结束后会保存到这里
         "external_datasets_path": ["/kaggle/input/music-midi"],  # 外部数据集的路径列表
-        "lr": 1e-4,  # 学习率
-        "weight_decay": 1e-5,  # 权重衰减系数
+        "lr": 1e-3,  # 学习率
+        "weight_decay": 1e-2,  # 权重衰减系数
         "seq_size": 1024,  # 输入序列的大小 - 1
         "val_steps": 12,  # 进行多少次验证步骤（因为 Dataset 进行了数据增强，一个 Epoch 训练数据变得很多，Kaggle GPU 12个小时跑不完，所以用验证步骤代替）
         "train_batch_size": 8,  # 训练时的批量大小
