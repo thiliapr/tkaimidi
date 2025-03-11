@@ -47,7 +47,7 @@ def notes_to_track(notes: list[int]) -> mido.MidiTrack:
     last_event_time = 0  # 上一个事件的绝对时间
 
     for event_type, note, event_time in events:
-        # 计算相对于上一个事件的时间差（delta time）
+        # 计算相对于上一个事件的时间差
         delta_ticks = event_time - last_event_time
 
         # 创建 MIDI 消息
