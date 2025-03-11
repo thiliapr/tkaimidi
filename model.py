@@ -99,7 +99,7 @@ class MidiNet(nn.Module):
     def forward(self, x, mask: bool = True):
         if mask:
             if x.size(1) != self.last_mask.size(0):
-                self.last_mask = torch.tril(torch.ones(x.size(1), x.size(1)), diagonal=1) == 0  # 生成CasualMask
+                self.last_mask = torch.triu(torch.ones(4, 4), diagonal=1).bool()  # 生成CasualMask
             self.last_mask = self.last_mask.to(x.device)
             casual_mask = self.last_mask
         else:
