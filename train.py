@@ -59,7 +59,6 @@ class MidiDataset(Dataset):
 
     特性:
     - 自动处理不同长度的MIDI文件
-    - 支持音符平移和时间缩放
     - 自动填充短序列，保证数据可用性
 
     Args:
