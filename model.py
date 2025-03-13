@@ -22,7 +22,6 @@ import pathlib
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 
 TIME_PRECISION = 120  # 时间精度，表示每个音符的最小时间单位
 VOCAB_SIZE = 12 + 12 + 12 + 2 + 2 + 1
@@ -52,8 +51,8 @@ class PositionalEncoding(nn.Module):
 
     def __init__(self, d_model: int, dropout: float = 0.1, length=DEFAULT_LENGTH, device=torch.device("cpu")):
         super(PositionalEncoding, self).__init__()
-        self.dropout = dropout
         self.d_model = d_model
+        self.dropout = nn.Dropout(dropout)
         self.register_buffer("pe", self._generate_pe(length), persistent=False)
 
     def _generate_pe(self, length: int, device=torch.device("cpu")):
@@ -71,7 +70,7 @@ class PositionalEncoding(nn.Module):
         if seq_len > self.pe.size(1):
             self.pe = self._generate_pe(seq_len)
         x = x + self.pe[:, :seq_len, :]  # 进行位置编码
-        return F.dropout(x, self.dropout)
+        return self.dropout(x)
 
 
 class MidiNet(nn.Module):
