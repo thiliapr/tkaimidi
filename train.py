@@ -463,12 +463,18 @@ def main():
     # 尝试加载检查点
     try:
         model_state, optimizer_state, old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(local_ckpt, train=True)
-        model.load_state_dict(model_state)  # 加载模型状态
+        if model_state:  # 如果模型状态不为空，则尝试加载模型状态
+            model.load_state_dict(model_state)
         model = model.to(device)  # 转移到指定设备
+
         optimizer = create_optimizer()  # 初始化优化器
-        optimizer.load_state_dict(optimizer_state)
+        if optimizer_state:  # 如果优化器状态不为空，则尝试加载模型状态
+            optimizer.load_state_dict(optimizer_state)
 
         # 检查数据集大小是否匹配
+        if dataset_length == -1:
+            dataset_length = "N/A"
+
         if dataset_length != len(dataset):
             print(f"数据集大小不匹配，可能是使用了与之前不同的数据集训练: {dataset_length} 与 {len(dataset)} 不匹配", file=sys.stderr)
             train_start = random.randint(0, len(dataset) - 1)  # 随机选择新的训练起点
