@@ -112,7 +112,7 @@ class MidiNet(nn.Module):
         return logits
 
 
-def save_checkpoint(model: MidiNet, optimizer: optim.Adam, train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], dataset_length: int, train_start: int, last_batch: int, generator_state: torch.tensor, path: pathlib.Path):
+def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], dataset_length: int, train_start: int, last_batch: int, generator_state: torch.tensor, path: pathlib.Path):
     """
     保存模型的检查点到指定路径，包括模型的权重以及训练的进度信息。
 
