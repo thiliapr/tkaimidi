@@ -74,8 +74,8 @@ class MidiDataset(Dataset):
         self.length = 0  # 经过数据增强后的总样本数
 
         # 遍历目录获取MIDI文件 (按文件名排序保证可重复性)
-        # midi_files = sorted(list(path.glob("**/*.mid")), key=lambda x: x.name)
-        midi_files = list(filter(lambda x: x.name.startswith("Touhou"), path.glob("**/*.mid")))
+        midi_files = sorted(list(path.glob("**/*.mid")), key=lambda x: x.name)
+        # midi_files = list(filter(lambda x: x.name.startswith("Touhou"), path.glob("**/*.mid")))  # 测试用
 
         if show_progress:
             progress_bar = tqdm.tqdm(desc="Load Dataset", total=len(midi_files))
@@ -424,7 +424,7 @@ def main():
         "lr": 1e-3,  # 学习率
         "weight_decay": 1e-2,  # 权重衰减系数
         "seq_size": 768,  # 输入序列的大小 - 1
-        "val_steps": 20,  # 进行多少次验证步骤（因为 Dataset 进行了数据增强，一个 Epoch 训练数据变得很多，Kaggle GPU 12个小时跑不完，所以用验证步骤代替）
+        "val_steps": 8,  # 进行多少次验证步骤（因为 Dataset 进行了数据增强，一个 Epoch 训练数据变得很多，Kaggle GPU 12个小时跑不完，所以用验证步骤代替）
         "train_batch_size": 8,  # 训练时的批量大小
         "val_batch_size": 16,  # 验证时的批量大小，越大验证结果越准确，但是资源使用倍数增加，验证时间也增加（但没有资源使用增加得多）
         "train_length": 0.8,  # 训练集占数据集的比例，用来保证用来验证的数据不被训练
