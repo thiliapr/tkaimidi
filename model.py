@@ -6,9 +6,9 @@
 
 使用示例:
 - 创建模型实例: `model = MidiNet()`
-- 保存模型检查点: `save_checkpoint(model, optimizer, train_loss, val_loss, train_accuracy, val_accuracy, dataset_length, train_start, last_batch, generator_state, path)`
+- 保存模型检查点: `save_checkpoint(model, optimizer, train_loss, val_loss, train_accuracy, val_accuracy, dataset_length, train_start, path)`
 - 加载模型检查点:
-  - `model_state, optimizer_state, train_loss, val_loss, train_accuracy, val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(path, train=True)`
+  - `model_state, optimizer_state, train_loss, val_loss, train_accuracy, val_accuracy, dataset_length, train_start = load_checkpoint(path, train=True)`
   - `model = load_checkpoint(path, train=False)`
 """
 
@@ -17,7 +17,6 @@
 
 import math
 import json
-import base64
 import pathlib
 import torch
 import torch.nn as nn
@@ -112,7 +111,7 @@ class MidiNet(nn.Module):
         return logits
 
 
-def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], dataset_length: int, train_start: int, last_batch: int, generator_state: torch.tensor, path: pathlib.Path):
+def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], dataset_length: int, train_start: int, path: pathlib.Path):
     """
     保存模型的检查点到指定路径，包括模型的权重以及训练的进度信息。
 
@@ -134,18 +133,17 @@ def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, train_loss: list[flo
     model_state_dict = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()  # 处理DataParallel情况
     torch.save(model_state_dict, path / "model.pth")  # 保存模型权重
     torch.save(optimizer.state_dict(), path / "optimizer.pth")  # 保存优化器权重
+
     # 保存训练信息
     with open(path / "train_info.json", "w") as f:
         json.dump(
             {
                 "dataset_length": dataset_length,
                 "train_start": train_start,
-                "last_batch": last_batch,
                 "train_loss": train_loss,
                 "val_loss": val_loss,
                 "train_accuracy": train_accuracy,
                 "val_accuracy": val_accuracy,
-                "generator_state": base64.b64encode(bytes(generator_state.tolist())).decode(),
             },
             f,
         )  # 将训练信息写入JSON文件
@@ -161,7 +159,7 @@ def load_checkpoint(path: pathlib.Path, train: bool = False):
 
     Returns:
         train关闭时: 模型的状态
-        train启用时: 模型和优化器的状态，训练、验证的损失和准确率的历史记录，上一次数据集的长度，拆分数据集时训练集的开始索引，训练数据的索引随机采样器的生成器的状态，上次训练时的未训练完成的epoch训练了多少个batch
+        train启用时: 模型和优化器的状态，训练、验证的损失和准确率的历史记录，上一次数据集的长度，拆分数据集时训练集的开始索引
     """
     # 检查并加载模型权重
     model_state = {}
@@ -183,12 +181,7 @@ def load_checkpoint(path: pathlib.Path, train: bool = False):
         else:
             train_info = {}  # 如果文件不存在，返回空字典
 
-        if "generator_state" in train_info:
-            generator_state = torch.tensor(list(base64.b64decode(train_info["generator_state"])), dtype=torch.uint8)
-        else:
-            generator_state = ...
-
         # 返回训练损失和验证损失
-        return model_state, optimizer_state, train_info.get("train_loss", []), train_info.get("val_loss", []), train_info.get("train_accuracy", []), train_info.get("val_accuracy", []), train_info.get("dataset_length", -1), train_info.get("train_start", 0), train_info.get("last_batch", 0), generator_state
+        return model_state, optimizer_state, train_info.get("train_loss", []), train_info.get("val_loss", []), train_info.get("train_accuracy", []), train_info.get("val_accuracy", []), train_info.get("dataset_length", -1), train_info.get("train_start", 0)
 
     return model_state

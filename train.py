@@ -5,9 +5,7 @@ MIDI 音乐生成模型训练模块
 本模块提供完整的MIDI音乐生成模型训练流程，包含数据集处理、模型训练、验证评估及可视化功能
 
 特性:
-- 高效内存管理: 支持TB级MIDI数据处理
 - 容错机制: 自动回退异常训练状态
-- 可重复性: 通过生成器状态保存实现实验复现
 - Flooding Loss: 训练损失低于某值时执行梯度上升，有利于提高泛化性能。论文见: https://arxiv.org/abs/2002.08709
 
 使用示例:
@@ -190,18 +188,15 @@ def train(
     model: MidiNet,
     dataset: MidiDataset,
     optimizer: optim.Adam,
-    train_batch_size: int,
-    val_batch_size: int,
+    num_epochs: int = 256,
+    train_batch_size: int = 1,
+    val_batch_size: int = 2,
     train_length: float = 0.8,
-    val_steps: int = 256,
-    val_per_step: int = 4096,
     steps_to_val: int = 256,
     flooding_level: float = 0,
     train_start: int = 0,
-    generator_state: torch.tensor = ...,
-    last_batch: int = 0,
     device: torch.device = torch.device("cpu")
-) -> tuple[list[float], list[float], list[float], list[float], int, torch.tensor]:
+) -> tuple[list[float], list[float], list[float], list[float]]:
     """
     训练模型并记录训练和验证的损失。
 
@@ -209,20 +204,17 @@ def train(
         model: 要训练的模型
         dataset: 用于训练的 MIDI 数据集
         optimizer: 优化器，用于更新模型参数
+        num_epochs: 训练多少个Epoch
         train_batch_size: 每个训练批次的样本数
         val_batch_size: 每个验证批次的样本数
         train_length: 训练集占数据集的比例
-        val_steps: 进行多少次验证，决定了训练过程中训练的步数 (train_steps = val_steps * val_per_step)
-        val_per_step: 每多少个训练步骤后进行一次验证，决定了训练过程中验证的频率
-        steps_to_val: 每次验证时验证多少个批次，决定了验证时使用的数据量
+        steps_to_val: 每一次验证使用多少个批次
         flooding_level: 允许训练最低的损失值。训练损失低于该值则执行梯度上升，否则执行梯度下降
         train_start: 拆分数据集时训练集的开始索引
-        generator_state: 训练数据的索引随机采样器的生成器的状态
-        last_batch: 上次训练时的未训练完成的epoch训练了多少个batch
         device: 用于训练的设备
 
     Returns:
-        训练、验证损失和准确率的历史记录和生成器状态和最后训练的批次
+        训练、验证损失和准确率的历史记录
     """
     empty_cache()  # 清理缓存以释放内存
 
@@ -231,10 +223,7 @@ def train(
     steps_to_val = min(steps_to_val, len(val_dataset) // val_batch_size)  # 确保验证步骤不超过验证集大小
 
     # 获取训练数据加载器
-    train_generator = torch.Generator()
-    if generator_state != ...:
-        train_generator.set_state(generator_state)
-    train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True, drop_last=True, generator=train_generator)
+    train_loader = DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True, drop_last=True)
 
     if not torch.cuda.is_available():
         print(f"train(): 使用 {cpu_count()} 个 CPU 核心进行训练。")
@@ -256,28 +245,13 @@ def train(
     last_normal_state = copy.deepcopy(model.state_dict()), copy.deepcopy(optimizer.state_dict())
 
     # 创建进度条，显示训练进度
-    progress_bar = tqdm.tqdm(desc="Training", total=val_steps * (val_per_step + steps_to_val))
+    progress_bar = tqdm.tqdm(desc="Training", total=num_epochs * (len(train_loader) + steps_to_val))
 
-    step = 0
-    model.train()  # 确保模型在训练模式下
-    train_begin = True  # 刚开始训练
-    epoch_train_loss, epoch_train_acc = [], []  # 一次验证中训练的损失、准确率，用于计算训练损失、准确率标准差
-    while step < val_steps * val_per_step:  # 训练直到达到验证步骤上限
-        generator_state = train_generator.get_state()  # 获取当前生成器状态
-        loader_iter = iter(train_loader)  # 获取该 epoch 的 DataloderIter 对象
-
-        # 将 iter 调整到上次训练结束时的状态
-        last_batch %= len(train_loader)
-        if train_begin:
-            for _ in range(last_batch):
-                next(loader_iter._sampler_iter)
-            train_begin = False
-
-        for inputs, labels in loader_iter:
-            step += 1  # 增加步骤计数
-            last_batch += 1  # 增加批次计数
-
-            # 训练阶段
+    for epoch in range(num_epochs):
+        # 训练阶段
+        model.train()  # 确保模型在训练模式下
+        epoch_train_loss, epoch_train_acc = [], []
+        for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device).view(-1)
             optimizer.zero_grad()  # 清空优化器中的梯度
             outputs = model(inputs).view(-1, VOCAB_SIZE)  # 前向传播
@@ -285,14 +259,10 @@ def train(
 
             # 检查损失是否为 NaN
             if torch.isnan(loss):
-                unsaved_steps = step % val_per_step
-                progress_bar.update(1 - unsaved_steps)
                 model.load_state_dict(last_normal_state[0])  # 回退模型参数
                 optimizer.load_state_dict(last_normal_state[1])  # 回退优化器参数
                 epoch_train_acc.clear()
                 epoch_train_loss.clear()
-                print(f"Step {step}: loss=nan, 模型回退 {unsaved_steps} 步")
-                step -= unsaved_steps  # 调整步骤计数
                 continue
 
             flood = (loss - flooding_level).abs() + flooding_level  # 梯度下降或上升
@@ -303,65 +273,54 @@ def train(
             epoch_train_acc.append((torch.argmax(outputs) == labels).sum().item() / labels.size(-1))  # 累积训练准确率
             progress_bar.update()  # 更新进度条
 
-            # 验证阶段
-            if step % val_per_step == 0:
-                last_normal_state = copy.deepcopy(model.state_dict()), copy.deepcopy(optimizer.state_dict())
+        # 验证阶段
+        last_normal_state = copy.deepcopy(model.state_dict()), copy.deepcopy(optimizer.state_dict())
 
-                model.eval()  # 切换到评估模式
-                epoch_val_loss = []
-                epoch_val_acc = []
-                with torch.no_grad():  # 在验证阶段禁用梯度计算
-                    val_loader = DataLoader(val_dataset, batch_size=val_batch_size, shuffle=True, drop_last=True, generator=torch.Generator().manual_seed(random.randint(1 - 2**59, 2**64 - 1)))
-                    for val_step, (inputs, labels) in enumerate(val_loader):
-                        inputs, labels = inputs.to(device), labels.to(device).view(-1)
-                        if val_step >= steps_to_val:
-                            break  # 达到验证批次上限，停止验证
+        model.eval()  # 切换到评估模式
+        epoch_val_loss, epoch_val_acc = [], []
+        with torch.no_grad():  # 在验证阶段禁用梯度计算
+            val_loader = DataLoader(val_dataset, batch_size=val_batch_size, shuffle=True, drop_last=True, generator=torch.Generator().manual_seed(random.randint(1 - 2**59, 2**64 - 1)))
+            for val_step, (inputs, labels) in enumerate(val_loader):
+                inputs, labels = inputs.to(device), labels.to(device).view(-1)
+                if val_step >= steps_to_val:
+                    break  # 达到验证批次上限，停止验证
 
-                        outputs = model(inputs).view(-1, VOCAB_SIZE)  # 前向传播
-                        loss = F.cross_entropy(outputs, labels)  # 计算验证损失
-                        epoch_val_loss.append(loss.item())  # 累计验证损失
-                        epoch_val_acc.append((torch.argmax(outputs) == labels).sum().item() / labels.size(-1))  # 累积验证准确率
-                        progress_bar.update()
+                outputs = model(inputs).view(-1, VOCAB_SIZE)  # 前向传播
+                loss = F.cross_entropy(outputs, labels)  # 计算验证损失
+                epoch_val_loss.append(loss.item())  # 累计验证损失
+                epoch_val_acc.append((torch.argmax(outputs) == labels).sum().item() / labels.size(-1))  # 累积验证准确率
+                progress_bar.update()
 
-                # 计算并记录损失、准确率的平均值和标准差
-                train_loss_avg = sum(epoch_train_loss) / val_per_step
-                train_loss_std = math.sqrt(sum((loss - train_loss_avg) ** 2 for loss in epoch_train_loss) / val_per_step)
-                train_acc_avg = sum(epoch_train_acc) / len(epoch_train_acc)
-                train_acc_std = math.sqrt(sum((acc - train_acc_avg) ** 2 for acc in epoch_train_acc) / len(epoch_train_acc))
-                val_loss_avg = sum(epoch_val_loss) / steps_to_val
-                val_loss_std = math.sqrt(sum((loss - val_loss_avg) ** 2 for loss in epoch_val_loss) / steps_to_val)
-                val_acc_avg = sum(epoch_val_acc) / len(epoch_val_acc)
-                val_acc_std = math.sqrt(sum((acc - val_acc_avg) ** 2 for acc in epoch_val_acc) / len(epoch_val_acc))
+        # 计算并记录损失、准确率的平均值和标准差
+        train_loss_avg = sum(epoch_train_loss) / len(epoch_train_loss)
+        train_loss_std = math.sqrt(sum((loss - train_loss_avg) ** 2 for loss in epoch_train_loss) / len(epoch_train_loss))
+        train_acc_avg = sum(epoch_train_acc) / len(epoch_train_acc)
+        train_acc_std = math.sqrt(sum((acc - train_acc_avg) ** 2 for acc in epoch_train_acc) / len(epoch_train_acc))
+        val_loss_avg = sum(epoch_val_loss) / steps_to_val
+        val_loss_std = math.sqrt(sum((loss - val_loss_avg) ** 2 for loss in epoch_val_loss) / steps_to_val)
+        val_acc_avg = sum(epoch_val_acc) / len(epoch_val_acc)
+        val_acc_std = math.sqrt(sum((acc - val_acc_avg) ** 2 for acc in epoch_val_acc) / len(epoch_val_acc))
 
-                train_loss.append(train_loss_avg)
-                val_loss.append(val_loss_avg)
-                train_accuracy.append(train_acc_avg)
-                val_accuracy.append(val_acc_avg)
+        train_loss.append(train_loss_avg)
+        val_loss.append(val_loss_avg)
+        train_accuracy.append(train_acc_avg)
+        val_accuracy.append(val_acc_avg)
 
-                print(
-                    f"Validation Step {step // val_per_step}:",
-                    f"train_loss={train_loss_avg:.3f},",
-                    f"train_loss_std={train_loss_std:.3f},",
-                    f"train_acc={train_acc_avg:.3f},",
-                    f"train_acc_std={train_acc_std:.3f},",
-                    f"val_loss={val_loss_avg:.3f},",
-                    f"val_loss_std={val_loss_std:.3f},",
-                    f"val_acc={val_acc_avg:.3f},",
-                    f"val_acc_std={val_acc_std:.3f}"
-                )
-
-                # 将损失、准确率清空
-                epoch_train_loss.clear()
-                epoch_train_acc.clear()
-
-                empty_cache()  # 清理缓存
-                if step >= val_steps * val_per_step:
-                    break
-                model.train()  # 确保模型在训练模式下
+        print(
+            f"Epoch {epoch + 1}:",
+            f"train_loss={train_loss_avg:.3f},",
+            f"train_loss_std={train_loss_std:.3f},",
+            f"train_acc={train_acc_avg:.3f},",
+            f"train_acc_std={train_acc_std:.3f},",
+            f"val_loss={val_loss_avg:.3f},",
+            f"val_loss_std={val_loss_std:.3f},",
+            f"val_acc={val_acc_avg:.3f},",
+            f"val_acc_std={val_acc_std:.3f}"
+        )
 
     progress_bar.close()  # 关闭进度条
 
-    return train_loss, val_loss, train_accuracy, val_accuracy, last_batch, generator_state
+    return train_loss, val_loss, train_accuracy, val_accuracy
 
 
 def plot_training_process(train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], img_path: pathlib.Path | str):
@@ -386,7 +345,7 @@ def plot_training_process(train_loss: list[float], val_loss: list[float], train_
 
     # 设置第一个Y轴的标签
     ax1.set_ylabel("Loss")
-    ax1.set_xlabel("Validation Steps")
+    ax1.set_xlabel("Epochs")
 
     # 创建第二个Y轴用于准确率
     ax2 = ax1.twinx()  # 创建共享X轴的第二个Y轴
@@ -424,11 +383,10 @@ def main():
         "lr": 1e-3,  # 学习率
         "weight_decay": 1e-2,  # 权重衰减系数
         "seq_size": 768,  # 输入序列的大小 - 1
-        "val_steps": 8,  # 进行多少次验证步骤（因为 Dataset 进行了数据增强，一个 Epoch 训练数据变得很多，Kaggle GPU 12个小时跑不完，所以用验证步骤代替）
+        "num_epochs": 1,  # 训练多少个Epoch
         "train_batch_size": 8,  # 训练时的批量大小
         "val_batch_size": 16,  # 验证时的批量大小，越大验证结果越准确，但是资源使用倍数增加，验证时间也增加（但没有资源使用增加得多）
         "train_length": 0.8,  # 训练集占数据集的比例，用来保证用来验证的数据不被训练
-        "val_per_step": 4096,  # 每多少个训练步骤进行一次验证
         "steps_to_val": 128,  # 抽样验证，每一次验证使用多少个批次，越大验证结果越准确，但是验证时间倍数增加，资源使用不增加
         "flooding_level": 0  # 允许训练最低的损失值。训练损失低于该值则执行梯度上升，否则执行梯度下降
     }
@@ -462,7 +420,7 @@ def main():
 
     # 尝试加载检查点
     try:
-        model_state, optimizer_state, old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy, dataset_length, train_start, last_batch, generator_state = load_checkpoint(local_ckpt, train=True)
+        model_state, optimizer_state, old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy, dataset_length, train_start = load_checkpoint(local_ckpt, train=True)
         if model_state:  # 如果模型状态不为空，则尝试加载模型状态
             model.load_state_dict(model_state)
         model = model.to(device)  # 转移到指定设备
@@ -474,34 +432,26 @@ def main():
         # 检查数据集大小是否匹配
         if dataset_length == -1:
             dataset_length = "N/A"
-
         if dataset_length != len(dataset):
             print(f"数据集大小不匹配，可能是使用了与之前不同的数据集训练: {dataset_length} 与 {len(dataset)} 不匹配", file=sys.stderr)
             train_start = random.randint(0, len(dataset) - 1)  # 随机选择新的训练起点
-            generator_state = ...  # 重置随机数生成器状态
-            last_batch = 0  # 重置批次计数
     except Exception as e:
         print(f"加载检查点时发生错误: {e}", file=sys.stderr)
         model = model.to(device)  # 转移到指定设备
         optimizer = create_optimizer()  # 初始化优化器
         old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy = [], [], [], []  # 初始化损失和准确率记录
         train_start = random.randint(0, len(dataset) - 1)  # 随机选择训练起点
-        generator_state = ...  # 初始化随机数生成器状态
-        last_batch = 0  # 初始化批次计数
 
     # 开始训练模型
-    train_loss, val_loss, train_accuracy, val_accuracy, last_batch, generator_state = train(
+    train_loss, val_loss, train_accuracy, val_accuracy = train(
         model, dataset, optimizer,
-        val_steps=config["val_steps"],
+        num_epochs=config["num_epochs"],
         train_batch_size=config["train_batch_size"],
         val_batch_size=config["val_batch_size"],
         train_length=config["train_length"],
-        val_per_step=config["val_per_step"],
         steps_to_val=config["steps_to_val"],
         flooding_level=config["flooding_level"],
         train_start=train_start,
-        generator_state=generator_state,
-        last_batch=last_batch,
         device=device
     )
 
@@ -514,7 +464,7 @@ def main():
     # 保存当前模型的检查点
     save_checkpoint(
         model, optimizer, train_loss, val_loss, train_accuracy, val_accuracy,
-        len(dataset), train_start, last_batch, generator_state, local_ckpt
+        len(dataset), train_start, local_ckpt
     )
 
     # 绘制训练过程中的损失和准确率曲线
