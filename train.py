@@ -131,7 +131,7 @@ class MidiDataset(Dataset):
 
     def __getitem__(self, index: int):
         for filedata, seq_indexes in self.data:
-            if index > len(seq_indexes):
+            if index >= len(seq_indexes):
                 index -= len(seq_indexes)
                 continue
             seq_index = seq_indexes[index]
