@@ -101,7 +101,7 @@ def normalize_times(
     pitches, abs_times = zip(*data)
 
     # 转换为相对时间(时间间隔序列)
-    rel_intervals = [abs_times[0]] + [abs_times[i] - abs_times[i - 1] for i in range(1, len(abs_times))]
+    rel_intervals = [0] + [abs_times[i] - abs_times[i - 1] for i in range(1, len(abs_times))]
 
     def calculate_interval_loss(interval_seq: list[float]) -> float:
         """

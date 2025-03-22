@@ -41,7 +41,7 @@ graph TD
 
 这个项目早期是在Kaggle上跑的，是后来搬到Github上的，所以看历史版本建议[去Kaggle看](https://www.kaggle.com/code/yigk4out/tkaimidi)，早期的名字是`musicmidi`。
 
-[^NotGoodButFree]: 如[MIDIEdtior(HTTPS证书都不注册)](http://www.midieditor.org/), [万年不支持HTTP3的Firefox(iwara.tv都看不了)](https://www.mozilla.org/zh-CN/firefox/new/)
+[^NotGoodButFree]: 如[MIDIEdtior(网站的HTTPS证书都是自注册的)](http://www.midieditor.org/), [本项目](https://github.com/thiliapr/tkaimidi)
 [^NotFreeButGood]: 如[Cakewalk](https://www.bandlab.com/products/cakewalk), [Sublime Text](https://www.sublimetext.com/), [TeamViewer](https://www.teamviewer.com/), [Steam](https://store.steampowered.com/), [Minecraft](https://www.minecraft.net/), 一众Galgame等
 
 ## 其他

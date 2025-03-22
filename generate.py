@@ -119,6 +119,7 @@ def generate_midi(
     pitches = list(zip(*output_notes))[0]
     offset = 64 - int(sum(pitches) / len(pitches))
     output_notes = [(pitch + offset, interval) for pitch, interval in output_notes]
+    print(output_notes)
 
     return notes_to_track(output_notes)  # 转化为 MIDI 轨道
 
@@ -134,7 +135,7 @@ def main():
         prompt=LOVE_TRADING_MIDI,
         model=model,
         seed=42,
-        length=512)
+        length=64)
     ]).save("example.mid")
 
 
