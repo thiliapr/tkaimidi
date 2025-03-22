@@ -200,7 +200,7 @@ def train(
     flooding_level: float = 0,
     train_start: int = 0,
     device: torch.device = torch.device("cpu")
-) -> tuple[list[float], list[float], list[float], list[float]]:
+) -> tuple[list[list[float]], list[float], list[float], list[float]]:
     """
     训练模型并记录训练和验证的损失。
 
@@ -297,7 +297,6 @@ def train(
 
         # 计算并记录损失、准确率的平均值和标准差
         train_loss_avg = sum(epoch_train_loss) / len(epoch_train_loss)
-        train_loss_std = math.sqrt(sum((loss - train_loss_avg) ** 2 for loss in epoch_train_loss) / len(epoch_train_loss))
         train_acc_avg = sum(epoch_train_acc) / len(epoch_train_acc)
         train_acc_std = math.sqrt(sum((acc - train_acc_avg) ** 2 for acc in epoch_train_acc) / len(epoch_train_acc))
         val_loss_avg = sum(epoch_val_loss) / steps_to_val
@@ -305,7 +304,7 @@ def train(
         val_acc_avg = sum(epoch_val_acc) / len(epoch_val_acc)
         val_acc_std = math.sqrt(sum((acc - val_acc_avg) ** 2 for acc in epoch_val_acc) / len(epoch_val_acc))
 
-        train_loss.append(train_loss_avg)
+        train_loss.append(epoch_train_loss)
         val_loss.append(val_loss_avg)
         train_accuracy.append(train_acc_avg)
         val_accuracy.append(val_acc_avg)
@@ -313,7 +312,6 @@ def train(
         print(
             f"Epoch {epoch + 1}:",
             f"train_loss={train_loss_avg:.3f},",
-            f"train_loss_std={train_loss_std:.3f},",
             f"train_acc={train_acc_avg:.3f},",
             f"train_acc_std={train_acc_std:.3f},",
             f"val_loss={val_loss_avg:.3f},",
@@ -327,21 +325,39 @@ def train(
     return train_loss, val_loss, train_accuracy, val_accuracy
 
 
-def plot_training_process(train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], img_path: pathlib.Path | str):
+def plot_training_process(train_loss: list[list[float]], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], img_path: pathlib.Path | str):
     """
     绘制训练过程中的损失、准确率曲线。
 
     Args:
-        train_loss: 两次验证之间的训练损失平均值。
-        val_loss: 一次验证的验证损失平均值。
-        train_accuracy: 两次验证之间的训练准确率平均值。
-        val_accuracy: 一次验证的的验证准确率平均值。
+        train_loss: 每个Epoch的每一步的训练损失值。
+        val_loss: 每个Epoch的验证损失平均值。
+        train_accuracy: 每个Epoch的训练准确率平均值。
+        val_accuracy: 每个Epoch的的验证准确率平均值。
         img_path: 图形保存的文件路径，可以是字符串或Path对象。
     """
+    def smooth(losses: list[float], max_diff: float = 0.1):
+        mean = sum(losses) / len(losses)
+        last, next = mean, losses[1]
+
+        smoothed = losses.copy()
+        for i, loss in enumerate(losses):
+            if max(abs(loss - last), abs(loss - next)) > max_diff:
+                smoothed[i] = (last * 3 + next + mean * 28) / 32
+            last = (last * 0.9 + smoothed[i]) / 1.9
+            next = smoothed[i + 2] if i < len(smoothed) - 2 else mean
+        return smoothed
+
     fig, ax1 = plt.subplots(figsize=(10, 6))  # 创建一个图形和一组坐标轴
 
     # 绘制训练过程中的损失曲线
-    ax1.plot(train_loss, label="Train Loss", color="red")
+    train_loss_x = [
+        epoch + epoch_step / len(epoch_loss)
+        for epoch, epoch_loss in enumerate(train_loss)
+        for epoch_step in range(len(epoch_loss))
+    ]
+    train_loss_y = smooth([loss for epoch in train_loss for loss in epoch])
+    ax1.plot(train_loss_x, train_loss_y, label="Train Loss", color="red")
 
     # 绘制验证过程中的损失曲线
     val_steps = [x + 0.5 for x in range(len(train_loss))]
@@ -397,7 +413,7 @@ def main():
 
     # 定义路径
     local_ckpt = pathlib.Path(config["local_ckpt"])
-    local_dataset_path = pathlib.Path(tempfile.gettempdir())
+    local_dataset_path = pathlib.Path(tempfile.gettempdir()) / random.randbytes(8).hex()[2:]
     external_datasets_path = [pathlib.Path(path) for path in config["external_datasets_path"]]
 
     # 如果预训练检查点存在，则复制到本地检查点路径
@@ -407,6 +423,7 @@ def main():
         shutil.copytree(config["pretrained_ckpt"], local_ckpt, dirs_exist_ok=True)  # 复制预训练检查点到本地
 
     # 复制外部数据集到本地
+    local_dataset_path.mkdir(exist_ok=True)
     for path in external_datasets_path:
         shutil.copytree(path, local_dataset_path / path.name, dirs_exist_ok=True)
 
@@ -474,6 +491,13 @@ def main():
     # 绘制训练过程中的损失和准确率曲线
     plot_training_process(train_loss, val_loss, train_accuracy, val_accuracy, "statistics.png")
 
+    # 删除音乐文件临时储存
+    shutil.rmtree(local_dataset_path)
+
 
 if __name__ == "__main__":
-    main()
+    # main()
+    import json
+    with open("ckpt/train_info.json") as f:
+        data = json.load(f)
+    plot_training_process(data["train_loss"], data["val_loss"], data["train_accuracy"], data["val_accuracy"], "nul")

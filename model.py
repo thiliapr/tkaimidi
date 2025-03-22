@@ -115,14 +115,14 @@ class MidiNet(nn.Module):
         return logits
 
 
-def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, train_loss: list[float], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], dataset_length: int, train_start: int, path: pathlib.Path):
+def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, train_loss: list[list[float]], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], dataset_length: int, train_start: int, path: pathlib.Path):
     """
     保存模型的检查点到指定路径，包括模型的权重以及训练的进度信息。
 
     Args:
         model: 要保存的模型实例
         optimizer: 要保存的优化器实例
-        train_loss: 训练损失
+        train_loss: 每一个Epoch的每一步训练损失
         val_loss: 验证损失
         train_accuracy: 训练集准确率
         val_accuracy: 验证集准确率
