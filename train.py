@@ -496,8 +496,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    import json
-    with open("ckpt/train_info.json") as f:
-        data = json.load(f)
-    plot_training_process(data["train_loss"], data["val_loss"], data["train_accuracy"], data["val_accuracy"], "nul")
+    main()
