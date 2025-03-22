@@ -3,7 +3,8 @@
 这是一个基于`TransformerEncoder`的MIDI生成模型。该模型利用`Transformer`架构的编码器部分。
 
 ## License
-![GNU Affero General Public License Version 3 Logo](https://www.gnu.org/graphics/agplv3-with-text-162x68.png)
+![GNU AGPL Version 3 Official Logo](https://www.gnu.org/graphics/agplv3-with-text-162x68.png)
+![GNU AGPL Version 3 Alternative Logo](https://www.gnu.org/graphics/license-logos-by-christian-candena-cc-by.png)
 
 本项目采用[GNU AGPLv3 or later](https://www.gnu.org/licenses/agpl-3.0.html)许可证。您可以自由使用、修改和分发本项目的代码，但必须在相同许可证或其任何后续版本下进行。
 
