@@ -8,6 +8,9 @@
 
 本项目采用[GNU AGPLv3 or later](https://www.gnu.org/licenses/agpl-3.0.html)许可证。您可以自由使用、修改和分发本项目的代码，但必须在相同许可证或其任何后续版本下进行。
 
+## 联系方式
+- Email: thiliapr@tutanota.com
+
 ## 各个文件的作用
 ### `model.py`
 模型的结构代码。还有保存、加载模型和恢复训练所需的数据的工具函数。
