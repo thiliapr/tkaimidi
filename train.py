@@ -343,7 +343,7 @@ def plot_training_process(train_loss: list[list[float]], val_loss: list[float], 
         smoothed = losses.copy()
         for i, loss in enumerate(losses):
             if max(abs(loss - last), abs(loss - next)) > max_diff:
-                smoothed[i] = (last * 3 + next + mean * 28) / 32
+                smoothed[i] = (last * 3 + next + mean * 124) / 128
             last = (last * 0.9 + smoothed[i]) / 1.9
             next = smoothed[i + 2] if i < len(smoothed) - 2 else mean
         return smoothed
