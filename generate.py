@@ -6,6 +6,7 @@
 # 发布 tkaimidi 是希望它能有用，但是并无保障；甚至连可销售和符合某个特定的目的都不保证。请参看 GNU Affero 通用公共许可证，了解详情。
 # 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
+import sys
 import pathlib
 import mido
 import tqdm
@@ -125,7 +126,10 @@ def generate_midi(
     output_notes = [(pitch + offset, interval) for pitch, interval in output_notes]
     print(output_notes)
 
-    return notes_to_track(output_notes)  # 转化为 MIDI 轨道
+    try:
+        return notes_to_track(output_notes)  # 转化为 MIDI 轨道
+    except ValueError as e:
+        print("转化音符到轨道时发生错误（最高音高与最低差距大于128，或某个音符音高与平均音高差距过大）:", e, file=sys.stderr)
 
 
 def main():
@@ -135,12 +139,15 @@ def main():
         model.load_state_dict(state)
     except Exception as e:
         print(f"Error in LoadCKPT: {e}")
-    mido.MidiFile(tracks=[generate_midi(
+
+    track = generate_midi(
         prompt=LOVE_TRADING_MIDI,
         model=model,
         seed=42,
-        length=512)
-    ]).save("example.mid")
+        length=512
+    )
+    if track is not None:
+        mido.MidiFile(tracks=[track]).save("example.mid")
 
 
 if __name__ == "__main__":
