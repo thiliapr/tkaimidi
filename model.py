@@ -128,8 +128,6 @@ def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, train_loss: list[lis
         val_accuracy: 验证集准确率
         dataset_length: 数据集的长度
         train_start: 拆分数据集时训练集的开始索引
-        last_batch: 上次训练时的未训练完成的epoch训练了多少个batch
-        generator_state: 训练数据的索引随机采样器的生成器的状态
         path: 保存检查点的目录路径
     """
     path.mkdir(parents=True, exist_ok=True)  # 确保目标目录存在，如果不存在则创建
