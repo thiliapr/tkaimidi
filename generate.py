@@ -124,12 +124,12 @@ def generate_midi(
     pitches = list(zip(*output_notes))[0]
     offset = 64 - int(sum(pitches) / len(pitches))
     output_notes = [(pitch + offset, interval) for pitch, interval in output_notes]
-    print(output_notes)
 
     try:
         return notes_to_track(output_notes)  # 转化为 MIDI 轨道
     except ValueError as e:
-        print("转化音符到轨道时发生错误（最高音高与最低差距大于128，或某个音符音高与平均音高差距过大）:", e, file=sys.stderr)
+        print("音符:", output_notes, file=sys.stderr)
+        print("转化音符到轨道时发生错误（最高音高与最低音高差距大于128）:", e, file=sys.stderr)
 
 
 def main():
