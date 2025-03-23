@@ -139,7 +139,7 @@ def main():
         prompt=LOVE_TRADING_MIDI,
         model=model,
         seed=42,
-        length=64)
+        length=512)
     ]).save("example.mid")
 
 
