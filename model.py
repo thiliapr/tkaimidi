@@ -131,9 +131,12 @@ def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, train_loss: list[lis
         path: 保存检查点的目录路径
     """
     path.mkdir(parents=True, exist_ok=True)  # 确保目标目录存在，如果不存在则创建
+
     model = model.cpu()  # 将模型移到CPU进行保存
-    model_state_dict = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()  # 处理DataParallel情况
-    torch.save(model_state_dict, path / "model.pth")  # 保存模型权重
+    # 处理DataParallel情况
+    if isinstance(model, nn.DataParallel):
+        model = model.module
+    torch.save(model.state_dict(), path / "model.pth")  # 保存模型权重
     torch.save(optimizer.state_dict(), path / "optimizer.pth")  # 保存优化器权重
 
     # 保存训练信息
@@ -142,10 +145,10 @@ def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, train_loss: list[lis
             {
                 "dataset_length": dataset_length,
                 "train_start": train_start,
-                "train_loss": train_loss,
-                "val_loss": val_loss,
                 "train_accuracy": train_accuracy,
                 "val_accuracy": val_accuracy,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
             },
             f,
         )  # 将训练信息写入JSON文件
