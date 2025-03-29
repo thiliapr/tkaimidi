@@ -150,9 +150,6 @@ def main():
     # 转移模型到设备
     model = model.to(device)
 
-    # 编译模型
-    model = torch.compile(model)
-
     # 检查是否使用多GPU
     if torch.cuda.device_count() > 1:
         model = DataParallel(model)  # 使用 DataParallel 进行多 GPU 推理
