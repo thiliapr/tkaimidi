@@ -94,10 +94,10 @@ def generate_midi(
         生成的 MIDI 轨道
     """
     # 将音符和时间转换为电子乐谱
-    sheet = notes_to_sheet(prompt)
+    sheet, _ = notes_to_sheet(prompt)
 
     # 将音符和时间编码为模型输入序列
-    input_prompt = sheet_to_model(sheet)
+    input_prompt, _ = sheet_to_model(sheet)
 
     model.eval()  # 将模型设置为评估模式
     generator = torch.Generator().manual_seed(seed)  # 固定随机种子，确保每次生成结果一致
