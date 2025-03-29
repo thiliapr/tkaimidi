@@ -1,6 +1,6 @@
 # Tk AI MIDI
 ## 简介
-这是一个基于`TransformerEncoder`的MIDI生成模型。该模型利用`Transformer`架构的编码器部分。
+这是一个基于`LSTM`的MIDI生成模型。
 
 ## License
 ![GNU AGPL Version 3 Official Logo](https://www.gnu.org/graphics/agplv3-with-text-162x68.png)
@@ -17,7 +17,7 @@
 graph TD
     subgraph MidiNet:
         direction TB
-        Embedding[嵌入层] --> PositionalEncoding[位置编码] --> TransformerEncoderLayers[Transformer编码器] --> Linear[全连接层]
+        Embedding[嵌入层] --> PositionalEncoding[位置编码] --> LSTM[LSTM] --> Linear[全连接层]
     end
 ```
 

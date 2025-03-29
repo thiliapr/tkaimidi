@@ -2,14 +2,14 @@
 """
 模型的定义、模型与恢复训练所需信息的加载和保存。
 
-本模块定义了一个基于Transformer架构的神经网络模型，用于音乐生成任务。该模块还提供了模型的保存和加载功能，以便在训练过程中保存模型状态和训练信息。
+本模块定义了一个基于LSTM架构的神经网络模型，用于音乐生成任务。该模块还提供了模型的保存和加载功能，以便在训练过程中保存模型状态和训练信息。
 
 使用示例:
 - 创建模型实例: `model = MidiNet()`
 - 保存模型检查点: `save_checkpoint(model, optimizer, train_loss, val_loss, train_accuracy, val_accuracy, dataset_length, train_start, path)`
 - 加载模型检查点:
   - `model_state, optimizer_state, train_loss, val_loss, train_accuracy, val_accuracy, dataset_length, train_start = load_checkpoint(path, train=True)`
-  - `model = load_checkpoint(path, train=False)`
+  - `model_state = load_checkpoint(path, train=False)`
 """
 
 # Copyright (C)  thiliapr 2024-2025
@@ -19,7 +19,6 @@
 # 发布 tkaimidi 是希望它能有用，但是并无保障；甚至连可销售和符合某个特定的目的都不保证。请参看 GNU Affero 通用公共许可证，了解详情。
 # 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
-import math
 import json
 import pathlib
 import torch
@@ -27,47 +26,10 @@ import torch.nn as nn
 import torch.optim as optim
 
 TIME_PRECISION = 120  # 时间精度，表示每个音符的最小时间单位
-VOCAB_SIZE = 12 + 12 + 12 + 3 + 3 + 2
-
-
-class PositionalEncoding(nn.Module):
-    r"""
-    位置编码
-
-    来源: https://github.com/pytorch/examples/blob/c0b889d5f43150f288ecdd5dbd16c146d79e5bdf/word_language_model/model.py#L65
-    注入一些关于序列中标记的相对或绝对位置的信息。
-    位置编码与嵌入的维度相同，以便可以将两者相加。
-    在这里，我们使用不同频率的正弦和余弦函数。
-
-    .. math:
-        \text{PosEncoder}(pos, 2i) = sin(pos/10000^{(2i/d_model)})
-        \text{PosEncoder}(pos, 2i+1) = cos(pos/10000^{(2i/d_model)})
-        \text{其中 pos 是单词位置，i 是维度索引}
-    """
-
-    def __init__(self, embedding_dim: int):
-        super().__init__()
-        self.embedding_dim = embedding_dim
-
-        # 初始化位置编码缓冲区
-        self.register_buffer("positional_encoding", torch.tensor([]), persistent=False)
-
-    def _generate_positional_encoding(self, seq_length: int, device=torch.device("cpu")):
-        "生成位置编码矩阵"
-        position = torch.arange(0, seq_length, dtype=torch.float, device=device).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, self.embedding_dim, 2, device=device).float() * (-math.log(10000.0) / self.embedding_dim))
-        pe = torch.zeros(seq_length, self.embedding_dim, device=device)
-        pe[:, 0::2] = torch.sin(position * div_term)  # 偶数维度使用sin
-        pe[:, 1::2] = torch.cos(position * div_term)  # 奇数维度使用cos
-        return pe
-
-    def forward(self, x: torch.Tensor):
-        # 确保位置编码足够长
-        if x.size(1) > self.positional_encoding.size(0):
-            self.positional_encoding = self._generate_positional_encoding(x.size(1), x.device)
-
-        # 位置编码
-        return x + self.positional_encoding
+VOCAB_SIZE = 12 + 12 + 12 + 3 + 3 + 2  # 词汇库大小
+EMBEDDING_DIM = 768
+HIDDEN_SIZE = 1536
+NUM_LAYERS = 3
 
 
 class MidiNet(nn.Module):
@@ -77,64 +39,36 @@ class MidiNet(nn.Module):
 
     def __init__(self, dropout: float = 0.1, device: torch.device = torch.device("cpu")):
         super().__init__()
-        self.embedding_dim = 768
-        self.num_heads = 8
-        self.ff_dim = 1536
-        self.num_layers = 6
+
+        # Dropout
+        self.dropout = nn.Dropout(dropout)
 
         # 嵌入层
-        self.embedding = nn.Embedding(VOCAB_SIZE, self.embedding_dim, device=device)
+        self.embedding = nn.Embedding(VOCAB_SIZE, EMBEDDING_DIM, device=device)
 
-        # 位置编码
-        self.positional_encoding = PositionalEncoding(self.embedding_dim)
-
-        # Transformer编码器层
-        self.transformer_layers = nn.ModuleList(nn.TransformerEncoderLayer(
-            d_model=self.embedding_dim,
-            nhead=self.num_heads,
-            dim_feedforward=self.ff_dim,
-            dropout=dropout,
-            batch_first=True,
-            device=device
-        ) for _ in range(self.num_layers))
+        # LSTM
+        self.lstm = nn.LSTM(EMBEDDING_DIM, HIDDEN_SIZE, num_layers=NUM_LAYERS, batch_first=True, dropout=dropout, device=device)
 
         # 输出层
-        self.output_layer = nn.Linear(self.embedding_dim, VOCAB_SIZE, device=device)
-
-        # 缓存因果掩码
-        self.register_buffer("causal_mask_cache", torch.tensor([], device=device), persistent=False)
+        self.output_layer = nn.Linear(HIDDEN_SIZE, VOCAB_SIZE, device=device)
 
         # 初始化权重
         nn.init.normal_(self.embedding.weight)
         nn.init.kaiming_normal_(self.output_layer.weight)
         nn.init.zeros_(self.output_layer.bias)
 
-    def _get_causal_mask(self, sequence_length: int, device: torch.device):
-        "获取因果掩码"
-        if self.causal_mask_cache.size(0) != sequence_length:
-            self.causal_mask_cache = torch.triu(torch.ones(sequence_length, sequence_length, device=device), diagonal=1).bool()
-        return self.causal_mask_cache
-
-    def forward(self, input_tokens: torch.Tensor, use_causal_mask: bool = True):
+    def forward(self, input_tokens: torch.Tensor):
         """
         前向传播
 
         Args:
             input_tokens: 输入token序列 (batch_size, seq_len)
-            use_causal_mask: 是否使用因果掩码
         """
-        # 准备掩码
-        causal_mask = self._get_causal_mask(input_tokens.size(1), input_tokens.device) if use_causal_mask else None
-
         # 通过嵌入层
-        x = self.embedding(input_tokens) * math.sqrt(self.embedding_dim)
+        x = self.dropout(self.embedding(input_tokens))
 
-        # 通过位置编码
-        x = self.positional_encoding(x)
-
-        # 通过Transformer层
-        for layer in self.transformer_layers:
-            x = layer(x, src_mask=causal_mask)
+        # 通过LSTM层
+        x = self.dropout(self.lstm(x)[0])
 
         # 输出预测
         logits = self.output_layer(x)
