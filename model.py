@@ -30,9 +30,9 @@ TIME_PRECISION = 120  # 时间精度，表示每个音符的最小时间单位
 VOCAB_SIZE = 12 + 12 + 12 + 3 + 3 + 2
 
 
-class MusicEventEmbedding(nn.Module):
+class PositionalEncoding(nn.Module):
     r"""
-    音乐事件嵌入层，包含词嵌入和位置编码
+    位置编码
 
     来源: https://github.com/pytorch/examples/blob/c0b889d5f43150f288ecdd5dbd16c146d79e5bdf/word_language_model/model.py#L65
     注入一些关于序列中标记的相对或绝对位置的信息。
@@ -45,96 +45,29 @@ class MusicEventEmbedding(nn.Module):
         \text{其中 pos 是单词位置，i 是维度索引}
     """
 
-    def __init__(self, embedding_dim: int, dropout: float = 0.1, device=torch.device("cpu")):
+    def __init__(self, embedding_dim: int):
         super().__init__()
         self.embedding_dim = embedding_dim
-        self.dropout = nn.Dropout(dropout)
-        self.token_embedding = nn.Embedding(VOCAB_SIZE, embedding_dim, device=device)
 
         # 初始化位置编码缓冲区
         self.register_buffer("positional_encoding", torch.tensor([]), persistent=False)
 
-        # 初始化权重
-        nn.init.normal_(self.token_embedding.weight)
-
-    def _generate_positional_encoding(self, max_length: int, device=torch.device("cpu")):
+    def _generate_positional_encoding(self, seq_length: int, device=torch.device("cpu")):
         "生成位置编码矩阵"
-        position = torch.arange(0, max_length, dtype=torch.float, device=device).unsqueeze(1)
+        position = torch.arange(0, seq_length, dtype=torch.float, device=device).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, self.embedding_dim, 2, device=device).float() * (-math.log(10000.0) / self.embedding_dim))
-        pe = torch.zeros(max_length, self.embedding_dim, device=device)
+        pe = torch.zeros(seq_length, self.embedding_dim, device=device)
         pe[:, 0::2] = torch.sin(position * div_term)  # 偶数维度使用sin
         pe[:, 1::2] = torch.cos(position * div_term)  # 奇数维度使用cos
         return pe
 
-    def _detect_event_changes(self, input_sequence: torch.Tensor):
-        """
-        检测输入序列中的事件变化点
-        返回每个batch中事件变化的索引列表
-        """
-        batch_event_changes = []
-
-        for sequence in input_sequence:
-            event_changes = []
-            note_counter = 0
-
-            for i in range(1, len(sequence)):
-                current_event = sequence[i]
-                previous_event = sequence[i - 1]
-
-                # 处理特殊控制事件
-                if 36 <= current_event <= 41:
-                    note_counter = 2
-
-                # 检测事件类型变化
-                if current_event < 12:  # 音符事件
-                    if previous_event >= 12 or note_counter > 0:  # 前一个是非音符或处于控制事件中
-                        event_changes.append(i)
-                    note_counter -= 1
-                elif previous_event < 12:  # 非音符事件且前一个是音符
-                    event_changes.append(i)
-
-            batch_event_changes.append(event_changes)
-
-        return batch_event_changes
-
-    def forward(self, input_tokens: torch.Tensor):
-        """
-        前向传播
-        1. 检测事件变化点
-        2. 应用词嵌入
-        3. 应用位置编码
-        4. 应用Dropout
-        """
-        # 检测事件变化点
-        event_change_indices = self._detect_event_changes(input_tokens)
-
+    def forward(self, x: torch.Tensor):
         # 确保位置编码足够长
-        max_events_needed = max(len(changes) for changes in event_change_indices) + 1
-        if max_events_needed > self.positional_encoding.size(0):
-            self.positional_encoding = self._generate_positional_encoding(max_events_needed, input_tokens.device)
+        if x.size(1) > self.positional_encoding.size(0):
+            self.positional_encoding = self._generate_positional_encoding(x.size(1), x.device)
 
-        # 应用词嵌入
-        embeddings = self.token_embedding(input_tokens) * math.sqrt(self.embedding_dim)
-
-        # 应用位置编码
-        for batch_idx, changes in enumerate(event_change_indices):
-            if not changes:
-                embeddings[batch_idx] += self.positional_encoding[0]
-                continue
-
-            # 第一个事件段
-            embeddings[batch_idx, :changes[0]] += self.positional_encoding[0]
-
-            # 中间事件段
-            for i, pos in enumerate(changes):
-                next_pos = changes[i + 1] if i + 1 < len(changes) else None
-                if next_pos:
-                    embeddings[batch_idx, pos:next_pos] += self.positional_encoding[i + 1]
-                else:
-                    embeddings[batch_idx, pos:] += self.positional_encoding[i + 1]
-
-        # 应用Dropout
-        return self.dropout(embeddings)
+        # 位置编码
+        return x + self.positional_encoding
 
 
 class MidiNet(nn.Module):
@@ -150,7 +83,10 @@ class MidiNet(nn.Module):
         self.num_layers = 12
 
         # 嵌入层
-        self.event_embedding = MusicEventEmbedding(VOCAB_SIZE, self.embedding_dim, dropout, device=device)
+        self.embedding = nn.Embedding(VOCAB_SIZE, self.embedding_dim, device=device)
+
+        # 位置编码
+        self.positional_encoding = PositionalEncoding(self.embedding_dim)
 
         # Transformer编码器层
         self.transformer_layers = nn.ModuleList(nn.TransformerEncoderLayer(
@@ -169,6 +105,7 @@ class MidiNet(nn.Module):
         self.register_buffer("causal_mask_cache", torch.tensor([], device=device), persistent=False)
 
         # 初始化权重
+        nn.init.normal_(self.embedding.weight)
         nn.init.kaiming_normal_(self.output_layer.weight)
         nn.init.zeros_(self.output_layer.bias)
 
@@ -190,7 +127,10 @@ class MidiNet(nn.Module):
         causal_mask = self._get_causal_mask(input_tokens.size(1), input_tokens.device) if use_causal_mask else None
 
         # 通过嵌入层
-        x = self.event_embedding(input_tokens)
+        x = self.embedding(input_tokens) * math.sqrt(self.embedding_dim)
+
+        # 通过位置编码
+        x = self.positional_encoding(x)
 
         # 通过Transformer层
         for layer in self.transformer_layers:

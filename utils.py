@@ -189,43 +189,43 @@ def notes_to_sheet(notes: list[tuple[int, int]], check_notes: int = 64) -> tuple
     pitches = [pitch - min_pitch for pitch in pitches]
 
     # 调整音高使其尽量落在自然音阶
-    offset, _ = max(
+    cur_offset, _ = max(
         [(offset, sum(((pitch + offset) % 12) in NATURAL_SCALE for pitch in pitches[:check_notes])) for offset in range(12)],
         key=lambda x: x[1]
     )
-    pitches = [pitch + offset for pitch in pitches]
 
     # 调整音高使其尽量集中在一个八度范围内
     octave_offset, _ = max(
-        [(octave_offset, sum(0 <= (pitch + octave_offset * 12) < 12 for pitch in pitches[:check_notes])) for octave_offset in range(-2, 2)],
+        [(octave_offset, sum(0 <= (pitch + cur_offset + octave_offset * 12) < 12 for pitch in pitches[:check_notes])) for octave_offset in range(-2, 2)],
         key=lambda x: x[1]
     )
-    pitches = [pitch + octave_offset * 12 for pitch in pitches]
+    cur_offset += octave_offset * 12
 
     # 开始转化
     sheet: list[tuple[str, int]] = []
     notes_positions: list[int] = []
     for i in range(len(pitches)):
-        original_pitch = pitches[i]
         offset_sum = 0
 
         # 如果当前音高不在自然音阶内，调整音高
-        if (original_pitch % 12) not in NATURAL_SCALE:
+        pitch = pitches[i] + cur_offset
+        if (pitch % 12) not in NATURAL_SCALE:
             offset, _ = max(
-                [(offset, sum(((pitch + offset) % 12) in NATURAL_SCALE for pitch in pitches[i:i + check_notes]) * check_notes + int(offset == 0)) for offset in range(12)],
+                [(offset, sum(((pitch + cur_offset + offset) % 12) in NATURAL_SCALE for pitch in pitches[i:i + check_notes]) * check_notes + int(offset == 0)) for offset in range(12)],
                 key=lambda x: x[1]
             )
             offset_sum += offset
-            pitches = [pitch + offset for pitch in pitches]
+            cur_offset += offset
 
         # 如果当前音高不在一个八度范围内，调整音高
-        if original_pitch < 0 or original_pitch > 11:
+        pitch = pitches[i] + cur_offset
+        if pitch < 0 or pitch > 11:
             octave_offset, _ = max(
-                [(octave_offset, sum(0 <= (pitch + octave_offset * 12) < 12 for pitch in pitches[i:i + check_notes]) * check_notes + int(octave_offset == 0)) for octave_offset in range(-2, 2)],
+                [(octave_offset, sum(0 <= (pitch + cur_offset + octave_offset * 12) < 12 for pitch in pitches[i:i + check_notes]) * check_notes + int(octave_offset == 0)) for octave_offset in range(-2, 2)],
                 key=lambda x: x[1]
             )
             offset_sum += octave_offset * 12
-            pitches = [pitch + octave_offset * 12 for pitch in pitches]
+            cur_offset += octave_offset * 12
 
         # 如果有音高偏移，在乐谱中做标记
         if offset_sum:
@@ -236,16 +236,16 @@ def notes_to_sheet(notes: list[tuple[int, int]], check_notes: int = 64) -> tuple
             sheet.append(("interval", intervals[i]))
 
         # 将当前音高调整到0-11范围内，并记录八度跳跃
-        cur_pitch = pitches[i]
-        if cur_pitch < 0 or cur_pitch > 11:
+        pitch = pitches[i] + cur_offset
+        if pitch < 0 or pitch > 11:
             notes_positions.append(len(sheet))
-            sheet.append(("octave_jump", cur_pitch // 12))
-            cur_pitch %= 12
+            sheet.append(("octave_jump", pitch // 12))
+            pitch %= 12
         else:
             notes_positions.append(len(sheet))
 
         # 记录音符
-        sheet.append(("note", cur_pitch))
+        sheet.append(("note", pitch))
 
     # 返回结果
     return sheet, notes_positions
