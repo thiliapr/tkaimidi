@@ -222,10 +222,6 @@ def train(
     # 将模型移动到设备
     model = model.to(device)
 
-    # 检查是否使用多GPU
-    if torch.cuda.device_count() > 1:
-        model = DataParallel(model)  # 使用 DataParallel 进行多GPU训练
-
     # 初始化记录
     train_loss = []
     val_loss = []
@@ -449,6 +445,10 @@ def main():
         optimizer = create_optimizer()  # 初始化优化器
         old_train_loss, old_val_loss, old_train_accuracy, old_val_accuracy = [], [], [], []  # 初始化损失和准确率记录
         train_start = random.randint(0, len(dataset) - 1)  # 随机选择训练起点
+
+    # 检查是否使用多GPU
+    if torch.cuda.device_count() > 1:
+        model = DataParallel(model)  # 使用 DataParallel 进行多GPU训练
 
     # 开始训练模型
     train_loss, val_loss, train_accuracy, val_accuracy = train(
