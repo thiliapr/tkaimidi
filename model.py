@@ -78,9 +78,9 @@ class MidiNet(nn.Module):
     def __init__(self, dropout: float = 0.1, device: torch.device = torch.device("cpu")):
         super().__init__()
         self.embedding_dim = 768
-        self.num_heads = 12
+        self.num_heads = 8
         self.ff_dim = 1536
-        self.num_layers = 12
+        self.num_layers = 6
 
         # 嵌入层
         self.embedding = nn.Embedding(VOCAB_SIZE, self.embedding_dim, device=device)
