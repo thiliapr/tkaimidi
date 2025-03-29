@@ -36,16 +36,17 @@ graph TD
 ### `train.py`
 训练用的函数、数据集。
 
-## 提醒
-文件都是在[Kaggle](https://www.kaggle.com/)上运行的，且数据集路径和平常环境不同，所以你需要修改代码以适应你自己的环境。
+## 无关软件本身的广告
+### Join the Blue Ribbon Online Free Speech Campaign!
+![Blue Ribbon Campaign Logo](https://www.eff.org/files/brstrip.gif)
 
-## 作者闲话
-我刚写这个的时候没想到许可证的问题，后来写了很多个版本才突然想起来。当时听说`AGPL`非常自由，比`GPL`自由（因为使用以`AGPL`分发的软件的话，即使使用网络提供在线服务，也需要提供给用户源代码，而`GPL`不用），身为一个深受专有软件伤害的人，我觉得自由软件才是我的最佳选择。可惜很多自由的软件不好用[^NotGoodButFree]，很多好用的软件不自由[^NotFreeButGood]。更糟的是，有些软件即不自由、也不好用（说你呢，微信、QQ还有国家反诈中心APP）。
+支持[Blue Ribbon Online 言论自由运动](https://www.eff.org/pages/blue-ribbon-campaign)！  
+你可以通过向其[捐款](https://supporters.eff.org/donate)以表示支持。
 
-这个项目早期是在Kaggle上跑的，是后来搬到Github上的，所以看历史版本建议[去Kaggle看](https://www.kaggle.com/code/yigk4out/tkaimidi)，早期的名字是`musicmidi`。
+## 支持自由软件运动
+为什么要自由软件: [GNU 宣言](https://www.gnu.org/gnu/manifesto.html)
 
-[^NotGoodButFree]: 如[MIDIEdtior(网站的HTTPS证书都是自注册的)](http://www.midieditor.org/), [本项目](https://github.com/thiliapr/tkaimidi)
-[^NotFreeButGood]: 如[Cakewalk](https://www.bandlab.com/products/cakewalk), [Sublime Text](https://www.sublimetext.com/), [TeamViewer](https://www.teamviewer.com/), [Steam](https://store.steampowered.com/), [Minecraft](https://www.minecraft.net/), 一众Galgame等
-
-## 其他
-代码周更，文档年更
+你可以通过以下方式支持自由软件运动:
+- 向非自由程序或在线敌服务说不，哪怕只有一次，也会帮助自由软件。不和其他人使用它们会帮助更大。进一步，如果你告诉人们这是在捍卫自己的自由，那么帮助就更显著了。
+- [帮助 GNU 工程和自由软件运动](https://www.gnu.org/help/help.html)
+- [向 FSF 捐款](https://www.fsf.org/about/ways-to-donate/)
