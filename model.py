@@ -45,11 +45,11 @@ class MusicEventEmbedding(nn.Module):
         \text{其中 pos 是单词位置，i 是维度索引}
     """
 
-    def __init__(self, vocab_size: int, embedding_dim: int, dropout: float = 0.1, device=torch.device("cpu")):
+    def __init__(self, embedding_dim: int, dropout: float = 0.1, device=torch.device("cpu")):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.dropout = nn.Dropout(dropout)
-        self.token_embedding = nn.Embedding(vocab_size, embedding_dim, device=device)
+        self.token_embedding = nn.Embedding(VOCAB_SIZE, embedding_dim, device=device)
 
         # 初始化位置编码缓冲区
         self.register_buffer("positional_encoding", torch.tensor([]), persistent=False)
@@ -119,6 +119,7 @@ class MusicEventEmbedding(nn.Module):
         # 应用位置编码
         for batch_idx, changes in enumerate(event_change_indices):
             if not changes:
+                embeddings[batch_idx] += self.positional_encoding[0]
                 continue
 
             # 第一个事件段
