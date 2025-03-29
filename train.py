@@ -390,7 +390,7 @@ def main():
         "lr": 1e-3,  # 学习率
         "weight_decay": 1e-2,  # 权重衰减系数
         "seq_length": 768,  # 输入序列的大小 - 1
-        "num_epochs": 1,  # 训练多少个Epoch
+        "num_epochs": 3,  # 训练多少个Epoch
         "train_batch_size": 16,  # 训练时的批量大小
         "val_batch_size": 16,  # 验证时的批量大小，越大验证结果越准确，但是资源使用倍数增加，验证时间也增加（但没有资源使用增加得多）
         "train_length": 0.8,  # 训练集占数据集的比例，用来保证用来验证的数据不被训练
