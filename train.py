@@ -65,14 +65,14 @@ class MidiDataset(Dataset):
 
     Args:
         path: MIDI文件存储路径（支持嵌套目录结构）
-        seq_size: 输入序列长度 + 1
+        seq_length: 输入序列长度 + 1
         interval_repeat: 音符过少重复时，两段音乐的时间间隔
         show_progress: 显示进度条
     """
 
-    def __init__(self, path: pathlib.Path, seq_size: int, interval_repeat: int = 8, show_progress: bool = True):
+    def __init__(self, path: pathlib.Path, seq_length: int, interval_repeat: int = 8, show_progress: bool = True):
         self.data: list = []  # 存储每个 MIDI 文件的数据
-        self.seq_size = seq_size  # 基础序列长度 (用于模型输入的上下文窗口)
+        self.seq_length = seq_length  # 基础序列长度 (用于模型输入的上下文窗口)
         self.length = 0  # 经过数据增强后的总样本数
 
         # 遍历目录获取MIDI文件 (按文件名排序保证可重复性)
@@ -90,36 +90,23 @@ class MidiDataset(Dataset):
             normalized_data = normalize_times(parsed_data, TIME_PRECISION, strict=True)
 
             # 转换格式
-            data = sheet_to_model(notes_to_sheet(normalized_data, 128))
+            sheet, notes_positions = notes_to_sheet(normalized_data)
+            data, sheet_positions = sheet_to_model(sheet)
 
             # 通过循环填充达到最小长度要求
-            if len(data) < seq_size:
-                normalized_data[0] = (normalized_data[0][0], interval_repeat)
-                normalized_data *= seq_size // len(data) + 1  # 重复数据，确保序列长度足够
-                normalized_data[0] = (normalized_data[0][0], 0)
-                data = sheet_to_model(notes_to_sheet(normalized_data, 128))
+            if len(data) < seq_length:
+                normalized_data[0] = (normalized_data[0][0], interval_repeat)  # 调整第一个音符的时间间隔，使重复的音乐段落有时间间隔
+                normalized_data *= seq_length // len(data) + 1  # 重复数据，确保序列长度足够
+                normalized_data[0] = (normalized_data[0][0], 0)  # 恢复第一个音符的时间间隔
+                sheet, notes_positions = notes_to_sheet(normalized_data)
+                data, sheet_positions = sheet_to_model(sheet)
 
-            # 探测每个子序列的位置
-            seq_indexes: list[int] = []
-            after_interval = True  # 指针在至少一个时间间隔之后
-            allow_note = True  # 是否允许音符
-            for i in range(len(data) - seq_size):
-                cont = False
-                if 36 <= data[i] <= 39 and after_interval and allow_note:
-                    allow_note = False
-                    cont = True
-                elif data[i] == 40:
-                    after_interval = True
-                elif data[i] < 12:
-                    if after_interval and allow_note:
-                        cont = True
-                    allow_note = True
-                    after_interval = False
-                if not cont:
-                    continue
-
-                seq_indexes.append(i)
-
+            seq_indexes: list[int] = [
+                sheet_positions[note_position]  # 获取音符在模型数据的位置
+                for note_index, note_position in enumerate(notes_positions)
+                if ((normalized_data[note_index][1] != 0) or (note_index == 0))  # 排除与前一个音符的时间间隔为零的音符
+                and (len(sheet) - sheet_positions[note_position]) >= seq_length  # 排除序列长度不足要求的音符
+            ]
             self.length += len(seq_indexes)
             self.data.append((data, seq_indexes))
 
@@ -137,7 +124,7 @@ class MidiDataset(Dataset):
                 index -= len(seq_indexes)
                 continue
             seq_index = seq_indexes[index]
-            seq = filedata[seq_index:seq_index + self.seq_size]
+            seq = filedata[seq_index:seq_index + self.seq_length]
 
         # 返回输入和目标序列
         return torch.tensor(seq[:-1]), torch.tensor(seq[1:])
@@ -399,10 +386,10 @@ def main():
     config = {
         "pretrained_ckpt": "/kaggle/input/tkaimidi/pytorch/default/1/ckpt",  # 预训练模型的检查点路径，可以为空
         "local_ckpt": "ckpt",  # 在本地保存的检查点的路径，训练结束后会保存到这里
-        "external_datasets_path": ["/kaggle/input/music-midi"],  # 外部数据集的路径列表
+        "external_datasets_path": ["data"],  # 外部数据集的路径列表
         "lr": 1e-3,  # 学习率
         "weight_decay": 1e-2,  # 权重衰减系数
-        "seq_size": 768,  # 输入序列的大小 - 1
+        "seq_length": 768,  # 输入序列的大小 - 1
         "num_epochs": 1,  # 训练多少个Epoch
         "train_batch_size": 16,  # 训练时的批量大小
         "val_batch_size": 16,  # 验证时的批量大小，越大验证结果越准确，但是资源使用倍数增加，验证时间也增加（但没有资源使用增加得多）
@@ -428,7 +415,7 @@ def main():
         shutil.copytree(path, local_dataset_path / path.name, dirs_exist_ok=True)
 
     # 加载训练数据集
-    dataset = MidiDataset(local_dataset_path, seq_size=config["seq_size"])
+    dataset = MidiDataset(local_dataset_path, seq_length=config["seq_length"])
 
     # 获取设备（GPU 或 CPU）
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

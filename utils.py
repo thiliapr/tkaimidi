@@ -165,7 +165,7 @@ def normalize_times(
     return result
 
 
-def notes_to_sheet(notes: list[tuple[int, int]], check_notes: int = 64) -> list[tuple[str, int]]:
+def notes_to_sheet(notes: list[tuple[int, int]], check_notes: int = 64) -> tuple[list[tuple[str, int]], list[int]]:
     """
     将MIDI音符列表转换为电子乐谱，通过调整音高使其尽可能符合自然音阶并集中在一个八度范围内。
 
@@ -179,6 +179,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], check_notes: int = 64) -> list[
             - key_shift: 全局音高偏移的半音数
             - octave_jump: 一个音符跳跃的八度数
             - interval: 两个音符的时间间隔
+        原本音符对应在乐谱的位置。
     """
     # 分离音高和时间间隔
     pitches, intervals = (list(item) for item in zip(*notes))
@@ -203,6 +204,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], check_notes: int = 64) -> list[
 
     # 开始转化
     sheet: list[tuple[str, int]] = []
+    notes_positions: list[int] = []
     for i in range(len(pitches)):
         original_pitch = pitches[i]
         offset_sum = 0
@@ -229,19 +231,24 @@ def notes_to_sheet(notes: list[tuple[int, int]], check_notes: int = 64) -> list[
         if offset_sum:
             sheet.append(("key_shift", offset_sum))
 
+        # 记录时间间隔
+        if intervals[i]:
+            sheet.append(("interval", intervals[i]))
+
         # 将当前音高调整到0-11范围内，并记录八度跳跃
         cur_pitch = pitches[i]
         if cur_pitch < 0 or cur_pitch > 11:
+            notes_positions.append(len(sheet))
             sheet.append(("octave_jump", cur_pitch // 12))
             cur_pitch %= 12
+        else:
+            notes_positions.append(len(sheet))
 
-        # 记录音符和时间间隔
-        if intervals[i]:
-            sheet.append(("interval", intervals[i]))
+        # 记录音符
         sheet.append(("note", cur_pitch))
 
     # 返回结果
-    return sheet
+    return sheet, notes_positions
 
 
 def sheet_to_notes(sheet: list[tuple[str, int]]) -> list[tuple[int, int]]:
@@ -291,16 +298,22 @@ def sheet_to_model(sheet: list[tuple[str, int]]) -> list[int]:
     Returns:
         模型数据:
             - 0-11: 音符 (0-11表示音阶中的音高)
-            - 12-23: 全局音高向下偏移的半音数。如果乐谱中小于-12，被转换成多个向下跳跃。
-            - 24-35: 全局音高向上偏移的半音数。如果乐谱中大于12，被转换成多个向下跳跃。
-            - 36-37: 一个音符向下跳跃的八度数。如果乐谱中小于-2，被转换成多个向下跳跃。
-            - 38-39: 一个音符向上跳跃的八度数。如果乐谱中大于2，被转换成多个向上跳跃。
-            - 40: 时间间隔单位。乐谱中的时间间隔(值大于1)，被转换成多个时间间隔单位。
+            - 12-23: 全局音高向下偏移的半音数。如果值小于-12，被转换成多个向下跳跃。
+            - 24-35: 全局音高向上偏移的半音数。如果值大于12，被转换成多个向下跳跃。
+            - 36-38: 一个音符向下跳跃的八度数。如果值小于-3，被转换成多个向下跳跃。
+            - 39-41: 一个音符向上跳跃的八度数。如果值大于3，被转换成多个向上跳跃。
+            - 42-43: 时间间隔。如果值大于2，被转换成多个时间间隔。
+        原本乐谱在模型输入格式中对应的位置
     """
     model_data = []
+    sheet_positions = []
 
     for event, value in sheet:
-        if event == "key_shift":
+        sheet_positions.append(len(model_data))
+        if event == "note":
+            # 处理音符
+            model_data.append(value)  # 0-11表示音阶中的音高
+        elif event == "key_shift":
             # 处理全局音高偏移
             if value < 0:
                 # 向下偏移
@@ -320,29 +333,26 @@ def sheet_to_model(sheet: list[tuple[str, int]]) -> list[int]:
             # 处理八度跳跃
             if value < 0:
                 # 向下跳跃
-                while value < -2:
-                    model_data.append(37)
-                    value += 2
+                while value < -3:
+                    model_data.append(38)
+                    value += 3
                 if value:
-                    model_data.append(35 - value)  # 36-37表示一个音符向下跳跃1-2个八度
+                    model_data.append(35 - value)  # 36-38表示一个音符向下跳跃1-3个八度
             else:
                 # 向上跳跃
                 while value > 2:
-                    model_data.append(39)
+                    model_data.append(41)
                     value -= 2
                 if value:
-                    model_data.append(37 + value)  # 38-39表示一个音符向上跳跃1-2个八度
-        elif event == "note":
-            # 处理音符
-            model_data.append(value)  # 0-11表示音阶中的音高
+                    model_data.append(38 + value)  # 39-41表示一个音符向上跳跃1-3个八度
         elif event == "interval":
             # 处理时间间隔
-            for _ in range(value):
-                model_data.append(40)  # 40表示时间间隔单位
-        else:
-            raise ValueError(f"Unknown event type: {event}")
+            while value > 2:
+                model_data.append(43)
+                value -= 2
+            model_data.append(41 + value)  # 42-43表示时间间隔
 
-    return model_data
+    return model_data, sheet_positions
 
 
 def model_to_sheet(model_data: list[int]) -> list[tuple[str, int]]:
@@ -356,42 +366,29 @@ def model_to_sheet(model_data: list[int]) -> list[tuple[str, int]]:
         电子乐谱
     """
     sheet = []
-    i = 0
-    n = len(model_data)
-
-    while i < n:
-        value = model_data[i]
-
-        if 0 <= value <= 11:
+    for value in model_data:
+        if 0 <= value < 12:
             # 处理音符
             sheet.append(("note", value))
-        elif 12 <= value <= 23:
+        elif value < 24:
             # 处理全局音高向下偏移
             offset = 11 - value
             sheet.append(("key_shift", offset))
-        elif 24 <= value <= 35:
+        elif value < 36:
             # 处理全局音高向上偏移
             offset = value - 23
             sheet.append(("key_shift", offset))
-        elif 36 <= value <= 37:
+        elif value < 39:
             # 处理一个音符向下跳跃的八度数
             octave_jump = 35 - value
             sheet.append(("octave_jump", octave_jump))
-        elif 38 <= value <= 39:
+        elif value < 42:
             # 处理一个音符向上跳跃的八度数
-            octave_jump = value - 37
+            octave_jump = value - 38
             sheet.append(("octave_jump", octave_jump))
-        elif value == 40:
+        elif value < 44:
             # 处理时间间隔单位
-            interval_count = 1
-            while i + 1 < n and model_data[i + 1] == 40:
-                interval_count += 1
-                i += 1
-            sheet.append(("interval", interval_count))
-        else:
-            raise ValueError(f"Unknown model data value: {value}")
-
-        i += 1
+            sheet.append(("interval", value - 41))
 
     return sheet
 
