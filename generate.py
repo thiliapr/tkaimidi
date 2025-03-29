@@ -109,7 +109,7 @@ def generate_midi(
 
         # 获取模型预测
         with torch.no_grad():
-            logits = model(input_tensor, mask=False)[0, -1, :]
+            logits = model(input_tensor)[0, -1, :]
 
         # 应用温度缩放
         probs = F.softmax(logits / temperature, dim=-1)
