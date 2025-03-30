@@ -57,7 +57,7 @@ class MidiNet(nn.Module):
         nn.init.kaiming_normal_(self.output_layer.weight)
         nn.init.zeros_(self.output_layer.bias)
 
-    def forward(self, input_tokens: torch.Tensor):
+    def forward(self, input_tokens: torch.Tensor, hidden: tuple[torch.Tensor, torch.Tensor] | None = None):
         """
         前向传播
 
@@ -68,11 +68,12 @@ class MidiNet(nn.Module):
         x = self.dropout(self.embedding(input_tokens))
 
         # 通过LSTM层
-        x = self.dropout(self.lstm(x)[0])
+        x, hidden = self.lstm(x, hidden)
+        x = self.dropout(x)
 
         # 输出预测
         logits = self.output_layer(x)
-        return logits
+        return logits, hidden
 
 
 def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, train_loss: list[list[float]], val_loss: list[float], train_accuracy: list[float], val_accuracy: list[float], dataset_length: int, train_start: int, path: pathlib.Path):

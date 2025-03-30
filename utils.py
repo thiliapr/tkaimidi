@@ -342,7 +342,7 @@ def sheet_to_model(sheet: list[tuple[str, int]]) -> list[int]:
                 # 向上跳跃
                 while value > 2:
                     model_data.append(41)
-                    value -= 2
+                    value -= 3
                 if value:
                     model_data.append(38 + value)  # 39-41表示一个音符向上跳跃1-3个八度
         elif event == "interval":

@@ -107,13 +107,15 @@ def generate_midi(
     generator = torch.Generator(device=device).manual_seed(seed)  # 固定随机种子，确保每次生成结果一致
 
     # 生成循环
+    hidden = None
     for i in (tqdm.tqdm(range(length), desc="Generate MIDI") if progress else range(length)):
         # 准备模型输入
         input_tensor = torch.tensor(input_prompt, dtype=torch.long).unsqueeze(0)
 
         # 获取模型预测
         with torch.no_grad():
-            logits = model(input_tensor)[0, -1, :]
+            logits, hidden = model(input_tensor, hidden)
+            logits = logits[0, -1, :]
 
         # 应用温度缩放
         probs = F.softmax(logits / temperature, dim=-1)

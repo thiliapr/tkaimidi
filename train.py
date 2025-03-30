@@ -241,7 +241,7 @@ def train(
         for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device).view(-1)
             optimizer.zero_grad()  # 清空优化器中的梯度
-            outputs = model(inputs).view(-1, VOCAB_SIZE)  # 前向传播
+            outputs = model(inputs)[0].view(-1, VOCAB_SIZE)  # 前向传播
             loss = F.cross_entropy(outputs, labels)  # 计算交叉熵损失
 
             # 检查损失是否为 NaN
@@ -272,7 +272,7 @@ def train(
                 if val_step >= steps_to_val:
                     break  # 达到验证批次上限，停止验证
 
-                outputs = model(inputs).view(-1, VOCAB_SIZE)  # 前向传播
+                outputs = model(inputs)[0].view(-1, VOCAB_SIZE)  # 前向传播
                 loss = F.cross_entropy(outputs, labels)  # 计算验证损失
                 epoch_val_loss.append(loss.item())  # 累计验证损失
                 epoch_val_acc.append((torch.argmax(outputs) == labels).sum().item() / labels.size(-1))  # 累积验证准确率
