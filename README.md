@@ -1,14 +1,25 @@
 # Tk AI MIDI
 ## 简介
-这是一个基于`LSTM`的MIDI生成模型。
+这是一个基于`LSTM`的MIDI生成模型，旨在通过深度学习技术生成音乐作品。
 
 ## License
 ![GNU AGPL Version 3 Official Logo](https://www.gnu.org/graphics/agplv3-with-text-162x68.png)
 
-本项目采用[GNU AGPLv3 or later](https://www.gnu.org/licenses/agpl-3.0.html)许可证。您可以自由使用、修改和分发本项目的代码，但必须在相同许可证或其任何后续版本下进行。
+TkTransl 是自由软件，遵循[Affero GNU 通用公共许可证）第 3 版或任何后续版本]((https://www.gnu.org/licenses/agpl-3.0.html))。你可以自由地使用、修改和分发该软件，但不提供任何明示或暗示的担保。有关详细信息，请参见 GNU 通用公共许可证。
 
-## 联系方式
-- Email: thiliapr@tutanota.com
+## 安装与依赖
+```bash
+pip install -r requirements.txt
+```
+
+## 使用说明
+对着`train.py`的`main()`的`config`变量改就是了，注释已经很清晰了。
+
+### 运行程序
+在命令行中运行以下命令以启动 TkTransl:
+```bash
+python tktransl.py
+```
 
 ## 各个文件的作用
 ### `model.py`
@@ -36,7 +47,14 @@ graph TD
 ### `train.py`
 训练用的函数、数据集。
 
-## 无关软件本身的广告
+## 贡献
+欢迎任何形式的贡献，包括报告问题、提交功能请求或代码贡献。请遵循项目的贡献指南。
+
+## 联系信息
+如有任何问题或建议，请联系项目维护者 thiliapr。
+- Email: thiliapr@tutanota.com
+
+# 无关软件本身的广告
 ### Join the Blue Ribbon Online Free Speech Campaign!
 ![Blue Ribbon Campaign Logo](https://www.eff.org/files/brstrip.gif)
 
