@@ -78,7 +78,8 @@ def generate_midi(
     seed: int,
     length: int,
     temperature: float = 1,
-    progress: bool = True
+    progress: bool = True,
+    device: torch.device = torch.device("cpu")
 ) -> mido.MidiTrack:
     """
     使用模型生成 MIDI 音乐轨道
@@ -90,6 +91,7 @@ def generate_midi(
         length: 需要生成的音符数量
         temperature: 采样温度（大于1增加多样性，小于1减少随机性）
         progress: 显示进度条
+        device: 设备
 
     Returns:
         生成的 MIDI 轨道
@@ -100,8 +102,9 @@ def generate_midi(
     # 将音符和时间编码为模型输入序列
     input_prompt, _ = sheet_to_model(sheet)
 
+    model = model.to(device)  # 移动模型到设备上
     model.eval()  # 将模型设置为评估模式
-    generator = torch.Generator().manual_seed(seed)  # 固定随机种子，确保每次生成结果一致
+    generator = torch.Generator(device=device).manual_seed(seed)  # 固定随机种子，确保每次生成结果一致
 
     # 生成循环
     for i in (tqdm.tqdm(range(length), desc="Generate MIDI") if progress else range(length)):
@@ -158,7 +161,8 @@ def main():
         prompt=LOVE_TRADING_MIDI,
         model=model,
         seed=42,
-        length=512
+        length=512,
+        device=device
     )
     if track is not None:
         mido.MidiFile(tracks=[track]).save("example.mid")
