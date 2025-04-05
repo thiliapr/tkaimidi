@@ -55,13 +55,13 @@ graph TD
 - Email: thiliapr@tutanota.com
 
 # 无关软件本身的广告
-### Join the Blue Ribbon Online Free Speech Campaign!
+## Join the Blue Ribbon Online Free Speech Campaign!
 ![Blue Ribbon Campaign Logo](https://www.eff.org/files/brstrip.gif)
 
 支持[Blue Ribbon Online 言论自由运动](https://www.eff.org/pages/blue-ribbon-campaign)！  
 你可以通过向其[捐款](https://supporters.eff.org/donate)以表示支持。
 
-### 支持自由软件运动
+## 支持自由软件运动
 为什么要自由软件: [GNU 宣言](https://www.gnu.org/gnu/manifesto.html)
 
 你可以通过以下方式支持自由软件运动:
