@@ -2,3 +2,5 @@ mido
 torch
 tqdm
 matplotlib
+tokenizers
+transformers

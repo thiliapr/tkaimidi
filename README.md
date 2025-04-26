@@ -12,40 +12,14 @@ TkTransl 是自由软件，遵循[Affero GNU 通用公共许可证）第 3 版�
 pip install -r requirements.txt
 ```
 
-## 使用说明
-对着`train.py`的`main()`的`config`变量改就是了，注释已经很清晰了。
-
-### 运行程序
-在命令行中运行以下命令以启动 TkTransl:
+## 训练
 ```bash
-python tktransl.py
+python3 tokenizer.py ${samples_path}  # 训练分词器
+python3 train.py ${num_epochs} ${train_dataset_path}  # 训练模型
 ```
 
-## 各个文件的作用
-### `model.py`
-模型的结构代码。还有保存、加载模型和恢复训练所需的数据的工具函数。
-```mermaid
-graph TD
-    subgraph MidiNet:
-        direction TB
-        Embedding[嵌入层] --> PositionalEncoding[位置编码] --> LSTM[LSTM] --> Linear[全连接层]
-    end
-```
-
-### `utils.py`
-一些训练和推理会用到的工具，包括转换MIDI为音符列表、规范化音符数据、清理缓存的函数
-
-### `generate.py`
-以下为生成MIDI的流程
-```mermaid
-graph TD
-    OriginalInput[输入原始提示] --> NormData[规范化数据] -->|作为模型输入的预处理提示| ModelForward[模型前向传播] -->|下一个音符的概率分布| Multinomial[根据概率选择一个] --> AppendToPrompt[添加到提示] --> IsStop{是否生成足够音符}
-    IsStop -->|是| ConvertToTrack[将模型输出转化为MIDI轨道] --> WriteToFile[写入文件]
-    IsStop -->|否| ModelForward
-```
-
-### `train.py`
-训练用的函数、数据集。
+## 生成
+测试中。。。
 
 ## 贡献
 欢迎任何形式的贡献，包括报告问题、提交功能请求或代码贡献。请遵循项目的贡献指南。

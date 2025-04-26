@@ -9,18 +9,24 @@
 import sys
 import pathlib
 import mido
-import tqdm
 import torch
 import torch.nn.functional as F
 from torch.nn import DataParallel
+from transformers import PreTrainedTokenizerFast
 
 # 内置音乐曲库
 LOVE_TRADING_MIDI = [(45, 0), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (84, 0), (64, 1), (84, 1), (76, 2), (81, 2), (57, 1), (69, 1), (84, 0), (64, 1), (60, 1), (43, 2), (83, 0), (50, 1), (55, 1), (83, 0), (57, 1), (59, 1), (81, 0), (62, 1), (79, 1), (76, 2), (55, 3), (67, 1), (62, 1), (59, 1), (55, 1), (41, 1), (74, 0), (48, 1), (53, 1), (74, 0), (55, 1), (57, 1), (74, 0), (60, 1), (69, 1), (74, 2), (76, 2), (53, 1), (65, 1), (79, 0), (60, 1), (57, 1), (43, 2), (76, 0), (50, 1), (55, 1), (83, 0), (57, 1), (59, 1), (83, 0), (62, 1), (79, 1), (76, 2), (74, 3), (71, 1), (67, 1), (62, 1), (64, 1), (45, 1), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (84, 0), (64, 1), (84, 1), (76, 2), (81, 2), (57, 1), (69, 1), (84, 0), (64, 1), (60, 1), (43, 2), (88, 0), (50, 1), (55, 1), (88, 0), (57, 1), (59, 1), (86, 0), (62, 1), (84, 1), (86, 2), (55, 3), (67, 1), (62, 1), (59, 1), (55, 1), (41, 1), (88, 0), (48, 1), (53, 1), (55, 1), (88, 0), (57, 1), (86, 0), (60, 1), (84, 1), (43, 2), (86, 0), (50, 1), (55, 1), (57, 1), (86, 0), (59, 1), (84, 0), (62, 1), (83, 1), (45, 2), (79, 0), (52, 1), (57, 1), (76, 0), (59, 1), (60, 1), (79, 0), (64, 1), (81, 1), (81, 2), (76, 3), (72, 1), (69, 1), (64, 1), (69, 1)]
 
-# 在非Jupyter环境下导入模型库
-if "get_ipython" not in globals():
-    from model import MidiNet, TIME_PRECISION, load_checkpoint
-    from utils import notes_to_sheet, sheet_to_model, model_to_sheet, sheet_to_notes
+# 根据是否在 Jupyter 环境下导入不同库
+if "get_ipython" in globals():
+    from tqdm.notebook import tqdm_notebook as tqdm
+else:
+    from tqdm import tqdm
+    from constants import TIME_PRECISION
+    from model import MidiNet
+    from checkpoint import load_checkpoint
+    from utils import notes_to_sheet, sheet_to_notes
+    from tokenizer import data_to_str, str_to_data
 
 
 def notes_to_track(notes: list[int]) -> mido.MidiTrack:
@@ -75,11 +81,11 @@ def notes_to_track(notes: list[int]) -> mido.MidiTrack:
 def generate_midi(
     prompt: list[tuple[int, int]],
     model: MidiNet,
+    tokenizer: PreTrainedTokenizerFast,
     seed: int,
-    length: int,
     temperature: float = 1,
-    progress: bool = True,
-    device: torch.device = torch.device("cpu")
+    show_progress: bool = True,
+    device: torch.device = None
 ) -> mido.MidiTrack:
     """
     使用模型生成 MIDI 音乐轨道
@@ -87,10 +93,10 @@ def generate_midi(
     Args:
         model: 用于生成的神经网络模型
         prompt: 初始音符序列，格式为 [(音高, 时间单位), ...]
+        tokenizer: 分词器
         seed: 随机种子
-        length: 需要生成的音符数量
         temperature: 采样温度（大于1增加多样性，小于1减少随机性）
-        progress: 显示进度条
+        show_progress: 显示进度条
         device: 设备
 
     Returns:
@@ -99,22 +105,24 @@ def generate_midi(
     # 将音符和时间转换为电子乐谱
     sheet, _ = notes_to_sheet(prompt)
 
-    # 将音符和时间编码为模型输入序列
-    input_prompt, _ = sheet_to_model(sheet)
+    # 将电子乐谱通过分词器转化为模型输入序列
+    input_prompt = tokenizer.encode(data_to_str(sheet))[:-1]
 
     model = model.to(device)  # 移动模型到设备上
     model.eval()  # 将模型设置为评估模式
     generator = torch.Generator(device=device).manual_seed(seed)  # 固定随机种子，确保每次生成结果一致
 
     # 生成循环
-    hidden = None
-    for i in (tqdm.tqdm(range(length), desc="Generate MIDI") if progress else range(length)):
+    if show_progress:
+        progress_bar = tqdm(desc="Generate MIDI")
+
+    while input_prompt[-1] != tokenizer.eos_token_id:
         # 准备模型输入
         input_tensor = torch.tensor(input_prompt, dtype=torch.long).unsqueeze(0)
 
         # 获取模型预测
         with torch.no_grad():
-            logits, hidden = model(input_tensor, hidden)
+            logits = model(input_tensor)
             logits = logits[0, -1, :]
 
         # 应用温度缩放
@@ -123,8 +131,13 @@ def generate_midi(
         # 采样
         input_prompt.append(torch.multinomial(probs, 1, generator=generator).item())
 
+        # 更新进度条
+        progress_bar.update()
+
+    progress_bar.close()
+
     # 模型输出转换为音符时间
-    output_notes = sheet_to_notes(model_to_sheet(input_prompt))
+    output_notes = sheet_to_notes(str_to_data("".join(tokenizer.convert_ids_to_tokens(input_prompt[1:-1]))))
 
     # 调整到音高平均值到中间
     pitches = list(zip(*output_notes))[0]
@@ -139,17 +152,20 @@ def generate_midi(
 
 
 def main():
-    # 初始化模型
-    model = MidiNet()
-
     # 加载模型的预训练检查点
-    try:
-        state = load_checkpoint(pathlib.Path("ckpt"), train=False)
-        model.load_state_dict(state)
-    except Exception as e:
-        print(f"Error in LoadCKPT: {e}")
+    tokenizer, state = load_checkpoint(pathlib.Path("ckpt"), train=False)
 
-    # 获取设备（GPU 或 CPU）
+    # 获取模型参数
+    vocab_size, d_model = state["embedding.weight"].size()
+    dim_feedforward = state["transformer.layers.0.linear1.weight"].size(0)
+    num_heads = 8
+    num_layers = len(set(key.split(".")[2] for key in state.keys() if key.startswith("transformer.layers.")))
+
+    # 初始化模型并加载状态
+    model = MidiNet(vocab_size, d_model, num_heads, dim_feedforward, num_layers)
+    model.load_state_dict(state)
+
+    # 获取设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 转移模型到设备
@@ -159,13 +175,7 @@ def main():
     if torch.cuda.device_count() > 1:
         model = DataParallel(model)  # 使用 DataParallel 进行多 GPU 推理
 
-    track = generate_midi(
-        prompt=LOVE_TRADING_MIDI,
-        model=model,
-        seed=42,
-        length=512,
-        device=device
-    )
+    track = generate_midi(LOVE_TRADING_MIDI, model, tokenizer, seed=42, device=device)
     if track is not None:
         mido.MidiFile(tracks=[track]).save("example.mid")
 

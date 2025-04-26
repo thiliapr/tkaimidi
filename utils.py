@@ -10,250 +10,162 @@
 import math
 import mido
 
-NATURAL_SCALE = {0, 2, 4, 5, 7, 9, 11}
+# 在非 Jupyter 环境下导入常量库
+if "get_ipython" not in globals():
+    from constants import NATURAL_SCALE, TIME_PRECISION
 
 
-def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int, int, int]]:
+def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     """
-    将MIDI文件解析为结构化音符数据，支持多轨道处理和打击乐通道检测。
+    从给定的MIDI文件中提取音符信息并返回一个包含音符及其相对时间间隔的列表。
+
+    本函数首先合并所有轨道，并按时间顺序整理所有MIDI消息。它会跳过打击乐通道（MIDI通道10），
+    只处理其他通道的`note_on`事件。接着，函数对音符的相对时间间隔进行优化和量化，
+    最后返回包含音符及其时间间隔的列表，时间间隔会通过最大公约数进行压缩，确保时间间隔的最小化。
 
     Args:
-        midi_file: 输入的MIDI文件对象
+        midi_file: 要提取的MIDI文件对象
 
     Returns:
-        音符列表，每个元组包含:
-            - 通道号 (0-15)
-            - 音高 (0-127)
-            - 起始时间 (绝对时间，单位ticks)
-            - 持续时间 (单位ticks)
+        一个包含音符和相对时间间隔的列表，每个元素为一个元组(音高，时间间隔)。
 
-    实现说明:
-        1. 合并所有轨道并按时间顺序处理事件
-        2. 自动检测打击乐通道 (从1开始数, 始终包含通道10)
-        3. 支持MIDI Program Change事件动态更新打击乐通道
-        4. 处理音符重叠和持续事件
+    Examples:
+        >>> midi_file = mido.MidiFile("example.mid")
+        >>> midi_to_notes(midi_file)
+        [(0, 0), (5, 1), (8, 1)]
     """
-    notes = []
-    drum_channels = {9}  # MIDI通道10(索引9)默认作为打击乐通道
-    active_notes = {}  # 跟踪未结束的音符: {(channel, note): start_time}
+    extracted_notes = []  # 用于存储提取的音符信息（音高和相对时间）
+    drum_channels = {9}  # 打击乐通道的集合，默认情况下，MIDI通道10（索引9）为打击乐通道
+    current_time = 0  # 当前的绝对时间
 
-    # 合并所有轨道并按时间排序
+    # 合并所有轨道并按时间顺序排序
     merged_track = mido.merge_tracks(midi_file.tracks)
-    now = 0  # 当前绝对时间(基于四分音符 480 ticks 的时基)
 
     for msg in merged_track:
-        # 更新绝对时间(将delta时间转换为标准时基)
-        now += msg.time * 480 // midi_file.ticks_per_beat
+        # 计算绝对时间
+        current_time += msg.time * 480 // midi_file.ticks_per_beat
 
-        # 处理音色变化事件 (动态更新打击乐通道)
+        # 处理音色变化事件，动态更新打击乐通道
         if msg.type == "program_change":
             if msg.channel == 9:
-                continue  # 不对通道10做任何操作
+                continue  # 打击乐通道的音色变化消息忽略
 
-            # 音色96-103和>=112为打击乐类
+            # 判断音色是否属于打击乐类别，音色范围: 96-103 或 >= 112
             if (96 <= msg.program <= 103) or msg.program >= 112:
                 drum_channels.add(msg.channel)
             else:
                 drum_channels.discard(msg.channel)
 
-        # 跳过非音符事件和打击乐通道
-        if not msg.type.startswith("note_") or msg.channel in drum_channels:
-            continue
+        # 跳过打击乐通道，处理其他通道的音符开始事件
+        elif msg.type == "note_on" and msg.velocity != 0 and msg.channel not in drum_channels:
+            # 将音符和相对时间添加到提取列表中
+            extracted_notes.append((msg.note, current_time))
 
-        key = (msg.channel, msg.note)
+    # 转化为相对时间
+    extracted_notes = [(note, now - (extracted_notes[i - 1][1] if i else now)) for i, (note, now) in enumerate(extracted_notes)]
 
-        # 处理音符结束(note_off 或 velocity=0 的 note_on)
-        if (msg.type == "note_off" or msg.velocity == 0) and key in active_notes:
-            start = active_notes.pop(key)
-            notes.append((msg.channel, msg.note, start, now - start))
+    # 提取音符和相对时间序列
+    pitches, relative_intervals = zip(*extracted_notes)
 
-        # 处理音符开始
-        elif msg.type == "note_on":
-            active_notes[key] = now
+    # 对时间间隔四舍五入
+    relative_intervals = [TIME_PRECISION * int(interval / TIME_PRECISION + 0.5) for interval in relative_intervals]
 
-    # 按起始时间排序并返回
-    notes.sort(key=lambda x: x[2])
-    return notes
+    # 计算时间间隔的最大公约数，用于压缩时间轴
+    gcd = math.gcd(*relative_intervals) if relative_intervals else 1
+    compressed_intervals = [interval // gcd for interval in relative_intervals]
 
+    # 去除重复的音符（相同音符与零时间间隔的重复）
+    final_notes = []
+    previous_note = None  # 上一个音符，用于避免重复
 
-def normalize_times(
-    data: list[tuple[int, int]],
-    interval_precision: int,
-    strict: bool = True
-) -> list[tuple[int, int]]:
-    """
-    规范化时序数据，优化时间分布并适配模型输入要求。
+    for note, interval in zip(pitches, compressed_intervals):
+        if interval == 0 and note == previous_note:
+            continue  # 跳过重复的零间隔音符
 
-    Args:
-        data: 原始数据列表，元素为 (音高, 绝对时间)
-        interval_precision: 时间间隔量化精度 (单位ticks)
-        strict: 是否严格保持节奏特征
+        final_notes.append((note, interval))  # 添加音符和时间间隔
+        previous_note = note  # 更新上一个音符
 
-    Returns:
-        规范化后的 (音高, 相对时间) 列表
-
-    处理流程:
-        1. 转换为相对时间序列
-        2. 寻找最优时间缩放因子
-        3. 时间量化与间隔修正
-        4. 插入间隔音符并去重
-    """
-    # 分离音高和时间序列
-    pitches, abs_times = zip(*data)
-
-    # 转换为相对时间(时间间隔序列)
-    rel_intervals = [0] + [abs_times[i] - abs_times[i - 1] for i in range(1, len(abs_times))]
-
-    def calculate_interval_loss(interval_seq: list[float]) -> float:
-        """
-        计算时间序列的损失值，用于评估缩放因子质量。
-
-        损失组成:
-        - 量化误差: 时间值偏离量化网格的程度
-        - 时间分布方差: 时间值的离散程度
-        - 零时间惩罚: 过多相邻音符零间隔
-        """
-        quant_error = 0.0  # 量化误差
-        variance = 0.0  # 时间方差
-        zero_penalty = 0  # 零间隔计数
-        max_gap_penalty = 0.0  # 大间隔惩罚
-
-        mean = sum(interval_seq) / len(interval_seq)
-
-        for t in interval_seq:
-            quant_error += 1 / (1 + math.exp(-abs(t / interval_precision - round(t / interval_precision))))  # 量化误差 (sigmoid加权)
-            variance += (t - mean) ** 2  # 统计方差
-            zero_penalty += int(t < interval_precision / 2)  # 零间隔计数
-
-        return quant_error * 0.5 + math.sqrt(variance / len(interval_seq)) * 1.2 + max_gap_penalty + zero_penalty
-
-    # 寻找最佳时间缩放因子
-    best_scale, min_loss = 1, math.inf
-    i = 9 if strict else 0  # 严格模式下，时间缩放因子从 1 开始算起 ( math: (9 + 1) / 10 = 1 )
-    failed_counter = 0
-    while True:
-        scale = (i := i + 1) / 10
-        tmp_intervals = [interval * scale for interval in rel_intervals]
-        cur_loss = calculate_interval_loss(tmp_intervals)
-        if cur_loss < min_loss:
-            best_scale = scale
-            min_loss = cur_loss
-            failed_counter = 0  # 重置失败计数
-        elif failed_counter < 10:
-            failed_counter += 1  # 增加失败计数
-        else:
-            break  # 超过失败次数，退出循环
-
-    # 应用最佳缩放并量化
-    processed_intervals = [round(t * best_scale / interval_precision) * interval_precision for t in rel_intervals]
-
-    # 计算最大公约数来压缩时间轴
-    interval_gcd = math.gcd(*processed_intervals) if len(processed_intervals) > 0 else 1
-    compressed_intervals = [t // interval_gcd for t in processed_intervals]
-
-    # 插入间隔音符并清理重复
-    result = []
-    prev_pitch = None
-    for pitch, interval in zip(pitches, compressed_intervals):
-        # 跳过重复零间隔音符
-        if interval == 0 and pitch == prev_pitch:
-            continue
-
-        result.append((pitch, interval))
-        prev_pitch = pitch
-
-    return result
+    return final_notes
 
 
-def notes_to_sheet(notes: list[tuple[int, int]], check_notes: int = 64) -> tuple[list[tuple[str, int]], list[int]]:
+def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> tuple[list[tuple[str, int]], list[int]]:
     """
     将MIDI音符列表转换为电子乐谱，通过调整音高使其尽可能符合自然音阶并集中在一个八度范围内。
 
     Args:
         notes: MIDI音符列表，每个元组格式为(音高, 时间间隔)
-        check_notes: 调整音高时检查后续音符的数量。
+        lookahead_count: 调整音高时检查后续音符的数量。
 
     Returns:
-        电子乐谱事件列表，包含以下事件类型:
-            - note: 音符 (0-11表示音阶中的音高)
-            - key_shift: 全局音高偏移的半音数
-            - octave_jump: 一个音符跳跃的八度数
-            - interval: 两个音符的时间间隔
-        原本音符对应在乐谱的位置。
+        sheet: 电子乐谱事件列表，包含下列事件类型：
+            - 0-11: 音符（音阶中的音高）。
+            - 12: 音高下调一个半音。
+            - 13: 音高上调一个半音。
+            - 14: 音符下跳一个八度。
+            - 15: 音符上跳一个八度。
+            - 16: 时间间隔。
+        positions: 每个音符在乐谱中的位置，记录每个音符出现的索引。
     """
     # 分离音高和时间间隔
-    pitches, intervals = (list(item) for item in zip(*notes))
+    pitches, intervals = zip(*notes)
 
-    # 将音高调整为相对最小音高的偏移
-    min_pitch = min(pitches)
-    pitches = [pitch - min_pitch for pitch in pitches]
+    # 计算调整音高的偏移量，使其尽量符合自然音阶
+    cur_offset = max(range(12), key=lambda offset: sum((pitch + offset) % 12 in NATURAL_SCALE for pitch in pitches[:lookahead_count]))
 
-    # 调整音高使其尽量落在自然音阶
-    cur_offset, _ = max(
-        [(offset, sum(((pitch + offset) % 12) in NATURAL_SCALE for pitch in pitches[:check_notes])) for offset in range(12)],
-        key=lambda x: x[1]
-    )
-
-    # 调整音高使其尽量集中在一个八度范围内
-    octave_offset, _ = max(
-        [(octave_offset, sum(0 <= (pitch + cur_offset + octave_offset * 12) < 12 for pitch in pitches[:check_notes])) for octave_offset in range(-2, 2)],
-        key=lambda x: x[1]
-    )
+    # 计算使音高集中在一个八度范围内的偏移量
+    octave_offset = max(range(-10, 10), key=lambda octave_offset: sum(0 <= (pitch + cur_offset + octave_offset * 12) < 12 for pitch in pitches[:lookahead_count]))
     cur_offset += octave_offset * 12
 
-    # 开始转化
-    sheet: list[tuple[str, int]] = []
-    notes_positions: list[int] = []
+    # 开始转换音符为电子乐谱
+    sheet: list[int] = []
+    positions: list[int] = []
     for i in range(len(pitches)):
         offset_sum = 0
 
-        # 如果当前音高不在自然音阶内，调整音高
-        pitch = pitches[i] + cur_offset
-        if (pitch % 12) not in NATURAL_SCALE:
-            offset, _ = max(
-                [(offset, sum(((pitch + cur_offset + offset) % 12) in NATURAL_SCALE for pitch in pitches[i:i + check_notes]) * check_notes + int(offset == 0)) for offset in range(12)],
-                key=lambda x: x[1]
-            )
-            offset_sum += offset
-            cur_offset += offset
+        # 如果音高不在自然音阶内，调整音高
+        best_offset = max(range(12), key=lambda offset: sum((pitch + cur_offset + offset) % 12 in NATURAL_SCALE for pitch in pitches[i:i + lookahead_count]) * lookahead_count + int(offset == 0))
+        if best_offset != 0:
+            offset_sum += best_offset
+            cur_offset += best_offset
 
-        # 如果当前音高不在一个八度范围内，调整音高
-        pitch = pitches[i] + cur_offset
-        if pitch < 0 or pitch > 11:
-            octave_offset, _ = max(
-                [(octave_offset, sum(0 <= (pitch + cur_offset + octave_offset * 12) < 12 for pitch in pitches[i:i + check_notes]) * check_notes + int(octave_offset == 0)) for octave_offset in range(-2, 2)],
-                key=lambda x: x[1]
-            )
-            offset_sum += octave_offset * 12
-            cur_offset += octave_offset * 12
+        # 如果音高不在一个八度范围内，调整音高
+        best_octave_offset = max(range(-4, 4), key=lambda octave_offset: sum(0 <= (pitch + cur_offset + octave_offset * 12) < 12 for pitch in pitches[i:i + lookahead_count]) * lookahead_count + int(octave_offset == 0))
+        if best_octave_offset != 0:
+            offset_sum += best_octave_offset * 12
+            cur_offset += best_octave_offset * 12
 
         # 如果有音高偏移，在乐谱中做标记
         if offset_sum:
-            sheet.append(("key_shift", offset_sum))
+            sheet.extend(12 + int(offset_sum > 0) for _ in range(abs(offset_sum)))
 
         # 记录时间间隔
         if intervals[i]:
-            sheet.append(("interval", intervals[i]))
+            sheet.extend(16 for _ in range(intervals[i]))
+
+        # 记录乐谱中音符开始的位置
+        positions.append(len(sheet))
 
         # 将当前音高调整到0-11范围内，并记录八度跳跃
         pitch = pitches[i] + cur_offset
         if pitch < 0 or pitch > 11:
-            notes_positions.append(len(sheet))
-            sheet.append(("octave_jump", pitch // 12))
+            octave_jump = pitch // 12
+            sheet.extend(14 + int(octave_jump > 0) for _ in range(abs(octave_jump)))
             pitch %= 12
-        else:
-            notes_positions.append(len(sheet))
 
         # 记录音符
-        sheet.append(("note", pitch))
+        sheet.append(pitch)
 
     # 返回结果
-    return sheet, notes_positions
+    return sheet, positions
 
 
-def sheet_to_notes(sheet: list[tuple[str, int]]) -> list[tuple[int, int]]:
+def sheet_to_notes(sheet: list[int]) -> list[tuple[int, int]]:
     """
     将电子乐谱转换为MIDI音符列表。
+
+    该函数将输入的电子乐谱（一个整数列表）转换为MIDI音符列表。每个音符是一个元组，
+    包含音高和相应的时间间隔。音高会根据全球和八度偏移的规则进行调整，
+    最终返回的音符列表包含相对音高和时间间隔。
 
     Args:
         sheet: 由`notes_to_sheet(notes)`生成的电子乐谱
@@ -266,131 +178,28 @@ def sheet_to_notes(sheet: list[tuple[str, int]]) -> list[tuple[int, int]]:
     octave_offset = 0  # 八度偏移
     interval_sum = 0  # 累计时间间隔
 
-    for event, value in sheet:
-        if event == "key_shift":
-            global_offset += value  # 更新全局音高偏移
-        elif event == "octave_jump":
-            octave_offset += value  # 更新八度偏移
-        elif event == "note":
+    for event in sheet:
+        if event < 12:
             # 计算最终音高并添加到音符列表
-            final_pitch = value - global_offset + octave_offset * 12
+            final_pitch = event - global_offset + octave_offset * 12
             notes.append([final_pitch, interval_sum])
             octave_offset = interval_sum = 0  # 重置八度偏移和累计时间间隔
-        elif event == "interval":
-            interval_sum += value
+        elif event == 12:
+            global_offset -= 1  # 更新全局音高偏移
+        elif event == 13:
+            global_offset += 1  # 更新全局音高偏移
+        elif event == 14:
+            octave_offset -= 1  # 更新八度偏移
+        elif event == 15:
+            octave_offset += 1  # 更新八度偏移
         else:
-            raise ValueError(f"Unknown event type: {event}")
+            interval_sum += 1
 
     # 调整音高，使其最小音高为0
     min_pitch = min(pitch for pitch, _ in notes)
     notes = [(pitch - min_pitch, interval) for pitch, interval in notes]
 
     return notes
-
-
-def sheet_to_model(sheet: list[tuple[str, int]]) -> list[int]:
-    """
-    将电子乐谱转换为模型的输入/输出格式。
-
-    Args:
-        sheet: 由`notes_to_sheet(notes)`生成的电子乐谱
-
-    Returns:
-        模型数据:
-            - 0-11: 音符 (0-11表示音阶中的音高)
-            - 12-23: 全局音高向下偏移的半音数。如果值小于-12，被转换成多个向下跳跃。
-            - 24-35: 全局音高向上偏移的半音数。如果值大于12，被转换成多个向下跳跃。
-            - 36-38: 一个音符向下跳跃的八度数。如果值小于-3，被转换成多个向下跳跃。
-            - 39-41: 一个音符向上跳跃的八度数。如果值大于3，被转换成多个向上跳跃。
-            - 42-43: 时间间隔。如果值大于2，被转换成多个时间间隔。
-        原本乐谱在模型输入格式中对应的位置
-    """
-    model_data = []
-    sheet_positions = []
-
-    for event, value in sheet:
-        sheet_positions.append(len(model_data))
-        if event == "note":
-            # 处理音符
-            model_data.append(value)  # 0-11表示音阶中的音高
-        elif event == "key_shift":
-            # 处理全局音高偏移
-            if value < 0:
-                # 向下偏移
-                while value < -12:
-                    model_data.append(23)
-                    value += 12
-                if value:
-                    model_data.append(11 - value)  # 12-23表示全局音高向下偏移1-12个半音
-            else:
-                # 向上偏移
-                while value > 12:
-                    model_data.append(35)
-                    value -= 12
-                if value:
-                    model_data.append(23 + value)  # 24-35表示全局音高向上偏移1-12个半音
-        elif event == "octave_jump":
-            # 处理八度跳跃
-            if value < 0:
-                # 向下跳跃
-                while value < -3:
-                    model_data.append(38)
-                    value += 3
-                if value:
-                    model_data.append(35 - value)  # 36-38表示一个音符向下跳跃1-3个八度
-            else:
-                # 向上跳跃
-                while value > 2:
-                    model_data.append(41)
-                    value -= 3
-                if value:
-                    model_data.append(38 + value)  # 39-41表示一个音符向上跳跃1-3个八度
-        elif event == "interval":
-            # 处理时间间隔
-            while value > 2:
-                model_data.append(43)
-                value -= 2
-            model_data.append(41 + value)  # 42-43表示时间间隔
-
-    return model_data, sheet_positions
-
-
-def model_to_sheet(model_data: list[int]) -> list[tuple[str, int]]:
-    """
-    将模型的输入/输出格式转换回电子乐谱。
-
-    Args:
-        model_data: 由`sheet_to_model(sheet)`生成的模型数据
-
-    Returns:
-        电子乐谱
-    """
-    sheet = []
-    for value in model_data:
-        if 0 <= value < 12:
-            # 处理音符
-            sheet.append(("note", value))
-        elif value < 24:
-            # 处理全局音高向下偏移
-            offset = 11 - value
-            sheet.append(("key_shift", offset))
-        elif value < 36:
-            # 处理全局音高向上偏移
-            offset = value - 23
-            sheet.append(("key_shift", offset))
-        elif value < 39:
-            # 处理一个音符向下跳跃的八度数
-            octave_jump = 35 - value
-            sheet.append(("octave_jump", octave_jump))
-        elif value < 42:
-            # 处理一个音符向上跳跃的八度数
-            octave_jump = value - 38
-            sheet.append(("octave_jump", octave_jump))
-        elif value < 44:
-            # 处理时间间隔单位
-            sheet.append(("interval", value - 41))
-
-    return sheet
 
 
 def empty_cache():
