@@ -353,18 +353,6 @@ def plot_training_process(metries: dict[str, list], img_path: pathlib.Path | str
           - val_accuracy(list[float]): 每个epoch的验证准确率平均值
         img_path: 图形保存的文件路径，可以是字符串或Path对象。
     """
-    def smooth(losses: list[float], max_diff: float = 0.1):
-        mean = sum(losses) / len(losses)
-        last, next = mean, losses[1]
-
-        smoothed = losses.copy()
-        for i, loss in enumerate(losses):
-            if max(abs(loss - last), abs(loss - next)) > max_diff:
-                smoothed[i] = (last * 3 + next + mean * 124) / 128
-            last = (last * 0.9 + smoothed[i]) / 1.9
-            next = smoothed[i + 2] if i < len(smoothed) - 2 else mean
-        return smoothed
-
     fig, ax1 = plt.subplots(figsize=(10, 6))  # 创建一个图形和一组坐标轴
 
     # 绘制训练过程中的损失曲线
@@ -373,12 +361,11 @@ def plot_training_process(metries: dict[str, list], img_path: pathlib.Path | str
         for epoch, epoch_loss in enumerate(metries["train_loss"])
         for epoch_step in range(len(epoch_loss))
     ]
-    train_loss_y = smooth([loss for epoch in metries["train_loss"] for loss in epoch])
-    ax1.plot(train_loss_x, train_loss_y, label="Train Loss", color="red")
+    ax1.plot(train_loss_x, [loss for epoch in metries["train_loss"] for loss in epoch], label="Train Loss", color="red")
 
     # 绘制验证过程中的损失曲线
     val_steps = list(range(1, len(metries["train_loss"]) + 1))
-    ax1.plot(val_steps, metries["val_loss"], marker=".", label="Validation Loss", color="blue")
+    ax1.plot(val_steps, metries["val_loss"], label="Validation Loss", marker=".", color="blue")
 
     # 设置第一个Y轴的标签
     ax1.set_ylabel("Loss")
@@ -388,10 +375,10 @@ def plot_training_process(metries: dict[str, list], img_path: pathlib.Path | str
     ax2 = ax1.twinx()  # 创建共享X轴的第二个Y轴
 
     # 绘制训练过程中的准确率曲线
-    ax2.plot(val_steps, metries["train_accuracy"], label="Train Accuracy", color="green", linestyle="--")
+    ax2.plot(val_steps, metries["train_accuracy"], label="Train Accuracy", marker=".", color="green", linestyle="--")
 
     # 绘制验证过程中的准确率曲线
-    ax2.plot(val_steps, metries["val_accuracy"], marker=".", label="Validation Accuracy", color="blue", linestyle="--")
+    ax2.plot(val_steps, metries["val_accuracy"], label="Validation Accuracy", marker=".", color="blue", linestyle="--")
 
     # 设置第二个Y轴的标签并转换为百分比
     ax2.set_ylabel("Accuracy")
