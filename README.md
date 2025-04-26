@@ -1,6 +1,6 @@
 # Tk AI MIDI
 ## 简介
-这是一个基于`LSTM`的MIDI生成模型，旨在通过深度学习技术生成音乐作品。
+这是一个MIDI生成模型，旨在通过深度学习技术生成音乐作品。
 
 ## License
 ![GNU AGPL Version 3 Official Logo](https://www.gnu.org/graphics/agplv3-with-text-162x68.png)
