@@ -1,4 +1,4 @@
-"分词器相关"
+"训练分词器、数据转换"
 
 # Copyright (C)  thiliapr 2025
 # Email: thiliapr@tutanota.com
@@ -173,9 +173,16 @@ def main():
     parser.add_argument("-p", "--ckpt-path", type=pathlib.Path, default=pathlib.Path("ckpt"), help="分词器保存路径，将创建tokenizer子目录")
     parser.add_argument("-s", "--vocab-size", type=int, default=2000, help="分词器词汇表大小")
     parser.add_argument("-f", "--min-frequency", type=int, default=12, help="token最小出现频率阈值")
+    parser.add_argument("-y", "--force", action="store_true", help="即使检查点已经存在分词器也要训练")
 
     # 解析参数
     args = parser.parse_args()
+    tokenizer_path = args.ckpt_path / "tokenizer"
+
+    # 如果检查点已有分词器，且未指定重新训练分词器，则跳过
+    if tokenizer_path.exists() and not args.force:
+        print("已存在分词器，跳过训练。如果想重新训练分词器，请在参数指定`-y/--force`")
+        return
 
     # 检查并创建检查点目录
     args.ckpt_path.mkdir(parents=True, exist_ok=True)
@@ -195,8 +202,8 @@ def main():
     )
 
     # 保存分词器
-    tokenizer.save_pretrained(args.ckpt_path / "tokenizer")
-    print(f"分词器已保存到 {args.ckpt_path / 'tokenizer'}")
+    tokenizer.save_pretrained(tokenizer_path)
+    print(f"分词器已保存到 {tokenizer_path}")
 
     # 输出基本信息
     print(f"\n训练结果:")
