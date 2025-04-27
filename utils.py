@@ -68,7 +68,7 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     pitches, relative_intervals = zip(*extracted_notes)
 
     # 对时间间隔四舍五入
-    relative_intervals = [TIME_PRECISION * int(interval / TIME_PRECISION + 0.5) for interval in relative_intervals]
+    relative_intervals = [int(interval / TIME_PRECISION + 0.5) for interval in relative_intervals]
 
     # 计算时间间隔的最大公约数，用于压缩时间轴
     gcd = math.gcd(*relative_intervals) if relative_intervals else 1
