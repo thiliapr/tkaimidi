@@ -378,7 +378,7 @@ def plot_training_process(metries: dict[str, list], img_path: pathlib.Path | str
     ax2.plot(val_steps, metries["train_accuracy"], label="Train Accuracy", marker=".", color="green", linestyle="--")
 
     # 绘制验证过程中的准确率曲线
-    ax2.plot(val_steps, metries["val_accuracy"], label="Validation Accuracy", marker=".", color="blue", linestyle="--")
+    ax2.plot([x + 0.5 for x in val_steps], metries["val_accuracy"], label="Validation Accuracy", marker=".", color="blue", linestyle="--")
 
     # 设置第二个Y轴的标签并转换为百分比
     ax2.set_ylabel("Accuracy")
