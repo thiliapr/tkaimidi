@@ -48,7 +48,7 @@ class PositionalEmbedding(nn.Module):
         self.activation = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.BoolTensor]) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, causal_mask: torch.BoolTensor, key_padding_mask: Optional[torch.BoolTensor] = None) -> torch.Tensor:
         """
         前向传播过程，处理输入序列并增强位置信息。
 
@@ -59,6 +59,7 @@ class PositionalEmbedding(nn.Module):
 
         Args:
             x: 形状为(batch_size, sequence_length, d_model)的输入张量
+            causal_mask: 用于防止透露未来信息的因果掩码，形状为(batch_size, sequence_length)
             key_padding_mask: 用于屏蔽无效位置的布尔掩码，形状为(batch_size, sequence_length)
 
         Returns:
@@ -67,8 +68,9 @@ class PositionalEmbedding(nn.Module):
         seq_length = x.size(1)
 
         # 自注意力部分
-        attention_output, _ = self.attention(
+        attention_output, _ = self.attention.forward(
             x, x, x,
+            attn_mask=causal_mask,
             key_padding_mask=key_padding_mask,
             need_weights=False
         )
@@ -114,9 +116,7 @@ class MidiNet(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.embedding = nn.Embedding(vocab_size, d_model, device=device)
         self.positional_embedding = PositionalEmbedding(d_model, dim_feedforward, num_heads, dropout, device)
-        self.transformer = nn.TransformerEncoder(nn.TransformerEncoderLayer(
-            d_model, num_heads, dim_feedforward, dropout=dropout, device=device, batch_first=True
-        ), num_layers=num_layers)
+        self.transformer = nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model, num_heads, dim_feedforward, dropout=dropout, device=device, batch_first=True), num_layers=num_layers)
         self.output_layer = nn.Linear(d_model, vocab_size, device=device)
 
         # 初始化权重
@@ -125,16 +125,19 @@ class MidiNet(nn.Module):
         nn.init.zeros_(self.output_layer.bias)
 
     def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.BoolTensor] = None):
+        # 生成因果掩码
+        causal_mask = nn.Transformer.generate_square_subsequent_mask(x.size(1), device=x.device, dtype=bool)
+
         # 通过嵌入层
         x = self.dropout(self.embedding(x) * math.sqrt(self.vocab_size))
 
         # 应用位置编码
-        x = self.positional_embedding(x, key_padding_mask)
+        x = self.positional_embedding(x, causal_mask, key_padding_mask)
 
         # 通过Transformer编码器
         x = self.transformer(
             x,
-            mask=nn.Transformer.generate_square_subsequent_mask(x.size(1), device=x.device, dtype=bool),
+            mask=causal_mask,
             src_key_padding_mask=key_padding_mask
         )
 
