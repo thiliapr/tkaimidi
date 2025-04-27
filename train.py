@@ -404,7 +404,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("num_epochs", type=int, help="训练的总轮数")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="加载和保存检查点的路径")
-    parser.add_argument("-t", "--train-dataset", action="append", type=pathlib.Path, help="训练集文件路径（可多次指定以使用多个数据集）")
+    parser.add_argument("-t", "--train-dataset", action="append", type=pathlib.Path, required=True, help="训练集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-m", "--min-sequence-length", default=512, type=int, help="最小序列长度，小于该长度的样本不会分子序列")
     parser.add_argument("-b", "--max-batch-size", default=8 * 1024 ** 2, type=int, help="每个批次的序列长度的平方和上限")
@@ -416,9 +416,6 @@ def main():
     parser.add_argument("-s", "--num-layers", default=6, type=int, help="模型 Transformer 编码器中的层数")
     parser.add_argument("-o", "--dropout", default=0.1, type=float, help="Dropout 概率，用于防止过拟合")
     args = parser.parse_args()
-
-    # 训练集不能为空
-    assert args.train_dataset, "训练集不能为空。"
 
     # 加载检查点
     tokenizer, model_state, optimizer_state, metries = load_checkpoint(args.ckpt_path, train=True)
