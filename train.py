@@ -436,7 +436,7 @@ def main():
     try:
         model.load_state_dict(model_state)
     except RuntimeError:
-        metries = {"train_loss": [], "train_accuracy": [], "val_loss": [], "val_accuracy": []}
+        metries = {"val_accuracy": [], "train_accuracy": [], "val_loss": [], "train_loss": []}
 
     # 转移模型到设备
     model = model.to(device)
