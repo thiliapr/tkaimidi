@@ -240,7 +240,8 @@ def train(
         >>> list(train(model, dataset, optimizer))
         [([1.9, 0.89, 0.6, 0.4], 0.8), ...]
     """
-    empty_cache()  # 清理缓存以释放内存
+    # 清理缓存以释放内存
+    empty_cache()
 
     # 获取采样器，按 batch 划分数据
     sampler = MidiDatasetSampler(dataset, max_batch_size)
@@ -308,6 +309,9 @@ def validate(
         >>> loss, acc = validate(model, val_dataset, vocab_size=128)
         >>> print(f"Validation Loss: {loss:.4f}, Accuracy: {acc:.2%}")
     """
+    # 清理缓存以释放内存
+    empty_cache()
+
     # 获取采样器，按 batch 划分数据
     sampler = MidiDatasetSampler(dataset, max_batch_size)
 
