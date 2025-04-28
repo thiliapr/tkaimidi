@@ -74,7 +74,7 @@ def load_checkpoint(path: pathlib.Path, train: bool = False):
 
     # 尝试加载指标文件
     metrics_path = path / "metrics.json"
-    metrics = {"train_loss": [], "train_accuracy": [], "val_loss": [], "val_accuracy": []}
+    metrics = {"val_accuracy": [], "train_accuracy": [], "val_loss": [], "train_loss": []}
     if metrics_path.exists():
         with open(metrics_path, "r") as f:
             metrics |= json.load(f)  # 读取指标
