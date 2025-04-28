@@ -82,7 +82,7 @@ class MidiDataset(Dataset):
         if show_progress:
             progress_bar = tqdm(desc="加载音乐数据集", total=len(midi_files))
 
-        for i, filepath in enumerate(midi_files):
+        for file_index, filepath in enumerate(midi_files):
             # 读取并转化 MIDI 文件
             notes = midi_to_notes(mido.MidiFile(filepath, clip=True))
             sheet, positions = notes_to_sheet(notes)
@@ -90,7 +90,7 @@ class MidiDataset(Dataset):
             # 将每个音符序列切分为子序列
             self.sequences.extend(
                 # 保存每个子序列的相关信息: 当前 MIDI 文件的索引、起始位置，以及子序列的长度
-                ((i, positions[offset]), len(notes) - offset) for offset in range(max(1, len(notes) - min_sequence_length))
+                ((file_index, positions[offset]), len(notes) - offset) for offset in range(max(1, len(notes) - min_sequence_length))
                 if offset == 0 or notes[offset][1]  # 音符的起始点或音符是与前一个音符有时间间隔
             )
 
@@ -142,6 +142,33 @@ class MidiDatasetSampler(Sampler[int]):
         self.dataset = dataset
         self.max_batch_size = max_batch_size
         self.drop_last = drop_last
+        self.length = 0
+
+        # 计算每个批次的大小
+        self.batches_size = [0]
+        cur_batch_size = 0
+
+        # 按序列长度排序
+        for _, sequence_length in sorted(self.dataset.sequences, key=lambda x: x[1]):
+            # 计算序列长度平方
+            sequence_size = sequence_length ** 2
+
+            # 跳过长度平方大于 max_batch_size 的序列
+            if sequence_size > self.max_batch_size:
+                continue
+
+            # 如果当前批次的长度平方和大于 max_batch_size，则保存并清空当前批次
+            if cur_batch_size + sequence_size > self.max_batch_size:
+                self.batches_size.append(0)
+                cur_batch_size = 0
+
+            # 添加样本，累积当前批次大小
+            self.batches_size[-1] += 1
+            cur_batch_size += sequence_size
+
+        # 如果没有序列剩余或要求丢弃最后一个批次
+        if self.drop_last or not self.batches_size[-1]:
+            self.batches_size.pop(-1)
 
     def __iter__(self):
         # 获取数据集的长度
@@ -150,26 +177,20 @@ class MidiDatasetSampler(Sampler[int]):
         # 初始化批次列表
         batches = []
         batch = []
-        cur_batch_size = 0
 
         # 先按序列长度排序，如果序列长度相同就随机排序
-        for index, sequence_length in sorted(
-            [(index, sequence_length) for index, (_, sequence_length) in enumerate(self.dataset.sequences)],
-            key=lambda x: x[1] * length + random.randint(0, length - 1)
-        ):
-            # 增加样本
+        for index, (_, sequence_length) in sorted(enumerate(self.dataset.sequences), key=lambda x: x[1][1] * length + random.randint(0, length - 1)):
+            # 跳过长度平方大于 max_batch_size 的序列
+            if sequence_length ** 2 > self.max_batch_size:
+                continue
+
+            # 添加样本
             batch.append(index)
-            cur_batch_size += sequence_length ** 2
 
-            # 如果当前批次的长度平方和大于 max_batch_size，则保存并清空当前批次
-            if cur_batch_size > self.max_batch_size:
-                batches.append(batch.copy())
-                cur_batch_size = 0
-                batch.clear()
-
-        # 如果不丢弃不满足条件的批次，则将其加入批次列表
-        if batch and not self.drop_last:
-            batches.append(batch)
+            # 如果达到批次大小，则下一个批次
+            if len(batch) == self.batches_size[len(batches)]:
+                batches.append(batch)
+                batch = []
 
         # 打乱所有批次顺序
         random.shuffle(batches)
@@ -179,7 +200,7 @@ class MidiDatasetSampler(Sampler[int]):
             yield batch
 
     def __len__(self):
-        return len(self.dataset)
+        return len(self.batches_size)
 
 
 def sequence_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor]], pad_token: int):
@@ -273,7 +294,7 @@ def train(
 
             train_acc.append(compute_accuracy(torch.argmax(outputs, dim=-1).detach(), labels, pad_token=pad_token))  # 累积训练准确率
             train_loss.append(loss.item())  # 累积训练损失
-            progress_bar.update(inputs.size(0))  # 更新进度条
+            progress_bar.update()  # 更新进度条
 
         yield train_loss, sum(train_acc) / len(train_acc)
 
