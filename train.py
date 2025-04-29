@@ -420,7 +420,7 @@ def main():
     parser.add_argument("-t", "--train-dataset", action="append", type=pathlib.Path, required=True, help="训练集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-m", "--min-sequence-length", default=512, type=int, help="最小序列长度，小于该长度的样本不会分子序列")
-    parser.add_argument("-b", "--max-batch-size", default=8 * 1024 ** 2, type=int, help="每个批次的序列长度的平方和上限")
+    parser.add_argument("-b", "--max-batch-size", default=8 * 1536 ** 2, type=int, help="每个批次的序列长度的平方和上限")
     parser.add_argument("-l", "--learning-rate", default=0.01, type=float, help="学习率")
     parser.add_argument("-w", "--weight-decay", default=0.01, type=float, help="权重衰减系数")
     parser.add_argument("-d", "--d-model", default=512, type=int, help="嵌入向量的维度")
