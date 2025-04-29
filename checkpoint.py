@@ -53,7 +53,7 @@ def load_checkpoint(path: pathlib.Path, train: bool = False):
 
     Returns:
         train关闭时: 分词器、模型的状态
-        train启用时: 分词器、模型和优化器的状态，训练、验证的损失和准确率的历史记录
+        train启用时: 分词器、模型和优化器的状态，指标
     """
     # 加载分词器
     tokenizer = PreTrainedTokenizerFast.from_pretrained(path / "tokenizer")
@@ -74,7 +74,7 @@ def load_checkpoint(path: pathlib.Path, train: bool = False):
 
     # 尝试加载指标文件
     metrics_path = path / "metrics.json"
-    metrics = {"val_accuracy": [], "train_accuracy": [], "val_loss": [], "train_loss": []}
+    metrics = {"val_ppl": [], "train_ppl": [], "val_loss": [], "train_loss": []}
     if metrics_path.exists():
         with open(metrics_path, "r") as f:
             metrics |= json.load(f)  # 读取指标

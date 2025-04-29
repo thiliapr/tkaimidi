@@ -211,13 +211,6 @@ def sequence_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor]], pad_toke
     return inputs, labels
 
 
-def compute_accuracy(preds: torch.Tensor, labels: torch.Tensor, pad_token: int) -> float:
-    "计算准确率。"
-    mask = labels != pad_token
-    correct = (preds == labels) & mask
-    return correct.sum().item() / mask.sum().item()
-
-
 def train(
     model: MidiNet,
     dataset: MidiDataset,
@@ -227,11 +220,11 @@ def train(
     max_batch_size: int = 1,
     pad_token: int = 0,
     device: torch.device = None,
-) -> Iterator[tuple[list[int], int]]:
+) -> Iterator[tuple[list[float], float]]:
     """
     训练模型的函数。
 
-    此函数进行多轮训练，逐步优化模型参数，输出每个epoch的训练损失和准确率。
+    此函数进行多轮训练，逐步优化模型参数，输出每个epoch的训练损失和困惑度。
 
     工作流程:
         1. 初始化数据加载器。
@@ -241,8 +234,8 @@ def train(
         5. 在每个epoch中:
             a. 切换模型到训练模式。
             b. 对每个batch进行前向传播、计算损失、反向传播和更新参数。
-            c. 累积损失和准确率。
-            d. 返回这个epoch每一步的训练损失和准确率平均值。
+            c. 累积损失和困惑度。
+            d. 返回这个epoch每一步的训练损失和困惑度平均值。
 
     Args:
         model: 需要训练的神经网络模型。
@@ -255,11 +248,11 @@ def train(
         device: 指定训练的设备。
 
     Yields:
-        该epoch每一步的训练损失和训练准确率的平均值。
+        该epoch每一步的训练损失和训练困惑度的平均值。
 
     Examples:
         >>> list(train(model, dataset, optimizer))
-        [([1.9, 0.89, 0.6, 0.4], 0.8), ...]
+        [([1.9, 0.89, 0.6, 0.4], 42.6), ...]
     """
     # 清理缓存以释放内存
     empty_cache()
@@ -281,22 +274,22 @@ def train(
 
     for epoch in range(num_epochs):
         model.train()  # 设置模型为训练模式
-        train_loss, train_acc = [], []  # 初始化损失、准确率列表
+        train_loss, train_ppl = [], []  # 初始化损失、困惑度列表
         progress_bar.set_description(f"训练第 {epoch + 1} 个 Epoch")
 
         for inputs, labels in dataloader:
             inputs, labels = inputs.to(device), labels.to(device).view(-1)
             optimizer.zero_grad()  # 清空梯度
-            outputs = model(inputs, key_padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播
+            outputs = model(inputs, key_padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
             loss = criterion(outputs, labels)  # 计算损失
             loss.backward()  # 反向传播
             optimizer.step()  # 更新模型参数
 
-            train_acc.append(compute_accuracy(torch.argmax(outputs, dim=-1).detach(), labels, pad_token=pad_token))  # 累积训练准确率
+            train_ppl.append(torch.exp(loss).item())  # 累积训练困惑度
             train_loss.append(loss.item())  # 累积训练损失
             progress_bar.update()  # 更新进度条
 
-        yield train_loss, sum(train_acc) / len(train_acc)
+        yield train_loss, sum(train_ppl) / len(train_ppl)
 
     progress_bar.close()  # 关闭进度条
 
@@ -308,12 +301,12 @@ def validate(
     max_batch_size: int = 1,
     pad_token: int = 0,
     device: torch.device = None,
-) -> tuple[int, int]:
+) -> tuple[float, float]:
     """
-    对模型进行验证，返回平均损失和平均准确率。
+    对模型进行验证，返回平均损失和平均困惑度。
 
-    此函数遍历验证集，对模型进行前向传播，计算每个 batch 的交叉熵损失和准确率。
-    所有 batch 的损失与准确率将被平均后返回，以衡量模型在整个验证集上的性能表现。
+    此函数遍历验证集，对模型进行前向传播，计算每个 batch 的交叉熵损失和困惑度。
+    所有 batch 的损失与困惑度将被平均后返回，以衡量模型在整个验证集上的性能表现。
 
     Args:
         model: 需要验证的 MidiNet 模型。
@@ -321,10 +314,10 @@ def validate(
         vocab_size: 词表大小，用于 reshape 输出。
         max_batch_size: 每个 batch 的最大大小。
         pad_token: padding 的 token 值，用于掩码处理和损失忽略。
-        device: 计算设备（CPU 或 GPU）。
+        device: 计算设备。
 
     Returns:
-        平均损失和平均准确率，分别为 float 类型。
+        平均损失和平均困惑度，分别为 float 类型。
 
     Examples:
         >>> loss, acc = validate(model, val_dataset, vocab_size=128)
@@ -342,9 +335,9 @@ def validate(
     # 定义交叉熵损失函数
     criterion = nn.CrossEntropyLoss(ignore_index=pad_token)
 
-    # 初始化损失、准确率列表
+    # 初始化损失、困惑度列表
     val_loss = []
-    val_acc = []
+    val_ppl = []
 
     # 遍历整个验证集，不进行梯度计算
     for inputs, labels in dataloader:
@@ -358,24 +351,24 @@ def validate(
             # 计算损失
             loss = criterion(outputs, labels)
 
-            # 记录损失和准确率
+            # 记录损失和困惑度
             val_loss.append(loss.item())
-            val_acc.append(compute_accuracy(torch.argmax(outputs, dim=-1).detach(), labels, pad_token=pad_token))
+            val_ppl.append(torch.exp(loss).item())
 
-    # 返回平均损失和平均准确率
-    return sum(val_loss) / len(val_loss), sum(val_acc) / len(val_acc)
+    # 返回平均损失和平均困惑度
+    return sum(val_loss) / len(val_loss), sum(val_ppl) / len(val_ppl)
 
 
 def plot_training_process(metries: dict[str, list], img_path: pathlib.Path | str):
     """
-    绘制训练过程中的损失、准确率曲线。
+    绘制训练过程中的损失、困惑度曲线。
 
     Args:
         metries: 指标，包含
           - train_loss(list[list[float]]): 每个epoch的每一步的训练损失
-          - train_accuracy(list[float]): 每个epoch的训练准确率平均值
-          - val_accuracy(list[float]): 每个epoch的验证损失平均值
-          - val_accuracy(list[float]): 每个epoch的验证准确率平均值
+          - train_ppl(list[float]): 每个epoch的训练困惑度平均值
+          - val_loss(list[float]): 每个epoch的验证损失平均值
+          - val_ppl(list[float]): 每个epoch的验证困惑度平均值
         img_path: 图形保存的文件路径，可以是字符串或Path对象。
     """
     fig, ax1 = plt.subplots(figsize=(10, 6))  # 创建一个图形和一组坐标轴
@@ -396,23 +389,22 @@ def plot_training_process(metries: dict[str, list], img_path: pathlib.Path | str
     ax1.set_ylabel("Loss")
     ax1.set_xlabel("Epochs")
 
-    # 创建第二个Y轴用于准确率
+    # 创建第二个Y轴用于困惑度
     ax2 = ax1.twinx()  # 创建共享X轴的第二个Y轴
 
-    # 绘制训练过程中的准确率曲线
-    ax2.plot([x - 0.5 for x in val_steps], metries["train_accuracy"], label="Train Accuracy", marker=".", color="green", linestyle="--")
+    # 绘制训练过程中的困惑度曲线
+    ax2.plot([x - 0.5 for x in val_steps], metries["train_ppl"], label="Train Perplexity", marker=".", color="green", linestyle="--")
 
-    # 绘制验证过程中的准确率曲线
-    ax2.plot(val_steps, metries["val_accuracy"], label="Validation Accuracy", marker=".", color="blue", linestyle="--")
+    # 绘制验证过程中的困惑度曲线
+    ax2.plot(val_steps, metries["val_ppl"], label="Validation Perplexity", marker=".", color="blue", linestyle="--")
 
-    # 设置第二个Y轴的标签并转换为百分比
-    ax2.set_ylabel("Accuracy")
-    ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{round(x * 100, 2)}%"))  # 格式化为百分比
+    # 设置第二个Y轴的标签
+    ax2.set_ylabel("Perplexity")
 
     # 设置标题和图例
     ax1.set_title("Training Process")  # 设置标题
     ax1.legend(loc="upper left")  # 为损失曲线添加图例
-    ax2.legend(loc="upper right")  # 为准确率曲线添加图例
+    ax2.legend(loc="upper right")  # 为困惑度曲线添加图例
 
     plt.tight_layout()  # 自动调整布局，防止标签重叠
     pathlib.Path(img_path).parent.mkdir(parents=True, exist_ok=True)  # 确保保存路径存在
@@ -421,7 +413,7 @@ def plot_training_process(metries: dict[str, list], img_path: pathlib.Path | str
 
 
 def main():
-    "训练 MIDI 模型并绘制训练过程中的损失、准确率曲线。"
+    "训练 MIDI 模型并绘制训练过程中的损失、困惑度曲线。"
     parser = argparse.ArgumentParser()
     parser.add_argument("num_epochs", type=int, help="训练的总轮数")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="加载和保存检查点的路径")
@@ -458,7 +450,7 @@ def main():
     try:
         model.load_state_dict(model_state)
     except RuntimeError:
-        metries = {"val_accuracy": [], "train_accuracy": [], "val_loss": [], "train_loss": []}
+        metries = {"val_ppl": [], "train_ppl": [], "val_loss": [], "train_loss": []}
 
     # 转移模型到设备
     model = model.to(device)
@@ -477,22 +469,23 @@ def main():
         pass
 
     # 开始训练模型
-    for train_loss, train_acc in train(model, train_dataset, optimizer, len(tokenizer), args.num_epochs, max_batch_size=args.max_batch_size, pad_token=tokenizer.pad_token_id, device=device):
+    for train_loss, train_ppl in train(model, train_dataset, optimizer, len(tokenizer), args.num_epochs, max_batch_size=args.max_batch_size, pad_token=tokenizer.pad_token_id, device=device):
         metries["train_loss"].append(train_loss)
-        metries["train_accuracy"].append(train_acc)
+        metries["train_ppl"].append(train_ppl)
 
+        # 如果指定了验证集，就进行验证，否则跳过
         if args.val_dataset:
-            val_loss, val_acc = validate(model, val_dataset, len(tokenizer), max_batch_size=args.max_batch_size, pad_token=tokenizer.pad_token_id, device=device)
+            val_loss, val_ppl = validate(model, val_dataset, len(tokenizer), max_batch_size=args.max_batch_size, pad_token=tokenizer.pad_token_id, device=device)
             metries["val_loss"].append(val_loss)
-            metries["val_accuracy"].append(val_acc)
+            metries["val_ppl"].append(val_ppl)
         else:
             metries["val_loss"].append(float("nan"))
-            metries["val_accuracy"].append(float("nan"))
+            metries["val_ppl"].append(float("nan"))
 
     # 保存当前模型的检查点
     save_checkpoint(model, optimizer, metries, args.ckpt_path)
 
-    # 绘制训练过程中的损失和准确率曲线
+    # 绘制训练过程中的损失和困惑度曲线
     plot_training_process(metries, "statistics.png")
 
 
