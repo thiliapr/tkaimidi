@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader, Sampler
 from torch.nn import DataParallel
 from transformers import PreTrainedTokenizerFast
-from typing import Iterator
+from collections.abc import Callable
 
 import warnings
 import os
@@ -213,94 +213,81 @@ def sequence_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor]], pad_toke
 
 def train(
     model: MidiNet,
-    dataset: MidiDataset,
+    dataloader: DataLoader,
     optimizer: optim.Adam,
+    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
     vocab_size: int,
-    num_epochs: int,
-    max_batch_size: int = 1,
     pad_token: int = 0,
     device: torch.device = None,
-) -> Iterator[tuple[list[float], float]]:
+    pbar_desc: str = "训练"
+) -> tuple[list[float], float]:
     """
     训练模型的函数。
-
-    此函数进行多轮训练，逐步优化模型参数，输出每个epoch的训练损失和困惑度。
+    此函数进行一轮训练，逐步优化模型参数，输出每一步的训练损失和平均困惑度。
 
     工作流程:
         1. 初始化数据加载器。
         2. 将模型移动到指定设备。
         3. 选择交叉熵损失函数。
         4. 使用进度条显示训练进度。
-        5. 在每个epoch中:
-            a. 切换模型到训练模式。
-            b. 对每个batch进行前向传播、计算损失、反向传播和更新参数。
-            c. 累积损失和困惑度。
-            d. 返回这个epoch每一步的训练损失和困惑度平均值。
+        5. 切换模型到训练模式。
+        6. 对每个batch进行前向传播、计算损失、反向传播和更新参数。
+        7. 累积损失和困惑度。
+        8. 返回这个epoch每一步的训练损失和困惑度平均值。
 
     Args:
         model: 需要训练的神经网络模型。
-        dataset: 包含训练数据的Dataset对象。
+        dataloader: 训练数据加载器。
         optimizer: 用于优化模型的优化器。
+        criterion: 指定的损失函数。通常使用交叉熵损失函数。
         vocab_size: 词汇表的大小，用于调整输出层的维度。
-        num_epochs: 训练的轮数。
-        max_batch_size: 每个批次的序列长度的平方和上限。
         pad_token: 填充token的标记，用于忽略计算损失。
         device: 指定训练的设备。
 
-    Yields:
+    Returns:
         该epoch每一步的训练损失和训练困惑度的平均值。
 
     Examples:
-        >>> list(train(model, dataset, optimizer))
-        [([1.9, 0.89, 0.6, 0.4], 42.6), ...]
+        >>> tokenizer = PreTrainedTokenizerFast.from_pretrained("ckpt/tokenizer")
+        >>> model = MidiNet(len(tokenizer), 768, 12, 2048, 12)
+        >>> optimizer = optim.AdamW(model.parameters(), lr=1e-2, weight_decay=1e-2)
+        >>> criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+        >>> train(model, dataset, optimizer, criterion, len(tokenizer))
+        ([1.9, 0.89, 0.6, 0.4], 42.6)
     """
     # 清理缓存以释放内存
     empty_cache()
 
-    # 获取采样器，按 batch 划分数据
-    sampler = MidiDatasetSampler(dataset, max_batch_size)
-
-    # 获取训练数据加载器
-    dataloader = DataLoader(dataset, batch_sampler=sampler, collate_fn=lambda x: sequence_collate_fn(x, pad_token=pad_token))
-
     # 将模型移动到设备
     model = model.to(device)
 
-    # 定义交叉熵损失函数
-    criterion = nn.CrossEntropyLoss(ignore_index=pad_token)
+    # 设置模型为训练模式
+    model.train()
+    train_loss, train_ppl = [], []  # 初始化损失、困惑度列表
 
     # 创建进度条，显示训练进度
-    progress_bar = tqdm(total=len(dataloader) * num_epochs)
+    for inputs, labels in tqdm(dataloader, desc=pbar_desc):
+        inputs, labels = inputs.to(device), labels.to(device).view(-1)
+        optimizer.zero_grad()  # 清空梯度
+        outputs = model(inputs, key_padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
+        loss = criterion(outputs, labels)  # 计算损失
+        loss.backward()  # 反向传播
+        optimizer.step()  # 更新模型参数
 
-    for epoch in range(num_epochs):
-        model.train()  # 设置模型为训练模式
-        train_loss, train_ppl = [], []  # 初始化损失、困惑度列表
-        progress_bar.set_description(f"训练第 {epoch + 1} 个 Epoch")
+        train_ppl.append(torch.exp(loss).item())  # 累积训练困惑度
+        train_loss.append(loss.item())  # 累积训练损失
 
-        for inputs, labels in dataloader:
-            inputs, labels = inputs.to(device), labels.to(device).view(-1)
-            optimizer.zero_grad()  # 清空梯度
-            outputs = model(inputs, key_padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
-            loss = criterion(outputs, labels)  # 计算损失
-            loss.backward()  # 反向传播
-            optimizer.step()  # 更新模型参数
-
-            train_ppl.append(torch.exp(loss).item())  # 累积训练困惑度
-            train_loss.append(loss.item())  # 累积训练损失
-            progress_bar.update()  # 更新进度条
-
-        yield train_loss, sum(train_ppl) / len(train_ppl)
-
-    progress_bar.close()  # 关闭进度条
+    return train_loss, sum(train_ppl) / len(train_ppl)
 
 
 def validate(
     model: MidiNet,
-    dataset: MidiDataset,
+    dataloader: DataLoader,
+    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
     vocab_size: int,
-    max_batch_size: int = 1,
     pad_token: int = 0,
     device: torch.device = None,
+    pbar_desc: str = "验证"
 ) -> tuple[float, float]:
     """
     对模型进行验证，返回平均损失和平均困惑度。
@@ -310,9 +297,9 @@ def validate(
 
     Args:
         model: 需要验证的 MidiNet 模型。
-        dataset: 用于验证的数据集。
+        dataloader: 验证数据加载器。
+        criterion: 指定的损失函数。通常使用交叉熵损失函数。
         vocab_size: 词表大小，用于 reshape 输出。
-        max_batch_size: 每个 batch 的最大大小。
         pad_token: padding 的 token 值，用于掩码处理和损失忽略。
         device: 计算设备。
 
@@ -326,21 +313,12 @@ def validate(
     # 清理缓存以释放内存
     empty_cache()
 
-    # 获取采样器，按 batch 划分数据
-    sampler = MidiDatasetSampler(dataset, max_batch_size)
-
-    # 获取验证数据加载器
-    dataloader = DataLoader(dataset, batch_sampler=sampler, collate_fn=lambda x: sequence_collate_fn(x, pad_token=pad_token))
-
-    # 定义交叉熵损失函数
-    criterion = nn.CrossEntropyLoss(ignore_index=pad_token)
-
     # 初始化损失、困惑度列表
     val_loss = []
     val_ppl = []
 
     # 遍历整个验证集，不进行梯度计算
-    for inputs, labels in dataloader:
+    for inputs, labels in tqdm(dataloader, desc=pbar_desc):
         with torch.no_grad():
             # 将输入移动到计算设备
             inputs, labels = inputs.to(device), labels.to(device).view(-1)
@@ -430,15 +408,20 @@ def main():
     parser.add_argument("-o", "--dropout", default=0.1, type=float, help="Dropout 概率，用于防止过拟合")
     args = parser.parse_args()
 
+    # 清理缓存以释放内存
+    empty_cache()
+
     # 加载检查点
     tokenizer, model_state, optimizer_state, metries = load_checkpoint(args.ckpt_path, train=True)
 
-    # 加载训练集
+    # 加载训练集并创建数据加载器
     train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length)
+    train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(train_dataset, args.max_batch_size), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
-    # 如果有的话，加载验证集
+    # 如果有的话，加载验证集并创建数据加载器
     if args.val_dataset:
         val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length)
+        val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(val_dataset, args.max_batch_size), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 获取设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -455,9 +438,9 @@ def main():
     # 转移模型到设备
     model = model.to(device)
 
-    # 检查是否使用多GPU
+    # 如果存在多个GPU，则使用 DataParallel 进行训练
     if torch.cuda.device_count() > 1:
-        model = DataParallel(model)  # 使用 DataParallel 进行多GPU训练
+        model = DataParallel(model)
 
     # 创建优化器
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
@@ -468,19 +451,25 @@ def main():
     except (ValueError, KeyError):
         pass
 
+    # 定义交叉熵损失函数
+    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+
     # 开始训练模型
-    for train_loss, train_ppl in train(model, train_dataset, optimizer, len(tokenizer), args.num_epochs, max_batch_size=args.max_batch_size, pad_token=tokenizer.pad_token_id, device=device):
+    for epoch in range(args.num_epochs):
+        # 训练并添加损失和困惑度到指标
+        train_loss, train_ppl = train(model, train_loader, optimizer, criterion, len(tokenizer), tokenizer.pad_token_id, device, f"训练第 {epoch + 1} 个 Epoch")
         metries["train_loss"].append(train_loss)
         metries["train_ppl"].append(train_ppl)
 
-        # 如果指定了验证集，就进行验证，否则跳过
+        # 如果指定了验证集，就进行验证，否则跳过验证并设置验证损失和困惑度为 NaN
         if args.val_dataset:
-            val_loss, val_ppl = validate(model, val_dataset, len(tokenizer), max_batch_size=args.max_batch_size, pad_token=tokenizer.pad_token_id, device=device)
-            metries["val_loss"].append(val_loss)
-            metries["val_ppl"].append(val_ppl)
+            val_loss, val_ppl = validate(model, val_loader, criterion, len(tokenizer), tokenizer.pad_token_id, device, f"验证第 {epoch + 1} 个 Epoch")
         else:
-            metries["val_loss"].append(float("nan"))
-            metries["val_ppl"].append(float("nan"))
+            val_loss = val_ppl = float("nan")
+
+        # 添加验证损失和困惑度到指标
+        metries["val_loss"].append(val_loss)
+        metries["val_ppl"].append(val_ppl)
 
     # 保存当前模型的检查点
     save_checkpoint(model, optimizer, metries, args.ckpt_path)
