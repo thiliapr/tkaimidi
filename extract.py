@@ -35,11 +35,16 @@ def main():
             # 跳过有错误的 MIDI 文件
             continue
 
+        # 提取音符并跳过没有音符的 MIDI 文件
         notes = midi_to_notes(midi_file)
+        if not notes:
+            continue
+
+        # 转化为电子乐谱形式
         sheet, positions = notes_to_sheet(notes)
         data = data_to_str(sheet)
 
-        # 过滤出训练音符
+        # 过滤出可以用于训练的偏移量
         train_notes = [i for i, (_, interval) in enumerate(notes) if i == 0 or interval != 0]
 
         # 构建输出路径并确保目录存在

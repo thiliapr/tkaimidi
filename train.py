@@ -85,7 +85,12 @@ class MidiDataset(Dataset):
                 # 跳过有错误的 MIDI 文件
                 continue
 
+            # 提取音符并跳过没有音符的 MIDI 文件
             notes = midi_to_notes(midi_file)
+            if not notes:
+                continue
+
+            # 转化为电子乐谱形式
             sheet, positions = notes_to_sheet(notes)
 
             # 将每个音符序列切分为子序列

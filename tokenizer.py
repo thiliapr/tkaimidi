@@ -122,14 +122,19 @@ def get_samples(midi_dirs: "list[pathlib.Path]" = []) -> Iterator[tuple[int, str
     for filepath in tqdm([filepath for midi_dir in midi_dirs for filepath in midi_dir.glob("**/*.mid")], desc="加载原始 MIDI 样本", delay=0.1):
         # 转换处理流程: MIDI 文件 → 音符 → 乐谱表示 → 字符表示
         try:
-            midi_data = mido.MidiFile(filepath, clip=True)
+            midi_file = mido.MidiFile(filepath, clip=True)
         except Exception:
             # 跳过有错误的 MIDI 文件
             continue
-        notes = midi_to_notes(midi_data)
+
+        # 提取音符并跳过没有音符的 MIDI 文件
+        notes = midi_to_notes(midi_file)
+        if not notes:
+            continue
+
+        # 转化为电子乐谱形式
         sheet, _ = notes_to_sheet(notes)
-        data = data_to_str(sheet)
-        yield len(notes), data
+        yield len(notes), data_to_str(sheet)
 
     for filepath in tqdm([filepath for midi_dir in midi_dirs for filepath in midi_dir.glob("**/*.json")], desc="加载被转换的 MIDI 样本", delay=0.1):
         with open(filepath, encoding="utf-8") as f:

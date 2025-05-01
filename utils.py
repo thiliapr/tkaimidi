@@ -62,6 +62,10 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
             # 将音符和相对时间添加到提取列表中
             extracted_notes.append((msg.note, current_time))
 
+    # 如果没有提取出任何音符，则返回空列表
+    if not extracted_notes:
+        return []
+
     # 转化为相对时间
     extracted_notes = [(note, now - (extracted_notes[i - 1][1] if i else now)) for i, (note, now) in enumerate(extracted_notes)]
 
