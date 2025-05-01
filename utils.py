@@ -9,6 +9,7 @@
 
 import math
 import mido
+from collections import Counter
 
 # 在非 Jupyter 环境下导入常量库
 if "get_ipython" not in globals():
@@ -109,27 +110,60 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
     # 分离音高和时间间隔
     pitches, intervals = zip(*notes)
 
+    # 定义最佳偏移量检测函数
+    def offset_func(start: int, cur_offset: int) -> dict[int, int]:
+        "计算分别在 0-11 的偏移量时有多少个音符在自然音阶。"
+        end = min(start + lookahead_count, len(pitches))
+        segment = [pitch + cur_offset for pitch in pitches[start:end]]
+        return {offset: sum((pitch + offset) % 12 in NATURAL_SCALE for pitch in segment) for offset in range(12)}
+
+    def octave_offset_func(start: int, cur_offset: int):
+        "计算使音高集中在一个八度范围内的偏移量。"
+        end = min(start + lookahead_count, len(pitches))
+        segment = [pitch + cur_offset for pitch in pitches[start:end]]
+        return -max(Counter(pitch // 12 for pitch in segment).items(), key=lambda x: x[1] + int(x[0] == 0))[0]
+
     # 计算调整音高的偏移量，使其尽量符合自然音阶
-    cur_offset = max(range(12), key=lambda offset: sum((pitch + offset) % 12 in NATURAL_SCALE for pitch in pitches[:lookahead_count]))
+    cur_offset = max(offset_func(0, 0).items(), key=lambda x: x[1])[0]
 
     # 计算使音高集中在一个八度范围内的偏移量
-    octave_offset = max(range(-10, 10), key=lambda octave_offset: sum(0 <= (pitch + cur_offset + octave_offset * 12) < 12 for pitch in pitches[:lookahead_count]))
+    octave_offset = octave_offset_func(0, cur_offset)
     cur_offset += octave_offset * 12
 
+    # 准备偏移量分数缓存
+    offset_scores = offset_func(0, cur_offset)
+
+    # 消除不参与分数计算的音符的影响
+    for offset in range(12):
+        if (pitches[lookahead_count - 1] + cur_offset + offset) % 12 in NATURAL_SCALE:
+            offset_scores[offset] -= 1
+
     # 开始转换音符为电子乐谱
-    sheet: list[int] = []
-    positions: list[int] = []
+    sheet = []
+    positions = []
     for i in range(len(pitches)):
         offset_sum = 0
 
-        # 如果音高不在自然音阶内，调整音高
-        best_offset = max(range(12), key=lambda offset: sum((pitch + cur_offset + offset) % 12 in NATURAL_SCALE for pitch in pitches[i:i + lookahead_count]) * lookahead_count + int(offset == 0))
+        # 将最远能够看到的音符加入偏移量的分数计算
+        if i + lookahead_count - 1 < len(pitches):
+            for offset in range(12):
+                if (pitches[i + lookahead_count - 1] + cur_offset + offset) % 12 in NATURAL_SCALE:
+                    offset_scores[offset] += 1
+
+        # 如果最佳偏移量不为 0，则调整偏移量并重新获取偏移量的分数
+        best_offset = max(offset_scores.items(), key=lambda x: x[1])[0]
         if best_offset != 0:
             offset_sum += best_offset
             cur_offset += best_offset
+            offset_scores = offset_func(i, cur_offset)
+
+        # 消除当前音符音高对分数的影响
+        for offset in range(12):
+            if (pitches[i] + cur_offset + offset) % 12 in NATURAL_SCALE:
+                offset_scores[offset] += 1
 
         # 如果音高不在一个八度范围内，调整音高
-        best_octave_offset = max(range(-4, 4), key=lambda octave_offset: sum(0 <= (pitch + cur_offset + octave_offset * 12) < 12 for pitch in pitches[i:i + lookahead_count]) * lookahead_count + int(octave_offset == 0))
+        best_octave_offset = octave_offset_func(i, cur_offset)
         if best_octave_offset != 0:
             offset_sum += best_octave_offset * 12
             cur_offset += best_octave_offset * 12
