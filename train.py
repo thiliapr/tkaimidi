@@ -84,7 +84,13 @@ class MidiDataset(Dataset):
 
         for file_index, filepath in enumerate(midi_files):
             # 读取并转化 MIDI 文件
-            notes = midi_to_notes(mido.MidiFile(filepath, clip=True))
+            try:
+                midi_file = mido.MidiFile(filepath, clip=True)
+            except Exception:
+                # 跳过有错误的 MIDI 文件
+                continue
+
+            notes = midi_to_notes(midi_file)
             sheet, positions = notes_to_sheet(notes)
 
             # 将每个音符序列切分为子序列

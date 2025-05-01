@@ -116,7 +116,11 @@ def get_samples(midi_files: "list[pathlib.Path]") -> Iterator[tuple[int, str]]:
     """
     for midi_file in tqdm(midi_files, desc="加载 MIDI 样本"):
         # 转换处理流程: MIDI 文件 → 音符 → 乐谱表示 → 字符表示
-        midi_data = mido.MidiFile(midi_file, clip=True)
+        try:
+            midi_data = mido.MidiFile(midi_file, clip=True)
+        except Exception:
+            # 跳过有错误的 MIDI 文件
+            continue
         notes = midi_to_notes(midi_data)
         sheet, _ = notes_to_sheet(notes)
         data = data_to_str(sheet)
