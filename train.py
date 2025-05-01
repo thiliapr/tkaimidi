@@ -10,6 +10,7 @@
 import pathlib
 import random
 import mido
+import json
 import argparse
 import torch
 import torch.nn as nn
@@ -75,14 +76,8 @@ class MidiDataset(Dataset):
         self.sequences = []  # 存储每个序列的文件索引、偏移量及其音符数量
         self.tokenizer = tokenizer
 
-        # 获取所有 MIDI 文件
-        midi_files = [file for midi_dir in midi_dirs for file in midi_dir.glob("**/*.mid")]
-
-        # 如果需要显示进度条
-        if show_progress:
-            progress_bar = tqdm(desc="加载音乐数据集", total=len(midi_files))
-
-        for file_index, filepath in enumerate(midi_files):
+        # 加载原始 MIDI 文件
+        for file_index, filepath in tqdm(list(enumerate(file for midi_dir in midi_dirs for file in midi_dir.glob("**/*.mid"))), desc="加载音乐数据集（原始 MIDI 文件）", delay=0.1):
             # 读取并转化 MIDI 文件
             try:
                 midi_file = mido.MidiFile(filepath, clip=True)
@@ -96,20 +91,26 @@ class MidiDataset(Dataset):
             # 将每个音符序列切分为子序列
             self.sequences.extend(
                 # 保存每个子序列的相关信息: 当前 MIDI 文件的索引、起始位置，以及子序列的长度
-                ((file_index, positions[offset]), len(notes) - offset) for offset in range(max(1, len(notes) - min_sequence_length))
+                ((file_index, positions[offset]), len(notes) - offset)
+                for offset in range(max(1, len(notes) - min_sequence_length))
                 if offset == 0 or notes[offset][1]  # 音符的起始点或音符是与前一个音符有时间间隔
             )
 
             # 将当前 MIDI 文件的音符数据加入到 data 列表中
             self.data.append(data_to_str(sheet))
 
-            # 更新进度条
-            if show_progress:
-                progress_bar.update()
+        index_offset = len(self.data)
+        for file_index, filepath in tqdm(list(enumerate(file for midi_dir in midi_dirs for file in midi_dir.glob("**/*.json"))), desc="加载音乐数据集（优化的 JSON 文件）", delay=0.1):
+            # 读取文件
+            with open(filepath, encoding="utf-8") as f:
+                data = json.load(f)
 
-        # 关闭进度条
-        if show_progress:
-            progress_bar.close()
+            self.sequences.extend(
+                ((index_offset + file_index, data["positions"][i]), data["num_notes"] - offset)
+                for i, offset in enumerate(data["train_notes"])
+                if offset == 0 or (data["num_notes"] - offset) >= min_sequence_length
+            )
+            self.data.append(data["data"])
 
     def __len__(self):
         return len(self.sequences)
@@ -403,7 +404,7 @@ def main():
     parser.add_argument("ckpt_path", type=pathlib.Path, help="加载和保存检查点的路径")
     parser.add_argument("-t", "--train-dataset", action="append", type=pathlib.Path, required=True, help="训练集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
-    parser.add_argument("-m", "--min-sequence-length", default=512, type=int, help="最小序列长度，小于该长度的样本不会分子序列")
+    parser.add_argument("-m", "--min-sequence-length", default=2 ** 32, type=int, help="最小序列长度，小于该长度的样本不会分子序列")
     parser.add_argument("-b", "--max-batch-size", default=8 * 1536 ** 2, type=int, help="每个批次的序列长度的平方和上限")
     parser.add_argument("-l", "--learning-rate", default=0.01, type=float, help="学习率")
     parser.add_argument("-w", "--weight-decay", default=0.01, type=float, help="权重衰减系数")
