@@ -160,7 +160,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
         # 消除当前音符音高对分数的影响
         for offset in range(12):
             if (pitches[i] + cur_offset + offset) % 12 in NATURAL_SCALE:
-                offset_scores[offset] += 1
+                offset_scores[offset] -= 1
 
         # 如果音高不在一个八度范围内，调整音高
         best_octave_offset = octave_offset_func(i, cur_offset)
