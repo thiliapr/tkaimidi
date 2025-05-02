@@ -14,7 +14,7 @@ import mido
 from tokenizers import Tokenizer, models, trainers
 from tokenizers.processors import TemplateProcessing
 from transformers import PreTrainedTokenizerFast
-from typing import Iterator, Optional, Any
+from typing import Iterator, Optional, Any, Union
 
 # 解除限制
 import os
@@ -105,7 +105,7 @@ def train_sheet_tokenizer(model_data_samples: Iterator[str], vocab_size: int, mi
     return wrapped_tokenizer
 
 
-def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2 ** 16, show_progress: bool = True) -> Iterator[tuple[int, str]]:
+def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2 ** 16, show_progress: bool = True) -> Iterator[Union[int, tuple[int, str]]]:
     """
     从 MIDI 文件中提取样本，转换为模型输入所需的音符序列。
 
@@ -115,10 +115,11 @@ def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2
     Args:
         midi_dirs: MIDI 文件夹列表，包含原始 MIDI 文件和已转换为 JSON 格式文件。
         max_sequence_length: 最长序列长度。超过该长度的序列会被截断。
-        show_progress: 显示进度。
+        show_progress: 是否显示处理进度条。
 
     Yields:
-        返回一个元组，包含音符数量和对应的字符表示。
+        1. 总文件数量
+        2. 各文件的元组(音符数量, 序列字符串)
     """
     # 遍历 MIDI 文件夹
     midi_files = [filepath for midi_dir in midi_dirs for filepath in midi_dir.glob("**/*.mid")]
@@ -149,7 +150,7 @@ def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2
         # 转化为电子乐谱形式
         sheet, positions = notes_to_sheet(notes)
 
-        # 截断序列
+        # 截断超长序列
         if len(sheet) > max_sequence_length:
             notes_end, sheet_end = max((i, position) for i, position in enumerate(positions) if position < max_sequence_length)
             notes = notes[:notes_end]
@@ -162,7 +163,7 @@ def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2
         with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
 
-        # 截断序列
+        # 截断超长序列
         if len(data["data"]) > max_sequence_length:
             notes_end, sheet_end = max((note, data["positions"][i]) for i, note in enumerate(data["train_notes"]) if data["positions"][i] < max_sequence_length)
             data["num_notes"] = notes_end

@@ -46,38 +46,42 @@ class MidiDataset(Dataset):
     """
     MIDI 数据集类，用于加载和处理 MIDI 文件，将其转化为模型可以使用的格式。
 
-    该类的功能包括:
-    1. 读取指定目录下的所有 MIDI 文件。
-    2. 将每个 MIDI 文件转化为音符序列。
-    3. 将音符序列分割为指定大小的子序列。
-    4. 提供数据集大小和索引功能，方便模型训练使用。
+    功能说明:
+    1. 从指定目录读取所有 MIDI 和 JSON 文件
+    2. 将 MIDI 文件转换为音符序列
+    3. 将音符序列分割为指定长度的训练样本
+    4. 提供数据集大小和索引访问功能
 
     Attributes:
-        data: 存储所有 MIDI 文件的音符数据，每个元素为一个 MIDI 文件的音符序列。
-        sequences: 存储每个 MIDI 文件中，音符序列的开始位置和音符数量，用于切分子序列。
-        tokenizer: 用于将音符序列转换为模型输入的分词器。
+        all_music_data: 存储所有音乐文件的数据(原始字符串格式)
+        music_sequences: 存储每个训练序列的元信息(文件索引、起始位置、长度)
+        tokenizer: 用于将音乐数据转换为模型输入的分词器
 
     Args:
-        midi_dirs: 存放 MIDI 文件的目录列表。
-        tokenizer: 用于音符序列转化为模型输入的分词器。
-        min_sequence_length: 每个子序列的最小长度。
-        show_progress: 是否显示加载进度条。
+        midi_dirs: 包含 MIDI/JSON 文件的目录列表
+        tokenizer: 用于音乐数据编码的分词器
+        min_sequence_length: 训练序列的最小长度
+        max_sequence_length: 序列最大长度(超长序列会被截断)
+        show_progress: 是否显示加载进度条
 
     Examples:
-        >>> midi_dirs = [pathlib.Path("/path/to/midi/files")]
-        >>> tokenizer = PreTrainedTokenizerFast.from_pretrained("tokenizer_name")
-        >>> dataset = MidiDataset(midi_dirs=midi_dirs, tokenizer=tokenizer)
-        >>> len(dataset)  # 返回数据集的子序列数量
-        100
+        >>> dataset = MidiDataset(midi_dirs=[pathlib.Path("data/midi")],
+        ...                       tokenizer=tokenizer,
+        ...                       min_sequence_length=32,
+        ...                       max_sequence_length=512)
+        >>> len(dataset)  # 获取训练样本数量
+        1989
+        >>> dataset[0]  # 获取第一个训练样本
     """
 
-    def __init__(self, midi_dirs: list[pathlib.Path], tokenizer: PreTrainedTokenizerFast, min_sequence_length: int, show_progress: bool = True):
-        self.data = []  # 存储每个 MIDI 文件的数据
-        self.sequences = []  # 存储每个序列的文件索引、偏移量及其音符数量
+    def __init__(self, midi_dirs: list[pathlib.Path], tokenizer: PreTrainedTokenizerFast, min_sequence_length: int, max_sequence_length: int, show_progress: bool = True):
+        self.all_music_data = []  # 存储所有音乐文件的字符串数据
+        self.music_sequences = []  # 存储每个训练序列的元信息(文件索引, 起始位置)
         self.tokenizer = tokenizer
 
-        # 加载原始 MIDI 文件
-        for file_index, filepath in tqdm(list(enumerate(file for midi_dir in midi_dirs for file in midi_dir.glob("**/*.mid"))), desc="加载音乐数据集（原始 MIDI 文件）", delay=0.1):
+        # 处理 MIDI 文件
+        midi_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.mid")]
+        for file_index, filepath in tqdm(enumerate(midi_files), total=len(midi_files), desc="加载音乐数据集（原始 MIDI 文件）", delay=0.1, disable=not show_progress):
             # 读取并转化 MIDI 文件
             try:
                 midi_file = mido.MidiFile(filepath, clip=True)
@@ -93,36 +97,54 @@ class MidiDataset(Dataset):
             # 转化为电子乐谱形式
             sheet, positions = notes_to_sheet(notes)
 
+            # 截断超长序列
+            if len(sheet) > max_sequence_length:
+                notes_end, sheet_end = max((i, position) for i, position in enumerate(positions) if position < max_sequence_length)
+                notes = notes[:notes_end]
+                sheet = sheet[:sheet_end]
+
             # 将每个音符序列切分为子序列
-            self.sequences.extend(
+            self.music_sequences.extend(
                 # 保存每个子序列的相关信息: 当前 MIDI 文件的索引、起始位置，以及子序列的长度
                 ((file_index, positions[offset]), len(notes) - offset)
                 for offset in range(max(1, len(notes) - min_sequence_length))
                 if offset == 0 or notes[offset][1]  # 音符的起始点或音符是与前一个音符有时间间隔
             )
 
-            # 将当前 MIDI 文件的音符数据加入到 data 列表中
-            self.data.append(data_to_str(sheet))
+            # 将当前 MIDI 文件的音符数据加入到 all_music_data 列表中
+            self.all_music_data.append(data_to_str(sheet))
 
-        index_offset = len(self.data)
-        for file_index, filepath in tqdm(list(enumerate(file for midi_dir in midi_dirs for file in midi_dir.glob("**/*.json"))), desc="加载音乐数据集（优化的 JSON 文件）", delay=0.1):
+        # 处理 JSON 文件（更快的格式）
+        json_offset = len(self.all_music_data)  # 文件索引偏移量
+        json_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.json")]
+
+        for file_index, filepath in tqdm(enumerate(json_files), total=len(json_files), desc="加载音乐数据集（优化的 JSON 文件）", delay=0.1, disable=not show_progress):
             # 读取文件
             with open(filepath, encoding="utf-8") as f:
                 data = json.load(f)
 
-            self.sequences.extend(
-                ((index_offset + file_index, data["positions"][i]), data["num_notes"] - offset)
+            # 截断超长序列
+            if len(data["data"]) > max_sequence_length:
+                notes_end, sheet_end = max((note, data["positions"][i]) for i, note in enumerate(data["train_notes"]) if data["positions"][i] < max_sequence_length)
+                data["num_notes"] = notes_end
+                data["data"] = data["data"][:sheet_end]
+
+            # 生成训练序列
+            self.music_sequences.extend(
+                ((json_offset + file_index, data["positions"][i]), data["num_notes"] - offset)
                 for i, offset in enumerate(data["train_notes"])
                 if offset == 0 or (data["num_notes"] - offset) >= min_sequence_length
             )
-            self.data.append(data["data"])
+
+            # 将当前 MIDI 文件的音符数据加入到 all_music_data 列表中
+            self.all_music_data.append(data["data"])
 
     def __len__(self):
-        return len(self.sequences)
+        return len(self.music_sequences)
 
     def __getitem__(self, index: int):
-        (file_index, offset), _ = self.sequences[index]
-        sequence = self.tokenizer.encode(self.data[file_index][offset:])
+        (file_index, offset), _ = self.music_sequences[index]
+        sequence = self.tokenizer.encode(self.all_music_data[file_index][offset:])
         return torch.tensor(sequence[:-1], dtype=torch.long), torch.tensor(sequence[1:], dtype=torch.long)
 
 
@@ -191,7 +213,7 @@ class MidiDatasetSampler(Sampler[int]):
         batch = []
 
         # 先按序列长度排序，如果序列长度相同就随机排序
-        for index, (_, sequence_length) in sorted(enumerate(self.dataset.sequences), key=lambda x: x[1][1] * length + random.randint(0, length - 1)):
+        for index, (_, sequence_length) in sorted(enumerate(self.dataset.sequences), key=lambda x: (x[1][1], random.randint(0, length - 1))):
             # 跳过长度平方大于 max_batch_size 的序列
             if sequence_length ** 2 > self.max_batch_size:
                 continue
