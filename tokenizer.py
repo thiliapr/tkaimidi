@@ -14,7 +14,7 @@ import mido
 from tokenizers import Tokenizer, models, trainers
 from tokenizers.processors import TemplateProcessing
 from transformers import PreTrainedTokenizerFast
-from typing import Iterator, Any
+from typing import Iterator, Optional, Any
 
 # 解除限制
 import os
@@ -105,7 +105,7 @@ def train_sheet_tokenizer(model_data_samples: Iterator[str], vocab_size: int, mi
     return wrapped_tokenizer
 
 
-def get_samples(midi_dirs: "list[pathlib.Path]" = []) -> Iterator[tuple[int, str]]:
+def get_samples(midi_dirs: list[pathlib.Path] = [], show_progress: bool = True) -> Iterator[tuple[int, str]]:
     """
     从 MIDI 文件中提取样本，转换为模型输入所需的音符序列。
 
@@ -113,13 +113,26 @@ def get_samples(midi_dirs: "list[pathlib.Path]" = []) -> Iterator[tuple[int, str
     字符串格式以供模型使用。同时，它也可以从已转换的 JSON 文件中加载样本。
 
     Args:
-        midi_files: MIDI 文件夹列表，包含原始 MIDI 文件和已转换为 JSON 格式文件。
+        midi_dirs: MIDI 文件夹列表，包含原始 MIDI 文件和已转换为 JSON 格式文件。
+        show_progress: 显示进度。
 
     Yields:
         返回一个元组，包含音符数量和对应的字符表示。
     """
-    # 遍历 MIDI 文件夹，提取音符样本
-    for filepath in tqdm([filepath for midi_dir in midi_dirs for filepath in midi_dir.glob("**/*.mid")], desc="加载原始 MIDI 样本", delay=0.1):
+    # 遍历 MIDI 文件夹
+    midi_files = [filepath for midi_dir in midi_dirs for filepath in midi_dir.glob("**/*.mid")]
+    json_files = [filepath for midi_dir in midi_dirs for filepath in midi_dir.glob("**/*.json")]
+
+    # 返回样本数量
+    yield len(midi_files) + len(json_files)
+
+    # 根据参数显示进度
+    if show_progress:
+        midi_files = tqdm(midi_files, desc="加载原始 MIDI 样本", delay=0.1)
+        json_files = tqdm(json_files, desc="加载原始 MIDI 样本", delay=0.1)
+
+    # 加载原始 MIDI 文件
+    for filepath in midi_files:
         # 转换处理流程: MIDI 文件 → 音符 → 乐谱表示 → 字符表示
         try:
             midi_file = mido.MidiFile(filepath, clip=True)
@@ -136,13 +149,14 @@ def get_samples(midi_dirs: "list[pathlib.Path]" = []) -> Iterator[tuple[int, str
         sheet, _ = notes_to_sheet(notes)
         yield len(notes), data_to_str(sheet)
 
-    for filepath in tqdm([filepath for midi_dir in midi_dirs for filepath in midi_dir.glob("**/*.json")], desc="加载被转换的 MIDI 样本", delay=0.1):
+    # 加载转换后的 JSON 文件
+    for filepath in json_files:
         with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
         yield data["num_notes"], data["data"]
 
 
-def validate(samples: list[tuple[int, str]], tokenizer: PreTrainedTokenizerFast) -> tuple[int, float, float]:
+def validate(samples: Iterator[tuple[int, str]], tokenizer: PreTrainedTokenizerFast, length: Optional[int] = None) -> tuple[int, float, float]:
     """
     评估分词器的效果
 
@@ -156,15 +170,23 @@ def validate(samples: list[tuple[int, str]], tokenizer: PreTrainedTokenizerFast)
         - 平均序列长度占音符总数的百分比
         - 使用的词汇占总词汇表的比例
     """
+    # 初始化统计变量
+    total_notes = 0
     total_seq_length = 0
     words_used_set = set()
 
-    for _, data in samples:
+    # 获取样本数量
+    if hasattr(samples, "__len__") and len(samples):
+        length = len(samples)
+
+    # 逐个评估
+    for i, (num_notes, data) in tqdm(enumerate(samples), total=length, desc="评估效果"):
+        total_notes += num_notes
         encoded = tokenizer.encode(data)
         total_seq_length += len(encoded)
         words_used_set.update(encoded)
 
-    total_notes = sum(num_notes for num_notes, _ in samples)
+    # 统计
     avg_seq_ratio = total_seq_length / total_notes if total_notes > 0 else 0
     vocab_usage = (len(words_used_set) - 2) / (len(tokenizer) - 2)  # 减去2个特殊token
 
@@ -188,7 +210,7 @@ def main():
     # 设置命令行参数解析
     parser = argparse.ArgumentParser(description="音乐数据分词器训练脚本")
     parser.add_argument("-t", "--train-samples", type=pathlib.Path, action="append", required=True, help="训练集目录路径，包含MIDI样本文件（以`.mid`或`.json`结尾）")
-    parser.add_argument("-v", "--valid-samples", type=pathlib.Path, help="验证集目录路径，包含MIDI样本文件（以`.mid`或`.json`结尾）")
+    parser.add_argument("-v", "--valid-samples", type=pathlib.Path, action="append", help="验证集目录路径，包含MIDI样本文件（以`.mid`或`.json`结尾）")
     parser.add_argument("-p", "--ckpt-path", type=pathlib.Path, default=pathlib.Path("ckpt"), help="分词器保存路径，将创建tokenizer子目录")
     parser.add_argument("-s", "--vocab-size", type=int, default=2000, help="分词器词汇表大小")
     parser.add_argument("-f", "--min-frequency", type=int, default=12, help="token最小出现频率阈值")
@@ -207,7 +229,7 @@ def main():
     args.ckpt_path.mkdir(parents=True, exist_ok=True)
 
     # 处理所有MIDI样本文件
-    train_samples = list(get_samples(args.train_samples))
+    train_samples = list(get_samples(args.train_samples))[1:]
 
     # 清除缓存
     empty_cache()
@@ -229,18 +251,23 @@ def main():
     print(f"- 词汇表大小: {tokenizer.vocab_size}")
     print(f"- 训练样本数: {len(train_samples)}")
 
+    # 清除缓存
+    empty_cache()
+
     # 评估训练集效果
     print("\n训练集评估:")
     train_metrics = validate(train_samples, tokenizer)
     print_validation_results(train_metrics)
 
+    # 清除缓存
+    empty_cache()
+
     # 如果有验证集，评估验证集效果
     if args.valid_samples:
-        print("\n加载验证样本...")
-        valid_samples = list(get_samples(args.valid_samples))
-
         print("\n验证集评估:")
-        valid_metrics = validate(valid_samples, tokenizer)
+        valid_samples = get_samples(args.valid_samples, show_progress=False)
+        samples_length = next(valid_samples)
+        valid_metrics = validate(valid_samples, tokenizer, length=samples_length)
         print_validation_results(valid_metrics)
 
 
