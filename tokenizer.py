@@ -105,7 +105,7 @@ def train_sheet_tokenizer(model_data_samples: Iterator[str], vocab_size: int, mi
     return wrapped_tokenizer
 
 
-def get_samples(midi_dirs: list[pathlib.Path] = [], show_progress: bool = True) -> Iterator[tuple[int, str]]:
+def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2 ** 16, show_progress: bool = True) -> Iterator[tuple[int, str]]:
     """
     从 MIDI 文件中提取样本，转换为模型输入所需的音符序列。
 
@@ -114,6 +114,7 @@ def get_samples(midi_dirs: list[pathlib.Path] = [], show_progress: bool = True) 
 
     Args:
         midi_dirs: MIDI 文件夹列表，包含原始 MIDI 文件和已转换为 JSON 格式文件。
+        max_sequence_length: 最长序列长度。超过该长度的序列会被截断。
         show_progress: 显示进度。
 
     Yields:
@@ -146,13 +147,27 @@ def get_samples(midi_dirs: list[pathlib.Path] = [], show_progress: bool = True) 
             continue
 
         # 转化为电子乐谱形式
-        sheet, _ = notes_to_sheet(notes)
+        sheet, positions = notes_to_sheet(notes)
+
+        # 截断序列
+        if len(sheet) > max_sequence_length:
+            notes_end, sheet_end = max((i, position) for i, position in enumerate(positions) if position < max_sequence_length)
+            notes = notes[:notes_end]
+            sheet = sheet[:sheet_end]
+
         yield len(notes), data_to_str(sheet)
 
     # 加载转换后的 JSON 文件
     for filepath in json_files:
         with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
+
+        # 截断序列
+        if len(data["data"]) > max_sequence_length:
+            notes_end, sheet_end = max((note, data["positions"][i]) for i, note in enumerate(data["train_notes"]) if data["positions"][i] < max_sequence_length)
+            data["num_notes"] = notes_end
+            data["data"] = data["data"][:sheet_end]
+
         yield data["num_notes"], data["data"]
 
 
@@ -214,6 +229,7 @@ def main():
     parser.add_argument("-p", "--ckpt-path", type=pathlib.Path, default=pathlib.Path("ckpt"), help="分词器保存路径，将创建tokenizer子目录")
     parser.add_argument("-s", "--vocab-size", type=int, default=2000, help="分词器词汇表大小")
     parser.add_argument("-f", "--min-frequency", type=int, default=12, help="token最小出现频率阈值")
+    parser.add_argument("-m", "--max-sequence-length", type=int, default=2 ** 16, help="最长允许多长的序列参与训练和测试（单位: 字符）")
     parser.add_argument("-y", "--force", action="store_true", help="即使检查点已经存在分词器也要训练")
 
     # 解析参数
@@ -229,7 +245,7 @@ def main():
     args.ckpt_path.mkdir(parents=True, exist_ok=True)
 
     # 处理所有MIDI样本文件
-    train_samples = list(get_samples(args.train_samples))[1:]
+    train_samples = list(get_samples(args.train_samples, max_sequence_length=args.max_sequence_length))[1:]
 
     # 清除缓存
     empty_cache()
@@ -265,7 +281,7 @@ def main():
     # 如果有验证集，评估验证集效果
     if args.valid_samples:
         print("\n验证集评估:")
-        valid_samples = get_samples(args.valid_samples, show_progress=False)
+        valid_samples = get_samples(args.valid_samples, max_sequence_length=args.max_sequence_length, show_progress=False)
         samples_length = next(valid_samples)
         valid_metrics = validate(valid_samples, tokenizer, length=samples_length)
         print_validation_results(valid_metrics)
