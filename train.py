@@ -183,7 +183,7 @@ class MidiDatasetSampler(Sampler[int]):
         cur_batch_size = 0
 
         # 按序列长度排序
-        for _, sequence_length in sorted(self.dataset.sequences, key=lambda x: x[1]):
+        for _, sequence_length in sorted(self.dataset.music_sequences, key=lambda x: x[1]):
             # 计算序列长度平方
             sequence_size = sequence_length ** 2
 
@@ -213,7 +213,7 @@ class MidiDatasetSampler(Sampler[int]):
         batch = []
 
         # 先按序列长度排序，如果序列长度相同就随机排序
-        for index, (_, sequence_length) in sorted(enumerate(self.dataset.sequences), key=lambda x: (x[1][1], random.randint(0, length - 1))):
+        for index, (_, sequence_length) in sorted(enumerate(self.dataset.music_sequences), key=lambda x: (x[1][1], random.randint(0, length - 1))):
             # 跳过长度平方大于 max_batch_size 的序列
             if sequence_length ** 2 > self.max_batch_size:
                 continue
