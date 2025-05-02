@@ -229,7 +229,7 @@ def main():
     parser.add_argument("-p", "--ckpt-path", type=pathlib.Path, default=pathlib.Path("ckpt"), help="分词器保存路径，将创建tokenizer子目录")
     parser.add_argument("-s", "--vocab-size", type=int, default=2000, help="分词器词汇表大小")
     parser.add_argument("-f", "--min-frequency", type=int, default=12, help="token最小出现频率阈值")
-    parser.add_argument("-m", "--max-sequence-length", type=int, default=2 ** 16, help="最长允许多长的序列参与训练和测试（单位: 字符）")
+    parser.add_argument("-m", "--max-sequence-length", type=int, default=2 ** 17, help="最长允许多长的序列参与训练和测试（单位: 字符）")
     parser.add_argument("-y", "--force", action="store_true", help="即使检查点已经存在分词器也要训练")
 
     # 解析参数
