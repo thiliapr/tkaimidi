@@ -431,7 +431,8 @@ def main():
     parser.add_argument("ckpt_path", type=pathlib.Path, help="加载和保存检查点的路径")
     parser.add_argument("-t", "--train-dataset", action="append", type=pathlib.Path, required=True, help="训练集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
-    parser.add_argument("-m", "--min-sequence-length", default=2 ** 32, type=int, help="最小序列长度，小于该长度的样本不会分子序列")
+    parser.add_argument("-m", "--min-sequence-length", default=2 ** 32, type=int, help="最小序列长度，小于该长度的样本不会分子序列（即该样本一个 Epoch 只被训练一次）")
+    parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断")
     parser.add_argument("-b", "--max-batch-size", default=8 * 1536 ** 2, type=int, help="每个批次的序列长度的平方和上限")
     parser.add_argument("-l", "--learning-rate", default=0.01, type=float, help="学习率")
     parser.add_argument("-w", "--weight-decay", default=0.01, type=float, help="权重衰减系数")
@@ -449,12 +450,12 @@ def main():
     tokenizer, model_state, optimizer_state, metries = load_checkpoint(args.ckpt_path, train=True)
 
     # 加载训练集并创建数据加载器
-    train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length)
+    train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
     train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(train_dataset, args.max_batch_size), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 如果有的话，加载验证集并创建数据加载器
     if args.val_dataset:
-        val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length)
+        val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
         val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(val_dataset, args.max_batch_size), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 获取设备
