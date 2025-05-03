@@ -303,10 +303,14 @@ def train(
     for inputs, labels in tqdm(dataloader, desc=pbar_desc):
         inputs, labels = inputs.to(device), labels.to(device).view(-1)
         optimizer.zero_grad()  # 清空梯度
-        outputs = model(inputs, key_padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
-        loss = criterion(outputs, labels)  # 计算损失
-        loss.backward()  # 反向传播
-        optimizer.step()  # 更新模型参数
+        try:
+            outputs = model(inputs, key_padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
+            loss = criterion(outputs, labels)  # 计算损失
+            loss.backward()  # 反向传播
+            optimizer.step()  # 更新模型参数
+        except torch.cuda.OutOfMemoryError:
+            empty_cache()
+            continue
 
         train_ppl.append(torch.exp(loss).item())  # 累积训练困惑度
         train_loss.append(loss.item())  # 累积训练损失
@@ -338,11 +342,7 @@ def validate(
         device: 计算设备。
 
     Returns:
-        平均损失和平均困惑度，分别为 float 类型。
-
-    Examples:
-        >>> loss, acc = validate(model, val_dataset, vocab_size=128)
-        >>> print(f"Validation Loss: {loss:.4f}, Accuracy: {acc:.2%}")
+        平均损失和平均困惑度。
     """
     # 清理缓存以释放内存
     empty_cache()
