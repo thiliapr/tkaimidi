@@ -148,7 +148,7 @@ class MidiDataset(Dataset):
         return torch.tensor(sequence[:-1], dtype=torch.long), torch.tensor(sequence[1:], dtype=torch.long)
 
 
-class MidiDatasetSampler(Sampler[int]):
+class MidiDatasetSampler(Sampler[list[int]]):
     """
     MIDI 数据集采样器类，用于从 MIDI 数据集中按批次生成索引。
 
