@@ -24,6 +24,7 @@ def main():
     parser = argparse.ArgumentParser(description="从 MIDI 文件夹中提取训练信息")
     parser.add_argument("input_dir", type=pathlib.Path, help="要提取的 MIDI 文件夹。")
     parser.add_argument("output_dir", type=pathlib.Path, help="MIDI 信息输出文件夹。")
+    parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断")
     args = parser.parse_args()
 
     # 遍历输入目录中的所有 MIDI 文件
@@ -43,6 +44,12 @@ def main():
         # 转化为电子乐谱形式
         sheet, positions = notes_to_sheet(notes)
         data = data_to_str(sheet)
+
+        # 截断超长序列
+        if len(sheet) > args.max_sequence_length:
+            notes_end, sheet_end = max((i, position) for i, position in enumerate(positions) if position < args.max_sequence_length)
+            notes = notes[:notes_end]
+            sheet = sheet[:sheet_end]
 
         # 过滤出可以用于训练的偏移量
         train_notes = [i for i, (_, interval) in enumerate(notes) if i == 0 or interval != 0]
