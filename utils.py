@@ -20,9 +20,9 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     """
     从给定的MIDI文件中提取音符信息并返回一个包含音符及其相对时间间隔的列表。
 
-    本函数首先合并所有轨道，并按时间顺序整理所有MIDI消息。它会跳过打击乐通道（MIDI通道10），
-    只处理其他通道的`note_on`事件。接着，函数对音符的相对时间间隔进行优化和量化，
-    最后返回包含音符及其时间间隔的列表，时间间隔会通过最大公约数进行压缩，确保时间间隔的最小化。
+    本函数首先合并所有轨道，并按时间顺序整理所有MIDI消息。它会跳过打击乐通道（MIDI通道10以及其他被指定为打击乐的通道），
+    只处理其他通道的力度不为0的`note_on`事件。接着，函数对音符的相对时间间隔除以时间精度并四舍五入，
+    然后将相对时间除以它们的公因数来压缩时间，最后返回包含音符及其时间间隔的列表。
 
     Args:
         midi_file: 要提取的MIDI文件对象
@@ -95,7 +95,7 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
 
 def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> tuple[list[tuple[str, int]], list[int]]:
     """
-    将MIDI音符列表转换为电子乐谱，通过调整音高使其尽可能符合自然音阶并集中在一个八度范围内。
+    将MIDI音符列表转换为电子乐谱。
 
     Args:
         notes: MIDI音符列表，每个元组格式为(音高, 时间间隔)

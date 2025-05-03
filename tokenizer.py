@@ -225,9 +225,9 @@ def main():
     "主函数，处理命令行参数并执行分词器训练流程"
     # 设置命令行参数解析
     parser = argparse.ArgumentParser(description="音乐数据分词器训练脚本")
+    parser.add_argument("ckpt_path", type=pathlib.Path, help="分词器保存路径，将创建tokenizer子目录")
     parser.add_argument("-t", "--train-samples", type=pathlib.Path, action="append", required=True, help="训练集目录路径，包含MIDI样本文件（以`.mid`或`.json`结尾）")
     parser.add_argument("-v", "--valid-samples", type=pathlib.Path, action="append", help="验证集目录路径，包含MIDI样本文件（以`.mid`或`.json`结尾）")
-    parser.add_argument("-p", "--ckpt-path", type=pathlib.Path, default=pathlib.Path("ckpt"), help="分词器保存路径，将创建tokenizer子目录")
     parser.add_argument("-s", "--vocab-size", type=int, default=10000, help="分词器词汇表大小")
     parser.add_argument("-f", "--min-frequency", type=int, default=24, help="token最小出现频率阈值")
     parser.add_argument("-m", "--max-sequence-length", type=int, default=2 ** 17, help="最长允许多长的序列参与训练和测试（单位: 字符）")
