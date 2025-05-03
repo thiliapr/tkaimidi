@@ -125,7 +125,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
         "计算使音高集中在一个八度范围内的偏移量。"
         end = min(start + lookahead_count, len(pitches))
         segment = [pitch + cur_offset for pitch in pitches[start:end]]
-        return -max(Counter(pitch // 12 for pitch in segment).items(), key=lambda x: x[1] + int(x[0] == 0))[0]
+        return -max(Counter(pitch // 12 for pitch in segment).items(), key=lambda x: (x[1], x[0] == 0))[0]
 
     # 计算调整音高的偏移量，使其尽量符合自然音阶
     cur_offset = max(offset_func(0, 0).items(), key=lambda x: x[1])[0]
@@ -138,9 +138,10 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
     offset_scores = offset_func(0, cur_offset)
 
     # 消除不参与分数计算的音符的影响
-    for offset in range(12):
-        if (pitches[lookahead_count - 1] + cur_offset + offset) % 12 in NATURAL_SCALE:
-            offset_scores[offset] -= 1
+    if lookahead_count - 1 < len(pitches):
+        for offset in range(12):
+            if (pitches[lookahead_count - 1] + cur_offset + offset) % 12 in NATURAL_SCALE:
+                offset_scores[offset] -= 1
 
     # 开始转换音符为电子乐谱
     sheet = []
@@ -155,7 +156,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
                     offset_scores[offset] += 1
 
         # 如果最佳偏移量不为 0，则调整偏移量并重新获取偏移量的分数
-        best_offset = max(offset_scores.items(), key=lambda x: x[1])[0]
+        best_offset = max(offset_scores.items(), key=lambda x: (x[1], x[0] == 0))[0]
         if best_offset != 0:
             offset_sum += best_offset
             cur_offset += best_offset
