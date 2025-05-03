@@ -43,7 +43,6 @@ def main():
 
         # 转化为电子乐谱形式
         sheet, positions = notes_to_sheet(notes)
-        data = data_to_str(sheet)
 
         # 截断超长序列
         if len(sheet) > args.max_sequence_length:
@@ -64,7 +63,7 @@ def main():
                 "num_notes": len(notes),
                 "train_notes": train_notes,
                 "positions": [position for i, position in enumerate(positions) if i in train_notes],
-                "data": data
+                "data": data_to_str(sheet)
             }, f)
 
 
