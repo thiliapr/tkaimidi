@@ -286,7 +286,7 @@ def train(
         >>> model = MidiNet(len(tokenizer), 768, 12, 2048, 12)
         >>> optimizer = optim.AdamW(model.parameters(), lr=1e-2, weight_decay=1e-2)
         >>> criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-        >>> train(model, dataset, optimizer, criterion, len(tokenizer))
+        >>> train(model, dataset, optimizer, criterion, len(tokenizer), tokenizer.pad_token_id)
         ([1.9, 0.89, 0.6, 0.4], 42.6)
     """
     # 清理缓存以释放内存
