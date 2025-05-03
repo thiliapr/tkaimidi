@@ -13,6 +13,7 @@
 | - | - | - | - |
 | `input_dir`| Path | 必填 | 包含MIDI文件的输入目录 |
 | `output_dir` | Path | 必填 | 输出JSON文件的目录 |
+| `-m/--min-sequence-length` | int | 128 | 最小序列长度(小于将被跳过) |
 | `-e/--max-sequence-length` | int | 131072 | 最大序列长度(超过将被截断) |
 
 ### 执行示例
