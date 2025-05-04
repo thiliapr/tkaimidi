@@ -10,6 +10,7 @@
 import math
 import mido
 from collections import Counter
+from typing import Iterator
 
 # 在非 Jupyter 环境下导入常量库
 if "get_ipython" not in globals():
@@ -198,7 +199,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
     return sheet, positions
 
 
-def sheet_to_notes(sheet: list[int]) -> list[tuple[int, int]]:
+def sheet_to_notes(sheet: Iterator[int]) -> Iterator[tuple[int, int]]:
     """
     将电子乐谱转换为MIDI音符列表。
 
@@ -212,17 +213,18 @@ def sheet_to_notes(sheet: list[int]) -> list[tuple[int, int]]:
     Returns:
         MIDI音符列表，每个元组格式为(音高, 时间间隔)
     """
-    notes = []
     global_offset = 0  # 全局音高偏移
     octave_offset = 0  # 八度偏移
     interval_sum = 0  # 累计时间间隔
 
     for event in sheet:
         if event < 12:
-            # 计算最终音高并添加到音符列表
+            # 计算最终音高并返回
             final_pitch = event - global_offset + octave_offset * 12
-            notes.append([final_pitch, interval_sum])
-            octave_offset = interval_sum = 0  # 重置八度偏移和累计时间间隔
+            yield final_pitch, interval_sum
+
+            # 重置八度偏移和累计时间间隔
+            octave_offset = interval_sum = 0
         elif event == 12:
             global_offset -= 1  # 更新全局音高偏移
         elif event == 13:
@@ -233,12 +235,6 @@ def sheet_to_notes(sheet: list[int]) -> list[tuple[int, int]]:
             octave_offset += 1  # 更新八度偏移
         else:
             interval_sum += 1
-
-    # 调整音高，使其最小音高为0
-    min_pitch = min(pitch for pitch, _ in notes)
-    notes = [(pitch - min_pitch, interval) for pitch, interval in notes]
-
-    return notes
 
 
 def empty_cache():
