@@ -93,7 +93,7 @@ def train_sheet_tokenizer(model_data_samples: Iterator[str], vocab_size: int, mi
         ],
     )
 
-    # 包装为 transformers 兼容的 tokenizer
+    # 包装
     wrapped_tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=tokenizer,
         unk_token="[UNK]",

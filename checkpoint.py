@@ -10,8 +10,7 @@
 import json
 import pathlib
 import torch
-import torch.nn as nn
-import torch.optim as optim
+from torch import nn, optim
 from transformers import PreTrainedTokenizerFast
 
 # 在非 Jupyter 环境下导入模型库

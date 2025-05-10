@@ -13,11 +13,10 @@ import mido
 import json
 import argparse
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import matplotlib.pyplot as plt
-from torch.utils.data import Dataset, DataLoader, Sampler
+from torch import nn, optim
 from torch.nn import DataParallel
+from torch.utils.data import Dataset, DataLoader, Sampler
 from transformers import PreTrainedTokenizerFast
 from collections.abc import Callable
 
@@ -304,7 +303,7 @@ def train(
         inputs, labels = inputs.to(device), labels.to(device).view(-1)
         optimizer.zero_grad()  # 清空梯度
         try:
-            outputs = model(inputs, key_padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
+            outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
             loss = criterion(outputs, labels)  # 计算损失
             loss.backward()  # 反向传播
             optimizer.step()  # 更新模型参数
@@ -358,7 +357,7 @@ def validate(
             inputs, labels = inputs.to(device), labels.to(device).view(-1)
 
             # 模型前向传播，得到输出并 reshape 成二维张量
-            outputs = model(inputs, key_padding_mask=inputs == pad_token).view(-1, vocab_size)
+            outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)
 
             # 计算损失
             loss = criterion(outputs, labels)
@@ -434,9 +433,9 @@ def main():
     parser.add_argument("-m", "--min-sequence-length", default=2 ** 32, type=int, help="最小序列长度，小于该长度的样本不会分子序列（即该样本一个 Epoch 只被训练一次）")
     parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断")
     parser.add_argument("-b", "--max-batch-size", default=8 * 1536 ** 2, type=int, help="每个批次的序列长度的平方和上限")
-    parser.add_argument("-l", "--learning-rate", default=0.01, type=float, help="学习率")
-    parser.add_argument("-w", "--weight-decay", default=0.01, type=float, help="权重衰减系数")
-    parser.add_argument("-d", "--d-model", default=512, type=int, help="嵌入向量的维度")
+    parser.add_argument("-l", "--learning-rate", default=5e-5, type=float, help="学习率")
+    parser.add_argument("-w", "--weight-decay", default=1e-2, type=float, help="权重衰减系数")
+    parser.add_argument("-d", "--head-dim", default=64, type=int, help="多头注意力中的注意力头的维度")
     parser.add_argument("-n", "--num-heads", default=8, type=int, help="多头注意力中的注意力头数量")
     parser.add_argument("-f", "--dim-feedforward", default=2048, type=int, help="前馈神经网络的隐藏层维度")
     parser.add_argument("-s", "--num-layers", default=6, type=int, help="模型 Transformer 编码器中的层数")
@@ -462,7 +461,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 初始化模型
-    model = MidiNet(len(tokenizer), args.d_model, args.num_heads, args.dim_feedforward, args.num_layers, dropout=args.dropout)
+    model = MidiNet(len(tokenizer), args.num_heads, args.head_dim, args.dim_feedforward, args.num_layers, dropout=args.dropout)
 
     # 加载模型状态
     try:
