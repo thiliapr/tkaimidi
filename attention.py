@@ -1,3 +1,4 @@
+"Flash Attention 2.0"
 # Source: https://github.com/kyegomez/FlashAttention20/blob/9ec1d9340f023d9d51037e8ddcbdd2d4d207a001/attention.py
 # Copyright (c) 2023 Eternal Reclaimer
 # License: MIT License
