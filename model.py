@@ -8,6 +8,7 @@
 # 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
 import math
+import copy
 import torch
 from torch import nn
 from typing import Optional
@@ -116,8 +117,8 @@ class MidiNetLayer(nn.Module):
 
     Args:
         num_heads: 注意力头的数量。
-        head_dim: 每个注意力头的维度。
-        feedforward_dim: 前馈网络的隐藏层维度。
+        dim_head: 每个注意力头的维度。
+        dim_feedforward: 前馈网络的隐藏层维度。
         dropout: Dropout 概率，用于防止过拟合。
         device: 模型的设备（如 CPU 或 GPU。
     """
@@ -125,22 +126,22 @@ class MidiNetLayer(nn.Module):
     def __init__(
         self,
         num_heads: int,
-        head_dim: int,
-        feedforward_dim: int,
+        dim_head: int,
+        dim_feedforward: int,
         dropout: float = 0.,
         device: torch.device = None
     ):
         super().__init__()
-        model_dim = num_heads * head_dim  # 模型总维度
+        model_dim = num_heads * dim_head  # 模型总维度
 
         # 使用 FlashAttention 实现高效的多头注意力
-        self.attention = FlashAttention(dim=model_dim, heads=num_heads, dim_head=head_dim, causal=True).to(device)
+        self.attention = FlashAttention(dim=model_dim, heads=num_heads, dim_head=dim_head, causal=True).to(device)
 
         # 前馈网络部分: 线性 -> GELU 激活 -> 线性
         self.feedforward = nn.Sequential(
-            nn.Linear(model_dim, feedforward_dim, device=device),
+            nn.Linear(model_dim, dim_feedforward, device=device),
             nn.GELU(),
-            nn.Linear(feedforward_dim, model_dim, device=device)
+            nn.Linear(dim_feedforward, model_dim, device=device)
         )
 
         # 使用 ScaleNorm 归一化，替代 LayerNorm 以提升效率和性能
@@ -190,8 +191,8 @@ class MidiNet(nn.Module):
     Args:
         vocab_size: 词汇表大小。
         num_heads: 注意力头数量。
-        head_dim: 每个注意力头的维度。
-        feedforward_dim: 前馈网络的隐藏层维度。
+        dim_head: 每个注意力头的维度。
+        dim_feedforward: 前馈网络的隐藏层维度。
         num_layers: Transformer 层的数量。
         dropout: Dropout 概率。
         device: 模型所在设备。
@@ -201,14 +202,14 @@ class MidiNet(nn.Module):
         self,
         vocab_size: int,
         num_heads: int,
-        head_dim: int,
-        feedforward_dim: int,
+        dim_head: int,
+        dim_feedforward: int,
         num_layers: int,
         dropout: float = 0.1,
         device: torch.device = None
     ):
         super().__init__()
-        self.model_dim = head_dim * num_heads  # 模型总维度
+        self.model_dim = dim_head * num_heads  # 模型总维度
 
         # 将 token 映射为向量
         self.embedding = nn.Embedding(vocab_size, self.model_dim, device=device)
@@ -217,10 +218,8 @@ class MidiNet(nn.Module):
         self.positional_encoding = PositionalEncoding(self.model_dim)
 
         # 堆叠多个 MidiNetLayer 层
-        self.layers = nn.ModuleList(
-            MidiNetLayer(num_heads, head_dim, feedforward_dim, dropout=dropout, device=device)
-            for _ in range(num_layers)
-        )
+        layer = MidiNetLayer(num_heads, dim_head, dim_feedforward, dropout=dropout, device=device)
+        self.layers = nn.ModuleList(copy.deepcopy(layer) for _ in range(num_layers))
 
         # 将模型输出映射回 vocab 空间
         self.output_layer = nn.Linear(self.model_dim, vocab_size, device=device)

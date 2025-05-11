@@ -14,7 +14,7 @@ from typing import Iterator
 
 # 在非 Jupyter 环境下导入常量库
 if "get_ipython" not in globals():
-    from constants import NATURAL_SCALE, TIME_PRECISION
+    from constants import NATURAL_SCALE, TIME_PRECISION, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, TIME_INTERVAL
 
 
 def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
@@ -176,11 +176,11 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
 
         # 如果有音高偏移，在乐谱中做标记
         if offset_sum:
-            sheet.extend(12 + int(offset_sum > 0) for _ in range(abs(offset_sum)))
+            sheet.extend(KEY_UP if offset_sum > 0 else KEY_DOWN for _ in range(abs(offset_sum)))
 
         # 记录时间间隔
         if intervals[i]:
-            sheet.extend(16 for _ in range(intervals[i]))
+            sheet.extend(TIME_INTERVAL for _ in range(intervals[i]))
 
         # 记录乐谱中音符开始的位置
         positions.append(len(sheet))
@@ -189,7 +189,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
         pitch = pitches[i] + cur_offset
         if pitch < 0 or pitch > 11:
             octave_jump = pitch // 12
-            sheet.extend(14 + int(octave_jump > 0) for _ in range(abs(octave_jump)))
+            sheet.extend(OCTAVE_JUMP_UP if octave_jump > 0 else OCTAVE_JUMP_DOWN for _ in range(abs(octave_jump)))
             pitch %= 12
 
         # 记录音符
