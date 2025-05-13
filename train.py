@@ -415,8 +415,8 @@ def plot_training_process(metries: dict[str, list], img_path: pathlib.Path | str
 
 
 def main():
-    "训练 MIDI 模型并绘制训练过程中的损失、困惑度曲线。"
-    parser = argparse.ArgumentParser()
+    # 设置命令行参数解析
+    parser = argparse.ArgumentParser(description="训练 MIDI 模型并绘制训练过程中的损失、困惑度曲线。")
     parser.add_argument("num_epochs", type=int, help="训练的总轮数")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="加载和保存检查点的路径")
     parser.add_argument("-t", "--train-dataset", action="append", type=pathlib.Path, required=True, help="训练集文件路径（可多次指定以使用多个数据集）")

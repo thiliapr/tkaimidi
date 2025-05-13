@@ -9,12 +9,116 @@
 
 import math
 import mido
-from collections import Counter
-from typing import Iterator
+import time
+import threading
+from typing import TypeVar, Generic, Iterable, Iterator
+from collections import Counter, deque
 
 # 在非 Jupyter 环境下导入常量库
 if "get_ipython" not in globals():
-    from constants import NATURAL_SCALE, TIME_PRECISION, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, TIME_INTERVAL
+    from constants import NATURAL_SCALE, TIME_PRECISION, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, TIME_INTERVAL, LOOKAHEAD_COUNT
+
+T = TypeVar("T")
+
+
+class ThreadVariable(Generic[T]):
+    """
+    一个线程安全的变量容器，允许在多个线程之间安全地读取和修改值。
+
+    该类使用锁来保护对值的访问，确保在任何给定时间只有一个线程可以修改该值。
+    这避免了数据竞争和不一致的问题。
+
+    Args:
+        value: 初始值。
+    """
+
+    def __init__(self, value: T):
+        self._value = value  # 初始化变量值
+        self.lock = threading.Lock()  # 创建一个锁对象，用于线程同步
+
+    @property
+    def value(self) -> T:
+        with self.lock:
+            return self._value
+
+    @value.setter
+    def value(self, value: T):
+        with self.lock:
+            self._value = value
+
+
+class BufferStream(Iterable, Generic[T]):
+    """
+    一个线程安全的迭代器，用于缓冲和逐步输出数据。
+    支持多线程环境下的数据生产和消费，当缓冲区为空时会自动休眠等待。
+
+    工作流程:
+    1. 生产者线程通过send()方法添加数据到缓冲区
+    2. 消费者通过迭代器逐个获取数据
+    3. 当缓冲区为空时，迭代器会短暂休眠避免忙等待
+    4. 调用stop()方法可以安全停止迭代器
+
+    Returns:
+        迭代器实例，支持直接迭代或调用其他方法
+
+    Examples:
+        >>> buffer_stream = BufferStream()
+        >>> buffer_stream.send([1, 2, 3])
+        >>> for item in buffer_stream:
+        ...     print(item)
+        ...     if item == 3: break
+        >>> buffer_stream.stop()
+    """
+
+    def __init__(self):
+        self.buffer = deque()  # 使用双端队列作为缓冲区
+        self.lock = threading.Lock()  # 线程锁保证操作原子性
+        self.stop_event = threading.Event()  # 停止标志位
+
+    def send(self, data: list[T]):
+        """
+        向缓冲区添加数据，线程安全。
+
+        Args:
+            data: 要添加的整数列表
+
+        Examples:
+            >>> buffer_stream.send([1, 2, 3])
+        """
+        with self.lock:
+            self.buffer.extend(data)
+
+    def stop(self):
+        """
+        安全停止迭代器。
+        设置停止标志位，迭代器将在下次检查时停止迭代。
+
+        Examples:
+            >>> buffer_stream.stop()
+        """
+        self.stop_event.set()
+
+    def __iter__(self) -> Iterator[T]:
+        """
+        实现迭代器协议，返回生成器。
+        当缓冲区不为空时返回数据，为空时短暂休眠。
+
+        Returns:
+            生成器对象，每次yield一个数据项
+
+        Examples:
+            >>> next(iter(buffer_stream))
+        """
+        while not self.stop_event.is_set():
+            with self.lock:
+                # 直接检查缓冲区是否非空
+                if self.buffer:
+                    # 成功获取数据后立即继续下一次迭代
+                    yield self.buffer.popleft()
+                    continue
+
+            # 缓冲区为空时短暂休眠避免CPU占用过高
+            time.sleep(0.1)
 
 
 def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
@@ -94,13 +198,12 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     return final_notes
 
 
-def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> tuple[list[tuple[str, int]], list[int]]:
+def notes_to_sheet(notes: list[tuple[int, int]]) -> tuple[list[tuple[str, int]], list[int]]:
     """
     将MIDI音符列表转换为电子乐谱。
 
     Args:
         notes: MIDI音符列表，每个元组格式为(音高, 时间间隔)
-        lookahead_count: 调整音高时检查后续音符的数量。
 
     Returns:
         sheet: 电子乐谱事件列表，包含下列事件类型：
@@ -118,13 +221,13 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
     # 定义最佳偏移量检测函数
     def offset_func(start: int, cur_offset: int) -> dict[int, int]:
         "计算分别在 0-11 的偏移量时有多少个音符在自然音阶。"
-        end = min(start + lookahead_count, len(pitches))
+        end = min(start + LOOKAHEAD_COUNT, len(pitches))
         segment = [pitch + cur_offset for pitch in pitches[start:end]]
         return {offset: sum((pitch + offset) % 12 in NATURAL_SCALE for pitch in segment) for offset in range(12)}
 
     def octave_offset_func(start: int, cur_offset: int):
         "计算使音高集中在一个八度范围内的偏移量。"
-        end = min(start + lookahead_count, len(pitches))
+        end = min(start + LOOKAHEAD_COUNT, len(pitches))
         segment = [pitch + cur_offset for pitch in pitches[start:end]]
         return -max(Counter(pitch // 12 for pitch in segment).items(), key=lambda x: (x[1], x[0] == 0))[0]
 
@@ -139,9 +242,9 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
     offset_scores = offset_func(0, cur_offset)
 
     # 消除不参与分数计算的音符的影响
-    if lookahead_count - 1 < len(pitches):
+    if LOOKAHEAD_COUNT - 1 < len(pitches):
         for offset in range(12):
-            if (pitches[lookahead_count - 1] + cur_offset + offset) % 12 in NATURAL_SCALE:
+            if (pitches[LOOKAHEAD_COUNT - 1] + cur_offset + offset) % 12 in NATURAL_SCALE:
                 offset_scores[offset] -= 1
 
     # 开始转换音符为电子乐谱
@@ -151,9 +254,9 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
         offset_sum = 0
 
         # 将最远能够看到的音符加入偏移量的分数计算
-        if i + lookahead_count - 1 < len(pitches):
+        if i + LOOKAHEAD_COUNT - 1 < len(pitches):
             for offset in range(12):
-                if (pitches[i + lookahead_count - 1] + cur_offset + offset) % 12 in NATURAL_SCALE:
+                if (pitches[i + LOOKAHEAD_COUNT - 1] + cur_offset + offset) % 12 in NATURAL_SCALE:
                     offset_scores[offset] += 1
 
         # 如果最佳偏移量不为 0，则调整偏移量并重新获取偏移量的分数
@@ -199,42 +302,49 @@ def notes_to_sheet(notes: list[tuple[int, int]], lookahead_count: int = 64) -> t
     return sheet, positions
 
 
-def sheet_to_notes(sheet: Iterator[int]) -> Iterator[tuple[int, int]]:
+def sheet_to_notes(sheet: Iterator[int]) -> Iterator[tuple[int, int, int]]:
     """
-    将电子乐谱转换为MIDI音符列表。
+    将电子乐谱转换为MIDI音符序列。
 
-    该函数将输入的电子乐谱（一个整数列表）转换为MIDI音符列表。每个音符是一个元组，
-    包含音高和相应的时间间隔。音高会根据全球和八度偏移的规则进行调整，
-    最终返回的音符列表包含相对音高和时间间隔。
+    该函数处理输入的电子乐谱数据流，将其转换为MIDI音符序列。转换规则如下：
+    1. 数值0-11表示音符，会结合当前偏移量计算最终音高
+    2. 数值12-15用于控制音高偏移量
+    3. 其他数值累加为时间间隔
+    转换过程会维护全局偏移和八度偏移状态，并自动重置时间间隔
 
     Args:
-        sheet: 由`notes_to_sheet(notes)`生成的电子乐谱
+        sheet: 电子乐谱数据流，由notes_to_sheet()生成
 
     Returns:
-        MIDI音符列表，每个元组格式为(音高, 时间间隔)
+        生成器，每次产生一个元组(音高, 时间间隔, 当前全局偏移)
+
+    Examples:
+        >>> list(sheet_to_notes(iter([0, 1, 14, 0])))
+        [(0, 0, 0), (1, 0, 0), (-12, 0, 0)]
     """
-    global_offset = 0  # 全局音高偏移
-    octave_offset = 0  # 八度偏移
-    interval_sum = 0  # 累计时间间隔
+    # 初始化状态变量
+    global_offset = 0  # 当前全局偏移
+    octave_offset = 0  # 当前八度偏移
+    accumulated_interval = 0  # 累计时间间隔
 
     for event in sheet:
         if event < 12:
-            # 计算最终音高并返回
+            # 计算并生成最终音符
             final_pitch = event - global_offset + octave_offset * 12
-            yield final_pitch, interval_sum
+            yield final_pitch, accumulated_interval, global_offset
 
-            # 重置八度偏移和累计时间间隔
-            octave_offset = interval_sum = 0
+            # 重置状态
+            octave_offset = accumulated_interval = 0
         elif event == 12:
-            global_offset -= 1  # 更新全局音高偏移
+            global_offset -= 1  # 降调
         elif event == 13:
-            global_offset += 1  # 更新全局音高偏移
+            global_offset += 1  # 升调
         elif event == 14:
-            octave_offset -= 1  # 更新八度偏移
+            octave_offset -= 1  # 降八度
         elif event == 15:
-            octave_offset += 1  # 更新八度偏移
+            octave_offset += 1  # 升八度
         else:
-            interval_sum += 1
+            accumulated_interval += 1  # 增加时间间隔
 
 
 def empty_cache():

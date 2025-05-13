@@ -13,11 +13,14 @@ BASE_CHAR_CODE = ord("A")  # 基础字符编码，用于将整数0-16映射到�
 NATURAL_SCALE = {0, 2, 4, 5, 7, 9, 11}  # 自然大调音阶对应的半音位置（C大调）
 
 # 电子乐谱
-KEY_UP = 12
-KEY_DOWN = 13
-OCTAVE_JUMP_UP = 14
-OCTAVE_JUMP_DOWN = 15
-TIME_INTERVAL = 16
+# 事件
+KEY_UP = 12  # 全局音高向上调整，适用于该事件以后到下一个KEY_UP或KEY_DOWN的所有音符事件
+KEY_DOWN = 13  # 全局音高向下调整，适用于该事件以后到下一个KEY_UP或KEY_DOWN的所有音符事件
+OCTAVE_JUMP_UP = 14  # 八度向上跳跃，仅适用于该事件以后的下一个音符事件
+OCTAVE_JUMP_DOWN = 15  # 八度向下跳跃，仅适用于该事件以后的下一个音符事件
+TIME_INTERVAL = 16  # 时间停顿，进入下一个时间刻
+# 视野大小，用于调整音高范围保证转换出来的音高大多在自然音阶内，过大容易忽视局部变化，过小容易转换出过多音调变化事件
+LOOKAHEAD_COUNT = 64
 
 # 模型参数
 DEFAULT_DIM_HEAD = 64  # 注意力头的维度

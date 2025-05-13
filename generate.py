@@ -7,103 +7,28 @@
 # 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
 import threading
+import argparse
 import pathlib
 import random
 import mido
-import time
 import math
 import torch
 import torch.nn.functional as F
-from torch.nn import DataParallel
 from transformers import PreTrainedTokenizerFast
-from typing import Iterator, Iterable, Generator, Optional
+from typing import Iterator, Generator, Optional
 from collections import deque
 
-# 内置音乐曲库
-LOVE_TRADING_MIDI = [(45, 0), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (84, 0), (64, 1), (84, 1), (76, 2), (81, 2), (57, 1), (69, 1), (84, 0), (64, 1), (60, 1), (43, 2), (83, 0), (50, 1), (55, 1), (83, 0), (57, 1), (59, 1), (81, 0), (62, 1), (79, 1), (76, 2), (55, 3), (67, 1), (62, 1), (59, 1), (55, 1), (41, 1), (74, 0), (48, 1), (53, 1), (74, 0), (55, 1), (57, 1), (74, 0), (60, 1), (69, 1), (74, 2), (76, 2), (53, 1), (65, 1), (79, 0), (60, 1), (57, 1), (43, 2), (76, 0), (50, 1), (55, 1), (83, 0), (57, 1), (59, 1), (83, 0), (62, 1), (79, 1), (76, 2), (74, 3), (71, 1), (67, 1), (62, 1), (64, 1), (45, 1), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (84, 0), (64, 1), (84, 1), (76, 2), (81, 2), (57, 1), (69, 1), (84, 0), (64, 1), (60, 1), (43, 2), (88, 0), (50, 1), (55, 1), (88, 0), (57, 1), (59, 1), (86, 0), (62, 1), (84, 1), (86, 2), (55, 3), (67, 1), (62, 1), (59, 1), (55, 1), (41, 1), (88, 0), (48, 1), (53, 1), (55, 1), (88, 0), (57, 1), (86, 0), (60, 1), (84, 1), (43, 2), (86, 0), (50, 1), (55, 1), (57, 1), (86, 0), (59, 1), (84, 0), (62, 1), (83, 1), (45, 2), (79, 0), (52, 1), (57, 1), (76, 0), (59, 1), (60, 1), (79, 0), (64, 1), (81, 1), (81, 2), (76, 3), (72, 1), (69, 1), (64, 1), (69, 1)]
+# 内置音乐曲库（爱情买卖）
+EXAMPLE_MIDI = [(45, 0), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (84, 0), (64, 1), (84, 1), (76, 2), (81, 2), (57, 1), (69, 1), (84, 0), (64, 1), (60, 1), (43, 2), (83, 0), (50, 1), (55, 1), (83, 0), (57, 1), (59, 1), (81, 0), (62, 1), (79, 1), (76, 2), (55, 3), (67, 1), (62, 1), (59, 1), (55, 1), (41, 1), (74, 0), (48, 1), (53, 1), (74, 0), (55, 1), (57, 1), (74, 0), (60, 1), (69, 1), (74, 2), (76, 2), (53, 1), (65, 1), (79, 0), (60, 1), (57, 1), (43, 2), (76, 0), (50, 1), (55, 1), (83, 0), (57, 1), (59, 1), (83, 0), (62, 1), (79, 1), (76, 2), (74, 3), (71, 1), (67, 1), (62, 1), (64, 1), (45, 1), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (84, 0), (64, 1), (84, 1), (76, 2), (81, 2), (57, 1), (69, 1), (84, 0), (64, 1), (60, 1), (43, 2), (88, 0), (50, 1), (55, 1), (88, 0), (57, 1), (59, 1), (86, 0), (62, 1), (84, 1), (86, 2), (55, 3), (67, 1), (62, 1), (59, 1), (55, 1), (41, 1), (88, 0), (48, 1), (53, 1), (55, 1), (88, 0), (57, 1), (86, 0), (60, 1), (84, 1), (43, 2), (86, 0), (50, 1), (55, 1), (57, 1), (86, 0), (59, 1), (84, 0), (62, 1), (83, 1), (45, 2), (79, 0), (52, 1), (57, 1), (76, 0), (59, 1), (60, 1), (79, 0), (64, 1), (81, 1), (81, 2), (76, 3), (72, 1), (69, 1), (64, 1), (69, 1)]
 
 
 # 在非 Jupyter 环境下导入常量、模型、检查点、工具、分词库
 if "get_ipython" not in globals():
-    from constants import TIME_PRECISION, DEFAULT_DIM_HEAD, KEY_UP, KEY_DOWN
+    from constants import TIME_PRECISION, DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, LOOKAHEAD_COUNT
     from model import MidiNet
     from checkpoint import load_checkpoint
-    from utils import notes_to_sheet, sheet_to_notes
+    from utils import midi_to_notes, notes_to_sheet, sheet_to_notes, BufferStream, ThreadVariable
     from tokenizer import data_to_str, str_to_data
-
-
-class BufferStream(Iterable):
-    """
-    一个线程安全的迭代器，用于缓冲和逐步输出数据。
-    支持多线程环境下的数据生产和消费，当缓冲区为空时会自动休眠等待。
-
-    工作流程:
-    1. 生产者线程通过send()方法添加数据到缓冲区
-    2. 消费者通过迭代器逐个获取数据
-    3. 当缓冲区为空时，迭代器会短暂休眠避免忙等待
-    4. 调用stop()方法可以安全停止迭代器
-
-    Returns:
-        迭代器实例，支持直接迭代或调用其他方法
-
-    Examples:
-        >>> buffer_stream = BufferStream()
-        >>> buffer_stream.send([1, 2, 3])
-        >>> for item in buffer_stream:
-        ...     print(item)
-        ...     if item == 3: break
-        >>> buffer_stream.stop()
-    """
-
-    def __init__(self):
-        self.buffer = deque()  # 使用双端队列作为缓冲区
-        self.lock = threading.Lock()  # 线程锁保证操作原子性
-        self.stop_event = threading.Event()  # 停止标志位
-
-    def send(self, data: list[int]):
-        """
-        向缓冲区添加数据，线程安全。
-
-        Args:
-            data: 要添加的整数列表
-
-        Examples:
-            >>> buffer_stream.send([1, 2, 3])
-        """
-        with self.lock:
-            self.buffer.extend(data)
-
-    def stop(self):
-        """
-        安全停止迭代器。
-        设置停止标志位，迭代器将在下次检查时停止迭代。
-
-        Examples:
-            >>> buffer_stream.stop()
-        """
-        self.stop_event.set()
-
-    def __iter__(self):
-        """
-        实现迭代器协议，返回生成器。
-        当缓冲区不为空时返回数据，为空时短暂休眠。
-
-        Returns:
-            生成器对象，每次yield一个数据项
-
-        Examples:
-            >>> next(iter(buffer_stream))
-        """
-        while not self.stop_event.is_set():
-            with self.lock:
-                # 直接检查缓冲区是否非空
-                if self.buffer:
-                    # 成功获取数据后立即继续下一次迭代
-                    yield self.buffer.popleft()
-                    continue
-
-            # 缓冲区为空时短暂休眠避免CPU占用过高
-            time.sleep(0.1)
 
 
 def notes_to_track(notes: list[int]) -> mido.MidiTrack:
@@ -175,13 +100,13 @@ def generate_sheet(
         tokenizer: 用于乐谱事件与token相互转换的分词器实例
         seed: 随机数生成种子，用于控制生成过程的确定性
         temperature: 采样温度参数，值越高生成结果越多样，值越低结果越保守
-        device: 指定模型运行的计算设备（如'cuda'或'cpu'）
+        device: 指定模型运行的计算设备
 
     Yields:
         每次迭代生成一个乐谱事件token的字符串表示
 
     Receives:
-        通过send()方法接收的调整指令，格式为list[tuple[事件, 概率衰减值]]，用于降低特定事件的生成概率
+        通过send()方法接收的调整指令格式为list[tuple[事件, 概率衰减值]]，用于降低特定事件的生成概率
 
     Note:
         1. 生成过程将持续直到产生EOS标记
@@ -190,17 +115,6 @@ def generate_sheet(
         4. 降低特定事件的生成概率时如果有 token 包含若干个被指定的事件，那么它会被降低不止一次概率
 
     Examples:
-        >>> # 导入依赖库
-        >>> import mido
-        >>> from constants import OCTAVE_UP
-        >>> from utils import midi_to_notes, notes_to_sheet
-        >>> from tokenizer import data_to_str, str_to_data
-        >>> from checkpoint import load_checkpoint
-        >>> # 加载检查点（仅推理模式）
-        >>> tokenizer, state = load_checkpoint("ckpt", train=False)
-        >>> # 创建模型并加载状态字典
-        >>> model = MidiNet(...)
-        >>> model.load_state_dict(state_dict)
         >>> # 转换 prompt 并开始生成
         >>> prompt = data_to_str(notes_to_sheet(midi_to_notes(mido.MidiFile("Touhou Broken_Moon.mid"))))
         >>> generator = generate_sheet(prompt, model, tokenizer, seed=1989, temperature=0.604)
@@ -239,8 +153,8 @@ def generate_sheet(
         if events_to_dampen:
             for event, frequency_reduction in events_to_dampen:
                 for token, token_id in tokenizer.vocab.items():
-                    if event in token:
-                        probs[token_id] -= frequency_reduction
+                    if event in token and token != tokenizer.eos_token:
+                        probs[token_id] *= 1 - frequency_reduction
 
         # 保证概率不为负并重新归一化
         probs = F.relu(probs)
@@ -266,20 +180,21 @@ def generate_midi(
     tokenizer: PreTrainedTokenizerFast,
     seed: Optional[int] = None,
     temperature: float = 1.,
-    pitch_range_threshold: int = 64,
+    max_pitch_span_semitones: int = 64,
+    max_length: Optional[int] = None,
     device: torch.device = None
 ) -> Iterator[tuple[int, int]]:
     """
-    基于MIDI音符序列实时生成音乐内容的流式生成器。
+    实时流式生成MIDI音符序列。
 
-    本函数采用生产者-消费者模式，通过后台线程持续生成音乐数据，主线程实时输出转换后的音符。
-    当检测到音高跨度超过阈值时，会自动调整音高变化事件的生成概率，保持音乐在合理音域范围内。
+    该函数基于输入音符提示序列，采用后台线程异步生成MIDI事件流，同时主线程实时输出音符(pitch, interval)。
+    音高跨度超过设定阈值时，会动态降低升高/降低音调事件的概率，以避免音域漂移。
 
-    工作流程:
-    1. 转换输入音符序列为乐谱事件格式
-    2. 启动后台线程调用底层generate_sheet生成乐谱事件
-    3. 实时监控音高变化，动态调整生成策略
-    4. 将乐谱事件转换为(pitch, interval)元组流式输出
+    处理流程：
+    1. 将输入的(pitch, interval)音符序列转换为模型可识别的乐谱事件
+    2. 启动后台线程异步调用生成器生成事件序列
+    3. 主线程实时读取事件流，转换为音符并输出
+    4. 根据当前音高跨度实时调整音调变换事件的生成概率
 
     Args:
         prompt: 初始音符序列，每个元素为(音高, 间隔时间)元组
@@ -287,27 +202,19 @@ def generate_midi(
         tokenizer: 乐谱事件与文本互相转换的分词器
         seed: 随机种子，None表示随机生成
         temperature: 控制生成多样性的温度参数(默认1.0)
-        pitch_range_threshold: 触发音高调整的阈值(半音数，默认64)
+        max_pitch_span_semitones: 音高跨度超过该值时将进行音高调整（单位：半音）
+        max_length: 限制最多生成的音符数量（可选）
         device: 模型运行的设备(cpu/cuda)
 
     Yields:
-        tuple[int, int]: 生成的音符(音高pitch, 间隔时间interval)
+        生成的音符(音高pitch, 间隔时间interval)
 
     Note:
         1. 采用守护线程确保主程序退出时自动终止生成
-        2. 当音高跨度超过阈值时自动降低KEY_UP/KEY_DOWN事件概率
+        2. 当音高跨度超过阈值时自动降低升调/降调事件概率
         3. 音高调整强度与超出阈值幅度成正比
 
     Examples:
-        >>> # 导入依赖库
-        >>> import mido
-        >>> from utils import midi_to_notes
-        >>> from checkpoint import load_checkpoint
-        >>> # 加载检查点（仅推理模式）
-        >>> tokenizer, state = load_checkpoint("ckpt", train=False)
-        >>> # 创建模型并加载状态字典
-        >>> model = MidiNet(...)
-        >>> model.load_state_dict(state_dict)
         >>> # 获取 prompt 并开始生成
         >>> prompt = midi_to_notes(mido.MidiFile("Touhou Broken_Moon.mid"))
         >>> for pitch, interval in generate_midi(prompt, model, tokenizer, seed=19890604):
@@ -317,12 +224,17 @@ def generate_midi(
     if seed is None:
         seed = random.randint(0, 2 ** 32)
 
-    # 创建线程安全的数据流缓冲区
-    music_stream = BufferStream()
+    # 音符事件缓冲区，供主线程读取
+    generated_event_buffer = BufferStream()
 
-    # 记录当前音高范围 [min_pitch, max_pitch]
-    pitch_range = [0, 0]
-    pitch_range_lock = threading.Lock()
+    # 初始化滑动窗口，用于追踪最近生成的音高
+    recent_pitch_window = ThreadVariable(deque(list(list(zip(*prompt))[0])[-LOOKAHEAD_COUNT:]))
+
+    # 当前音高整体偏移量
+    current_pitch_offset = ThreadVariable(0)
+
+    # 生成的音符数量
+    generated_note_counter = ThreadVariable(0)
 
     def _generate_in_background():
         "后台生成线程的工作函数"
@@ -334,40 +246,50 @@ def generate_midi(
         generator = generate_sheet(prompt_text, model, tokenizer, seed, temperature, device)
 
         for token in generator:
-            # 获取当前生成的最小和最大音高
-            with pitch_range_lock:
-                current_min, current_max = pitch_range[0], pitch_range[1]
-
-            # 计算当前音高跨度（无需在锁内计算）
-            current_span = current_max - current_min
+            # 计算当前音高跨度
+            pitch_span = max(recent_pitch_window.value) - min(recent_pitch_window.value)
 
             # 检查是否需要调整
-            if current_span > pitch_range_threshold:
-                # 计算调整强度: 每超出12个半音增加10%抑制
-                adjustment = (current_span - pitch_range_threshold) / 12 * 0.1
+            if pitch_span > max_pitch_span_semitones:
+                # 每超过1个八度（12半音）增加1%惩罚
+                suppression_ratio = (pitch_span - max_pitch_span_semitones) / 12 * 0.01
 
-                # 对升调/降调、局部八度变化事件应用概率抑制
-                generator.send([(event, adjustment) for event in data_to_str([KEY_UP, KEY_DOWN])])
+                # 对升调/降调应用概率抑制
+                if current_pitch_offset.value > 0:
+                    suppressed_events = [KEY_UP, OCTAVE_JUMP_UP]
+                else:
+                    suppressed_events = [KEY_DOWN, OCTAVE_JUMP_DOWN]
 
-            # 将 token 送入缓冲区
-            music_stream.send(str_to_data(token))
+                try:
+                    generator.send([(event, suppression_ratio) for event in data_to_str(suppressed_events)])
+                except StopIteration:
+                    pass
+
+            # 将生成token转为事件并放入缓冲区
+            generated_event_buffer.send(str_to_data(token))
+
+            # 若已达到最大生成音符数量，则终止
+            if max_length and generated_note_counter.value >= max_length:
+                break
 
         # 生成结束标志
-        music_stream.stop()
+        generated_event_buffer.stop()
 
-    # 启动守护线程
+    # 启动守护线程（设置为守护进程以保证随主进程退出而退出）
     threading.Thread(target=_generate_in_background, daemon=True).start()
 
-    # 主生成循环
-    for pitch, interval in sheet_to_notes(music_stream):
+    # 将事件转换为音符并输出
+    for pitch, interval, pitch_offset in sheet_to_notes(generated_event_buffer):
         yield pitch, interval
 
-        # 更新音高范围跟踪
-        with pitch_range_lock:
-            if pitch < pitch_range[0]:
-                pitch_range[0] = pitch
-            if pitch > pitch_range[1]:
-                pitch_range[1] = pitch
+        # 更新窗口和状态
+        recent_pitch_window.value.append(pitch)
+        current_pitch_offset.value = pitch_offset
+        generated_note_counter.value += 1
+
+        # 控制窗口大小
+        if len(recent_pitch_window.value) > LOOKAHEAD_COUNT:
+            recent_pitch_window.value.popleft()
 
 
 def center_pitches(pitches: list[int]) -> list[tuple[int, int]]:
@@ -443,20 +365,46 @@ def clamp_midi_pitch(pitches: list[int]):
 
 
 def main():
-    # 加载模型的预训练检查点
-    tokenizer, state_dict = load_checkpoint(pathlib.Path("ckpt"), train=False)
+    # 设置命令行参数解析
+    parser = argparse.ArgumentParser(description="以指定 MIDI 为前面部分并生成音乐和保存。")
+    parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点的路径")
+    parser.add_argument("output_path", type=pathlib.Path, help="MIDI 文件保存路径。生成的 MIDI 文件将会保存到这里。")
+    parser.add_argument("-m", "--midi-path", type=pathlib.Path, help="指定的 MIDI 文件，将作为生成的音乐的前面部分。如果未指定，将使用内置的音乐来生成。")
+    parser.add_argument("-t", "--temperature", type=float, default=1.0, help="采样温度参数，值越高生成结果越多样，值越低结果越保守")
+    parser.add_argument("-s", "--seed", type=int, help="随机种子，不指定表示随机生成")
+    parser.add_argument("-p", "--max-pitch-span-semitones", type=int, default=64, help="触发音高调整的阈值（半音数），当生成的音高跨度大于阈值时，包含音调上升或下降事件的 token 将被降低概率。")
+    parser.add_argument("-l", "--max-length", type=int, help="限制最多生成的音符数量。如果不指定，将会持续生成直到遇到结束标志。")
+    parser.add_argument("-n", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="模型注意力头的数量。")
+    args = parser.parse_args()
 
-    # 获取模型参数
-    vocab_size, d_model = state_dict["embedding.weight"].size()
+    # 加载模型的预训练检查点
+    tokenizer, state_dict = load_checkpoint(args.ckpt_path, train=False)
+
+    # 加载音乐生成的提示部分
+    notes = EXAMPLE_MIDI.copy()
+    if args.midi_path:
+        try:
+            notes = midi_to_notes(mido.MidiFile(args.midi_path))
+        except Exception as e:
+            print(f"加载指定的 MIDI 文件时出错: {e}\n将选择内置的音乐作为代替。")
+
+    # 推导模型参数
+    vocab_size, dim_model = state_dict["embedding.weight"].size()
     dim_feedforward = state_dict["layers.0.feedforward.0.weight"].size(0)
-    num_heads = d_model // DEFAULT_DIM_HEAD
     num_layers = len(set(key.split(".")[1] for key in state_dict.keys() if key.startswith("layers.")))
+    if dim_model % args.num_heads == 0:
+        num_heads = args.num_heads
+    elif dim_model % DEFAULT_DIM_HEAD == 0:
+        num_heads = dim_model // DEFAULT_DIM_HEAD
+    elif dim_model % DEFAULT_NUM_HEADS == 0:
+        num_heads = DEFAULT_NUM_HEADS
+    dim_head = dim_model // num_heads
 
     # 打印模型参数
-    print(f"模型参数:\n- 词汇表大小: {vocab_size}\n- 嵌入层维度: {d_model}\n- 前馈层维度: {dim_feedforward}\n- 注意力头的数量: {num_heads}\n- 层数: {num_layers}\n")
+    print(f"模型参数:\n- 词汇表大小: {vocab_size}\n- 嵌入层维度: {dim_model}\n- 前馈层维度: {dim_feedforward}\n- 注意力头的数量: {num_heads}\n- 层数: {num_layers}\n")
 
     # 初始化模型并加载状态
-    model = MidiNet(vocab_size, num_heads, DEFAULT_DIM_HEAD, dim_feedforward, num_layers)
+    model = MidiNet(vocab_size, num_heads, dim_head, dim_feedforward, num_layers)
     model.load_state_dict(state_dict)
 
     # 获取设备
@@ -465,13 +413,8 @@ def main():
     # 转移模型到设备并设置为评估模式
     model = model.to(device).eval()
 
-    # 检查是否使用多GPU
-    if torch.cuda.device_count() > 1:
-        model = DataParallel(model)  # 使用 DataParallel 进行多 GPU 推理
-
     # 模型推理生成
-    notes = LOVE_TRADING_MIDI.copy()
-    for note in generate_midi(LOVE_TRADING_MIDI, model, tokenizer, temperature=0.8, device=device):
+    for note in generate_midi(notes, model, tokenizer, seed=args.seed, temperature=args.temperature, max_pitch_span_semitones=args.max_pitch_span_semitones, max_length=args.max_length, device=device):
         notes.append(note)
         print(note)
 
@@ -490,7 +433,7 @@ def main():
 
     # 转换为 MIDI 轨道并保存为文件
     track = notes_to_track(notes)
-    mido.MidiFile(tracks=[track]).save("example.mid")
+    mido.MidiFile(tracks=[track]).save(args.output_path)
 
 
 if __name__ == "__main__":

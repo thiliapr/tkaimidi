@@ -71,15 +71,15 @@ MIDI → 音符序列 → 电子乐谱 → 字符串编码
 
 ## 命令行使用
 ```bash
-python tokenizer.py ckpt -t train_data -v valid_data
+python tokenizer.py ckpt -t train_data -t train_data_2 -v valid_data
 ```
 
 ### 参数说明
 | 参数名 | 类型 | 说明 |
 | - | - | - |
 | ckpt_path | Path | 输出目录 |
-| -t/--train-samples | list[Path] | 必须，训练数据目录 |
-| -v/--valid-samples | list[Path] | 验证数据目录 |
+| -t/--train-samples | list[Path] | 必须，训练数据目录，多选 |
+| -v/--valid-samples | list[Path] | 验证数据目录，多选 |
 | -s/--vocab-size | int | 词汇表大小 |
 | -f/--min-frequency | int | 最小词频 |
 | -m/--max-sequence-length | int | 最长允许多长的序列参与训练和测试（单位: 字符） |

@@ -1,136 +1,130 @@
-# MIDI 音乐生成模型训练系统文档
-## 系统架构
-```mermaid
-graph TD
-    A[MIDI文件] --> B[MidiDataset] --> C[数据预处理] --> D[模型训练] --> E[模型验证] --> F[结果可视化] --> G[模型保存]
-```
+# MIDI 模型训练与验证说明文档
 
-## 核心模块说明
-### 1. MidiDataset 数据集类
-#### 功能特性
-- 支持 MIDI 和 JSON 两种输入格式
-- 自动处理损坏文件和无效数据
-- 智能序列截断与分割
-- 动态内存管理
+## 概述
+本项目用于训练一个基于 Transformer 的模型，处理 MIDI 文件，预测音符序列。本文档将介绍如何使用该项目，相关类和函数的说明。
 
-#### 关键方法
-| 方法 | 说明 |
-| - | - |
-| \__init__ | 初始化数据集并加载文件 |
-| \__len__ | 返回可用样本总数 |
-| \__getitem__ | 获取指定索引的样本 |
+## 使用方法
 
-#### 数据处理流程
-1. MIDI → 音符序列 → 电子乐谱 → 分词编码
-2. 自动过滤：
-   - 损坏的MIDI文件
-   - 空音符序列
-   - 超长序列(自动截断)
+1. **准备环境：**
+   - 安装依赖库：`mido`, `torch`, `transformers`, `matplotlib`, `tqdm` 等。
+   - 准备 MIDI 文件或 JSON 格式的音符数据。
 
-### 2. MidiDatasetSampler 采样器
-#### 批处理策略
-- 基于序列长度的动态批处理
-- 自动计算最优批次组合
-- 支持最大批次大小限制
+2. **命令行训练：**
+   你可以通过命令行运行以下脚本来训练模型：
 
-#### 数学原理
-根据经验，批次选择标准被设置为`sum(sequence_length ** 2) <= max_batch_size`
+   ```bash
+   python train_model.py <num_epochs> <ckpt_path> -t <train_dataset> -v <val_dataset>
+   ```
 
-### 3. 训练与验证函数
-#### 训练流程
-```python
-for batch in dataloader:
-    optimizer.zero_grad()
-    outputs = model(inputs)
-    loss = criterion(outputs, labels)
-    loss.backward()
-    optimizer.step()
-```
+**参数说明：**
 
-#### 验证流程
-```python
-with torch.no_grad():
-    outputs = model(inputs)
-    loss = criterion(outputs, labels)
-```
+* `<num_epochs>`: 训练的总轮数。
+* `<ckpt_path>`: 检查点保存路径。
+* `-t <train_dataset>`: 训练集路径，可以指定多个数据集。
+* `-v <val_dataset>`: 验证集路径（可选）。
+* `-m <min-sequence-length>`: 最小序列长度，默认为 64。
+* `-e <max-sequence-length>`: 最大序列长度，默认为 2^17。
+* `-b <max-batch-size>`: 最大批次大小，默认为 8 \* 1536^2。
+* `-l <learning-rate>`: 学习率，默认为 1e-2。
+* `-w <weight-decay>`: 权重衰减系数，默认为 1e-2。
+* `-n <num-heads>`: 多头注意力的头数量，默认为 12。
+* `-d <dim-head>`: 注意力头的维度，默认为 64。
+* `-f <dim-feedforward>`: 前馈层的维度，默认为 2048。
+* `-s <num-layers>`: Transformer 编码器的层数，默认为 12。
+* `-o <dropout>`: Dropout 概率，默认为 0.1。
 
-### 4. 可视化模块
-#### 生成图表包含
-- 训练损失曲线 (红色实线)
-- 验证损失曲线 (蓝色点线)
-- 训练困惑度曲线 (绿色虚线)
-- 验证困惑度曲线 (蓝色虚线)
+## 类说明
 
-## 配置参数说明
-### 必需参数
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| num_epochs | int | 训练轮数 |
-| ckpt_path | Path | 检查点路径 |
-| --train-dataset | Path | 训练数据集路径 |
+### 1. **MidiDataset**
 
-### 可选参数
-| 参数 | 缩写 | 默认值 | 说明 |
-|------|------|--------|------|
-| --val-dataset | -v | None | 验证数据集路径 |
-| --min-sequence-length | -m | 2³² | 最小序列长度 |
-| --max-sequence-length | -e | 2¹⁷ | 最大序列长度 |
-| --max-batch-size | -b | 8×1536² | 最大批次大小 |
-| --learning-rate | -l | 0.01 | 学习率 |
-| --weight-decay | -w | 0.01 | 权重衰减 |
+该类用于加载和处理 MIDI 文件，转换为模型可以使用的格式。
 
-## 性能优化措施
-1. **内存管理**
-   - 自动GPU缓存清理
-   - 多线程优化
-   - 智能批处理
+#### 参数
 
-2. **训练加速**
-   - 多GPU支持(DataParallel)
-   - 混合精度训练(自动检测)
+| 参数名                   | 类型                        | 作用                   |
+| --------------------- | ------------------------- | -------------------- |
+| `midi_dirs`           | `list[pathlib.Path]`      | 包含 MIDI/JSON 文件的目录列表 |
+| `tokenizer`           | `PreTrainedTokenizerFast` | 用于音乐数据编码的分词器         |
+| `min_sequence_length` | `int`                     | 最小序列长度（按音符表示）        |
+| `max_sequence_length` | `int`                     | 最大序列长度（按乐谱表示）        |
+| `show_progress`       | `bool`                    | 是否显示加载进度条            |
 
-3. **资源利用**
-   - 解除线程限制
-   - 进度条显示
+### 2. **MidiDatasetSampler**
 
-## 使用示例
-### 基本训练命令
-```bash
-python train.py 100 ckpt -t ./data/train -v ./data/val
-```
+该类用于从 MIDI 数据集中按批次生成索引。
 
-## 检查点管理
-### 保存内容
-1. 模型参数 (`model.pth`)
-2. 优化器状态 (`optimizer.pth`)
-3. 训练指标 (`metrics.json`)
+#### 参数
 
-### 自动恢复功能
-- 从中断处继续训练
-- 兼容单机/多GPU模式
-- 指标数据无缝衔接
+| 参数名              | 类型            | 作用                           |
+| ---------------- | ------------- | ---------------------------- |
+| `dataset`        | `MidiDataset` | 包含 MIDI 数据的 `MidiDataset` 实例 |
+| `max_batch_size` | `int`         | 每个批次的最大序列长度的平方和上限            |
+| `drop_last`      | `bool`        | 是否丢弃最后一个批次（如果批次小于上限）         |
 
-## 最佳实践建议
-1. **数据准备**
-   - 建议使用JSON格式(加载更快)
-   - 保持数据集平衡
-   - 验证集比例建议20%
+### 3. **train**
 
-2. **训练技巧**
-   - 初始学习率 1e-2 - 1e-3
-   - 权重衰减 1e-2 - 1e-1
-   - 每个epoch保存检查点
+该函数用于训练模型，并返回每步的训练损失和困惑度。
 
-## 故障处理
-### 常见问题
-1. **内存不足**
-   - 减小`max-batch-size`
-   - 增加`min-sequence-length`
+#### 参数
 
-2. **训练不稳定**
-   - 降低学习率
-   - 增加权重衰减
+| 参数名          | 类型                                                     | 作用                    |
+| ------------ | ------------------------------------------------------ | --------------------- |
+| `model`      | `MidiNet`                                              | 需要训练的神经网络模型           |
+| `dataloader` | `DataLoader`                                           | 训练数据加载器               |
+| `optimizer`  | `optim.Adam`                                           | 优化器                   |
+| `criterion`  | `Callable[[torch.Tensor, torch.Tensor], torch.Tensor]` | 损失函数（通常是交叉熵损失）        |
+| `vocab_size` | `int`                                                  | 词汇表的大小（用于调整输出层的维度）    |
+| `pad_token`  | `int`                                                  | 填充 token 的标记，用于忽略计算损失 |
+| `device`     | `torch.device`                                         | 训练设备（`cuda` 或 `cpu`）  |
+| `pbar_desc`  | `str`                                                  | 进度条描述（例如："训练"）        |
 
-3. **性能瓶颈**
-   - 使用JSON替代MIDI
-   - 减少数据增强操作
+### 4. **validate**
+
+该函数用于验证模型，并返回验证集上的平均损失和困惑度。
+
+#### 参数
+
+| 参数名          | 类型                                                     | 作用                    |
+| ------------ | ------------------------------------------------------ | --------------------- |
+| `model`      | `MidiNet`                                              | 需要验证的神经网络模型           |
+| `dataloader` | `DataLoader`                                           | 验证数据加载器               |
+| `criterion`  | `Callable[[torch.Tensor, torch.Tensor], torch.Tensor]` | 损失函数（通常是交叉熵损失）        |
+| `vocab_size` | `int`                                                  | 词汇表的大小（用于调整输出层的维度）    |
+| `pad_token`  | `int`                                                  | 填充 token 的标记，用于忽略计算损失 |
+| `device`     | `torch.device`                                         | 验证设备（`cuda` 或 `cpu`）  |
+| `pbar_desc`  | `str`                                                  | 进度条描述（例如："验证"）        |
+
+### 5. **plot\_training\_process**
+
+该函数用于绘制训练过程中的损失和困惑度曲线。
+
+#### 参数
+
+| 参数名        | 类型                | 作用               |        |
+| ---------- | ----------------- | ---------------- | ------ |
+| `metrics`  | `dict[str, list]` | 包含训练和验证损失、困惑度的字典 |        |
+| `img_path` | \`pathlib.Path    | str\`            | 图形保存路径 |
+
+## 函数说明
+
+### 1. **sequence\_collate\_fn**
+
+该函数用于将多个样本合成统一长度的 batch。
+
+#### 参数
+
+| 参数名         | 类型                                        | 作用                    |
+| ----------- | ----------------------------------------- | --------------------- |
+| `batch`     | `list[tuple[torch.Tensor, torch.Tensor]]` | 包含多个样本的批次             |
+| `pad_token` | `int`                                     | 填充 token 的标记，用于忽略计算损失 |
+
+### 2. **empty\_cache**
+
+该函数用于清理缓存，释放 GPU 内存。
+
+---
+
+## 结语
+
+本项目提供了用于处理 MIDI 数据的类、方法和训练过程，可以训练一个音乐生成模型。你可以根据需要修改训练参数，来适配不同的数据集和模型配置。
+
