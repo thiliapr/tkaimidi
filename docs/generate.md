@@ -23,6 +23,7 @@ python generate.py ./ckpt -m ./input.mid -t 0.8 -s 8964 -l 200
 | `-s, --seed`                     | 随机种子，指定随机种子用于生成控制                     | 随机生成         |
 | `-p, --max-pitch-span-semitones` | 最大音高跨度，当音高变化超过此值时，自动调整音调生成概率          | 64           |
 | `-l, --max-length`               | 最大生成音符数量，达到此数量后停止生成                   | 无限制            |
+| `-k, --top-k`    				   | 仅对概率前`top_k`的token采样，减小随机性      | 无 |
 | `-n, --num-heads`                | 模型的注意力头数量，控制模型的多头注意力层数                | 默认模型参数       |
 
 ## 函数说明
@@ -56,6 +57,7 @@ python generate.py ./ckpt -m ./input.mid -t 0.8 -s 8964 -l 200
 | `tokenizer`   | `PreTrainedTokenizerFast` | 用于乐谱事件与 token 互相转换的分词器实例 |
 | `seed`        | `int`                     | 随机种子                     |
 | `temperature` | `float`                   | 温度参数，控制生成多样性             |
+| `top_k`		| `Optional[int]`           | 仅对概率前`top_k`个token采样，减小随机性 |
 | `device`      | `torch.device`            | 计算设备                     |
 
 #### 返回值
@@ -77,6 +79,7 @@ python generate.py ./ckpt -m ./input.mid -t 0.8 -s 8964 -l 200
 | `tokenizer`                | `PreTrainedTokenizerFast` | 用于乐谱事件与文本互相转换的分词器          |
 | `seed`                     | `Optional[int]`           | 随机种子，不指定表示随机生成             |
 | `temperature`              | `float`                   | 控制生成多样性的温度参数               |
+| `top_k`		             | `Optional[int]`           | 仅对概率前`top_k`个token采样，减小随机性 |
 | `max_pitch_span_semitones` | `int`                     | 音高跨度超过该值时将进行音高调整           |
 | `max_length`               | `Optional[int]`           | 限制最多生成的音符数量                |
 | `device`                   | `torch.device`            | 模型运行的设备 (cpu/cuda)         |

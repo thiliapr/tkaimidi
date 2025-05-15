@@ -14,10 +14,26 @@ pip install -r requirements.txt
 
 ## 使用示例
 ```bash
-python3 tokenizer.py ckpt -t train_data -v valid_data  # 训练分词器
-python3 train.py 20 ckpt -t train_data -v valid_data  # 训练模型
-python3 generate.py ckpt -l 1024  # 生成
+# 提取训练、验证数据，如果训练多次或重新训练分词器，这样就不用多次加载原始数据，节省时间
+python3 extract.py train_data train_optimized_data
+python3 extract.py valid_data valid_optimized_data
+
+# 训练分词器（检查点保存到哪里）
+python3 tokenizer.py ckpt -t train_optimized_data -v valid_optimized_data
+
+# 训练模型（要训练多少个 Epoch、检查点保存到哪里）
+python3 train.py 15 ckpt -t train_optimized_data -v valid_optimized_data
+
+# 生成音乐并保存为 MIDI
+python3 generate.py ckpt output.mid
 ```
+
+**注意事项**
+- 值得注意的是，如果你不重新训练分词器，而是从已有检查点复制分词器过来的话，直接运行`train.py`。在这种情况下，检查点最好不要包含`optimizer.pth`、`model.pth`和`metrics.json`（根据经验，如果检查点包含不符合现在参数的模型和检查点的话，可能引发异常）
+- 更进一步，如果你不重新训练分词器，而且只运行`python3 train.py`一次，则不必先提取数据，即直接运行`python3 train.py 15 ckpt -t train_data -v valid_data`。（在这种情况下，先提取数据再训练和直接训练所耗费时间几乎是相等的。不过我个人还是建议不要这样做，毕竟万一你又不满意模型效果想重新训练了呢 :)）
+
+## 文档
+各个文件的文档见目录`docs`。
 
 ## 贡献与开发
 欢迎提出问题、改进或贡献代码。如果有任何问题或建议，您可以在 GitHub 上提 Issues，或者直接通过电子邮件联系开发者。

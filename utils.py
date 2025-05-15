@@ -9,116 +9,12 @@
 
 import math
 import mido
-import time
-import threading
-from typing import TypeVar, Generic, Iterable, Iterator
-from collections import Counter, deque
+from typing import Iterator
+from collections import Counter
 
 # 在非 Jupyter 环境下导入常量库
 if "get_ipython" not in globals():
     from constants import NATURAL_SCALE, TIME_PRECISION, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, TIME_INTERVAL, LOOKAHEAD_COUNT
-
-T = TypeVar("T")
-
-
-class ThreadVariable(Generic[T]):
-    """
-    一个线程安全的变量容器，允许在多个线程之间安全地读取和修改值。
-
-    该类使用锁来保护对值的访问，确保在任何给定时间只有一个线程可以修改该值。
-    这避免了数据竞争和不一致的问题。
-
-    Args:
-        value: 初始值。
-    """
-
-    def __init__(self, value: T):
-        self._value = value  # 初始化变量值
-        self.lock = threading.Lock()  # 创建一个锁对象，用于线程同步
-
-    @property
-    def value(self) -> T:
-        with self.lock:
-            return self._value
-
-    @value.setter
-    def value(self, value: T):
-        with self.lock:
-            self._value = value
-
-
-class BufferStream(Iterable, Generic[T]):
-    """
-    一个线程安全的迭代器，用于缓冲和逐步输出数据。
-    支持多线程环境下的数据生产和消费，当缓冲区为空时会自动休眠等待。
-
-    工作流程:
-    1. 生产者线程通过send()方法添加数据到缓冲区
-    2. 消费者通过迭代器逐个获取数据
-    3. 当缓冲区为空时，迭代器会短暂休眠避免忙等待
-    4. 调用stop()方法可以安全停止迭代器
-
-    Returns:
-        迭代器实例，支持直接迭代或调用其他方法
-
-    Examples:
-        >>> buffer_stream = BufferStream()
-        >>> buffer_stream.send([1, 2, 3])
-        >>> for item in buffer_stream:
-        ...     print(item)
-        ...     if item == 3: break
-        >>> buffer_stream.stop()
-    """
-
-    def __init__(self):
-        self.buffer = deque()  # 使用双端队列作为缓冲区
-        self.lock = threading.Lock()  # 线程锁保证操作原子性
-        self.stop_event = threading.Event()  # 停止标志位
-
-    def send(self, data: list[T]):
-        """
-        向缓冲区添加数据，线程安全。
-
-        Args:
-            data: 要添加的整数列表
-
-        Examples:
-            >>> buffer_stream.send([1, 2, 3])
-        """
-        with self.lock:
-            self.buffer.extend(data)
-
-    def stop(self):
-        """
-        安全停止迭代器。
-        设置停止标志位，迭代器将在下次检查时停止迭代。
-
-        Examples:
-            >>> buffer_stream.stop()
-        """
-        self.stop_event.set()
-
-    def __iter__(self) -> Iterator[T]:
-        """
-        实现迭代器协议，返回生成器。
-        当缓冲区不为空时返回数据，为空时短暂休眠。
-
-        Returns:
-            生成器对象，每次yield一个数据项
-
-        Examples:
-            >>> next(iter(buffer_stream))
-        """
-        while not self.stop_event.is_set():
-            with self.lock:
-                # 直接检查缓冲区是否非空
-                if self.buffer:
-                    # 成功获取数据后立即继续下一次迭代
-                    yield self.buffer.popleft()
-                    continue
-
-            # 缓冲区为空时短暂休眠避免CPU占用过高
-            time.sleep(0.1)
 
 
 def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
@@ -302,7 +198,7 @@ def notes_to_sheet(notes: list[tuple[int, int]]) -> tuple[list[tuple[str, int]],
     return sheet, positions
 
 
-def sheet_to_notes(sheet: Iterator[int]) -> Iterator[tuple[int, int, int]]:
+def sheet_to_notes(sheet: Iterator[int]) -> Iterator[tuple[int, int]]:
     """
     将电子乐谱转换为MIDI音符序列。
 
@@ -316,11 +212,11 @@ def sheet_to_notes(sheet: Iterator[int]) -> Iterator[tuple[int, int, int]]:
         sheet: 电子乐谱数据流，由notes_to_sheet()生成
 
     Returns:
-        生成器，每次产生一个元组(音高, 时间间隔, 当前全局偏移)
+        生成器，每次产生一个元组(音高, 时间间隔)
 
     Examples:
-        >>> list(sheet_to_notes(iter([0, 1, 14, 0])))
-        [(0, 0, 0), (1, 0, 0), (-12, 0, 0)]
+        >>> list(sheet_to_notes([0, 1, 14, 0]))
+        [(0, 0), (1, 0), (-12, 0)]
     """
     # 初始化状态变量
     global_offset = 0  # 当前全局偏移
@@ -331,17 +227,17 @@ def sheet_to_notes(sheet: Iterator[int]) -> Iterator[tuple[int, int, int]]:
         if event < 12:
             # 计算并生成最终音符
             final_pitch = event - global_offset + octave_offset * 12
-            yield final_pitch, accumulated_interval, global_offset
+            yield final_pitch, accumulated_interval
 
             # 重置状态
             octave_offset = accumulated_interval = 0
-        elif event == 12:
+        elif event == KEY_DOWN:
             global_offset -= 1  # 降调
-        elif event == 13:
+        elif event == KEY_UP:
             global_offset += 1  # 升调
-        elif event == 14:
+        elif event == OCTAVE_JUMP_DOWN:
             octave_offset -= 1  # 降八度
-        elif event == 15:
+        elif event == OCTAVE_JUMP_UP:
             octave_offset += 1  # 升八度
         else:
             accumulated_interval += 1  # 增加时间间隔

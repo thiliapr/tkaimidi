@@ -2,32 +2,6 @@
 
 ---
 
-## `ThreadVariable[T]`
-
-线程安全的变量封装类。
-
-| 参数名     | 类型  | 描述        |
-| ------- | --- | --------- |
-| `value` | `T` | 初始值，泛型类型。 |
-
----
-
-## `BufferStream[T]`
-
-线程安全的缓冲流迭代器，支持多线程生产与消费。
-
-### 方法：`send(data)`
-
-| 参数名    | 类型        | 描述            |
-| ------ | --------- | ------------- |
-| `data` | `list[T]` | 要添加到缓冲区的数据列表。 |
-
-### 方法：`stop()`
-
-无参数，用于安全停止迭代器。
-
----
-
 ## `midi_to_notes(midi_file) -> list[tuple[int, int]]`
 
 提取 MIDI 文件中的音符信息及其时间间隔。
@@ -42,14 +16,13 @@
 
 ---
 
-## `notes_to_sheet(notes, lookahead_count=DEFAULT_LOOKAHEAD_COUNT) -> tuple[list[int], list[int]]`
+## `notes_to_sheet(notes) -> tuple[list[int], list[int]]`
 
 将音符信息转换为电子乐谱。
 
 | 参数名               | 类型                      | 描述                                                 |
 | ----------------- | ----------------------- | -------------------------------------------------- |
 | `notes`           | `list[tuple[int, int]]` | 音高和相对时间的音符列表。                                      |
-| `lookahead_count` | `int`                   | 向前查看的音符数量，用于偏移判断。默认值为常量 `DEFAULT_LOOKAHEAD_COUNT`。 |
 
 | 返回值         | 类型          | 描述             |
 | ----------- | ----------- | -------------- |
@@ -58,7 +31,7 @@
 
 ---
 
-## `sheet_to_notes(sheet) -> Iterator[tuple[int, int, int]]`
+## `sheet_to_notes(sheet) -> Iterator[tuple[int, int]]`
 
 将电子乐谱转换为音符流。
 
@@ -68,7 +41,7 @@
 
 | 返回值 | 类型                               | 描述                         |
 | --- | -------------------------------- | -------------------------- |
-| -   | `Iterator[tuple[int, int, int]]` | `(音高, 时间间隔, 当前全局偏移)` 的生成器。 |
+| -   | `Iterator[tuple[int, int]]` | `(音高, 时间间隔)` 的生成器。 |
 
 ---
 
