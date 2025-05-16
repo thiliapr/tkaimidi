@@ -115,7 +115,7 @@ class MidiDataset(Dataset):
                 data = json.load(f)
 
             # 跳过超短序列
-            if len(data["num_notes"]) < min_sequence_length:
+            if data["num_notes"] < min_sequence_length:
                 continue
 
             # 截断超长序列
