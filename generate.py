@@ -393,7 +393,7 @@ def main():
     parser.add_argument("-s", "--seed", type=int, help="随机种子，不指定表示随机生成")
     parser.add_argument("-p", "--max-pitch-span-semitones", type=int, default=64, help="触发音高调整的阈值（半音数），当生成的音高跨度大于阈值时，包含音调上升或下降事件的 token 将被降低概率。")
     parser.add_argument("-l", "--max-length", type=int, help="限制最多生成的音符数量。如果不指定，将会持续生成直到遇到结束标志。")
-    parser.add_argument("-n", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="模型注意力头的数量。")
+    parser.add_argument("-n", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="模型注意力头的数量。一般情况下不需要动它，除非你所用的模型注意力头数量和默认的不同，一般这种情况会注明的。")
     args = parser.parse_args()
 
     # 加载模型的预训练检查点
