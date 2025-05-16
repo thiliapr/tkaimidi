@@ -173,9 +173,9 @@ class MidiDatasetSampler(Sampler[list[int]]):
         cur_batch_size = 0
 
         # 按序列长度排序
-        for _, sequence_length in sorted(self.dataset.music_sequences, key=lambda x: x[1]):
+        for sequence in sorted(self.dataset.music_sequences, key=lambda x: len(x)):
             # 计算序列长度平方
-            sequence_size = sequence_length ** 2
+            sequence_size = len(sequence) ** 2
 
             # 跳过长度平方大于 max_batch_size 的序列
             if sequence_size > self.max_batch_size:
@@ -203,9 +203,9 @@ class MidiDatasetSampler(Sampler[list[int]]):
         batch = []
 
         # 先按序列长度排序，如果序列长度相同就随机排序
-        for index, (_, sequence_length) in sorted(enumerate(self.dataset.music_sequences), key=lambda x: (x[1][1], random.randint(0, length - 1))):
+        for index, sequence in sorted(zip(range(length), self.dataset.music_sequences), key=lambda x: len(x[1])):
             # 跳过长度平方大于 max_batch_size 的序列
-            if sequence_length ** 2 > self.max_batch_size:
+            if len(sequence) ** 2 > self.max_batch_size:
                 continue
 
             # 添加样本
@@ -452,7 +452,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 初始化模型
-    model = MidiNet(len(tokenizer), args.num_heads, args.head_dim, args.dim_feedforward, args.num_layers, dropout=args.dropout)
+    model = MidiNet(len(tokenizer), args.num_heads, args.dim_head, args.dim_feedforward, args.num_layers, dropout=args.dropout)
 
     # 加载模型状态
     try:
