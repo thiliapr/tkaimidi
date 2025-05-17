@@ -10,7 +10,6 @@
 import math
 import mido
 from typing import Iterator
-from collections import Counter
 
 # 在非 Jupyter 环境下导入常量库
 if "get_ipython" not in globals():
@@ -125,7 +124,8 @@ def notes_to_sheet(notes: list[tuple[int, int]]) -> tuple[list[tuple[str, int]],
         "计算使音高集中在一个八度范围内的偏移量。"
         end = min(start + LOOKAHEAD_COUNT, len(pitches))
         segment = [pitch + cur_offset for pitch in pitches[start:end]]
-        return -max(Counter(pitch // 12 for pitch in segment).items(), key=lambda x: (x[1], x[0] == 0))[0]
+        segment_mean = sum(segment) / len(segment)
+        return -int(segment_mean / 12) if abs(segment_mean) > 18 else 0
 
     # 计算调整音高的偏移量，使其尽量符合自然音阶
     cur_offset = max(offset_func(0, 0).items(), key=lambda x: x[1])[0]
