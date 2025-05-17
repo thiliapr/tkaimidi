@@ -1,129 +1,116 @@
-# 音乐生成工具使用文档
+# TkAIMidi MIDI 生成器文档
 
-## 简介
+`TkAIMidi` 是一个基于神经网络的 MIDI 音乐生成工具，支持从现有 MIDI 片段续写和自由创作。
 
-该工具基于预训练的音乐生成模型，支持从指定的 MIDI 文件或者内置的示例 MIDI 音乐生成新的音乐。您可以通过命令行指定模型检查点、生成参数等，并将生成的音乐保存为 MIDI 文件。
+## 核心功能
 
-## 使用示例 
+### 1. 音符序列生成
 
-```bash
-python generate.py ./ckpt -m ./input.mid -t 0.8 -s 8964 -l 200
+```python
+def generate_midi(
+    prompt: list[tuple[int, int]],
+    model: MidiNet,
+    tokenizer: PreTrainedTokenizerFast,
+    seed: Optional[int] = None,
+    temperature: float = 1.,
+    top_k: Optional[int] = None,
+    repetition_penalty: float = 1,
+    pitch_volatility_threshold: float = 20.,
+    max_length: Optional[int] = None,
+    device: torch.device = None
+) -> Iterator[tuple[int, int]]
 ```
 
-该命令会根据 `./ckpt` 检查点，使用 `./input.mid` 作为提示音乐，生成温度为 0.8，随机种子为 8964，最多生成 200 个音符的 MIDI 文件。
+**参数说明**：
+- `prompt`: 初始音符序列，格式为 `(音高, 间隔时间)` 元组列表
+- `pitch_volatility_threshold`: 音高波动阈值（半音标准差），默认20
+- `max_length`: 最大生成音符数量
 
-## 命令行参数
+**特性**：
+- 实时音高稳定性控制
+- 支持八度跳跃和调性变化
+- 可中断的流式生成
 
-| 参数                               | 描述                                    | 默认值          |
-| -------------------------------- | ------------------------------------- | ------------ |
-| `ckpt_path`                      | 模型检查点的路径                              | 无            |
-| `output_path`                    | MIDI 文件保存路径。生成的 MIDI 文件将会保存到这里。          | 无            |
-| `-m, --midi-path`                | 用作提示的 MIDI 文件路径，如果未指定，则使用内置示例 MIDI 文件 | 内置示例 MIDI 文件 |
-| `-t, --temperature`              | 生成音乐的采样温度参数，控制生成结果的多样性                | 1.0          |
-| `-s, --seed`                     | 随机种子，指定随机种子用于生成控制                     | 随机生成         |
-| `-p, --max-pitch-span-semitones` | 最大音高跨度，当音高变化超过此值时，自动调整音调生成概率          | 64           |
-| `-l, --max-length`               | 最大生成音符数量，达到此数量后停止生成                   | 无限制            |
-| `-k, --top-k`    				   | 仅对概率前`top_k`的token采样，减小随机性      | 无 |
-| `-n, --num-heads`                | 模型的注意力头数量，控制模型的多头注意力层数                | 默认模型参数       |
+### 2. MIDI轨道转换
 
-## 函数说明
+```python
+def notes_to_track(notes: list[int]) -> mido.MidiTrack
+```
 
-### `notes_to_track(notes: list[int]) -> mido.MidiTrack`
+将音符序列转换为标准的MIDI轨道，包含：
+- 音符开启/关闭事件
+- 精确的时间控制（基于TIME_PRECISION）
+- 自动添加结束标记
 
-将音符和时间信息转换为 MIDI 轨道。
+### 3. 音高处理工具
 
-#### 参数
+```python
+def center_pitches(pitches: list[int]) -> list[tuple[int, int]]
+def clamp_midi_pitch(pitches: list[int])
+```
 
-| 参数      | 类型          | 描述        |
-| ------- | ----------- | --------- |
-| `notes` | `list[int]` | 音符间隔格式的列表 |
+提供音高居中化和标准化功能，确保生成的MIDI符合规范。
 
-#### 返回值
+## 使用示例
 
-返回一个包含音符事件及结束标记的 MIDI 轨道。
+### 命令行接口
 
----
+```bash
+python generate.py ckpt output.mid
+```
 
-### `generate_sheet(prompt: str, model: MidiNet, tokenizer: PreTrainedTokenizerFast, seed: int, temperature: float, device: torch.device) -> Generator[str, Optional[list[tuple[str, float]]], None`
+**参数说明**：
+- `-t/--temperature`: 采样温度 (0.1-2.0)
+- `-k/--top-k`: Top-K采样数量
+- `-p/--max-pitch-span-semitones`: 最大允许音高跨度
+- `-l/--max-length`: 最大生成音符数
 
-使用自回归方式生成音乐乐谱事件序列的生成器函数。
+### 编程接口
 
-#### 参数
+```python
+if 1:
+	import pathlib
+	from generate import generate_midi
+	from utils import notes_to_track
+	from checkpoint import load_checkpoint
+	from model import MidiNet
 
-| 参数            | 类型                        | 描述                       |
-| ------------- | ------------------------- | ------------------------ |
-| `prompt`      | `str`                     | 用于初始化生成的乐谱事件序列文本         |
-| `model`       | `MidiNet`                 | 预训练的音乐生成模型实例             |
-| `tokenizer`   | `PreTrainedTokenizerFast` | 用于乐谱事件与 token 互相转换的分词器实例 |
-| `seed`        | `int`                     | 随机种子                     |
-| `temperature` | `float`                   | 温度参数，控制生成多样性             |
-| `top_k`		| `Optional[int]`           | 仅对概率前`top_k`个token采样，减小随机性 |
-| `device`      | `torch.device`            | 计算设备                     |
+# 初始化模型和tokenizer
+model = MidiNet(...)
+tokenizer, state_dict = load_checkpoint(pathlib.Path("ckpt"), train=False)
+model.load_state_dict(state_dict)
 
-#### 返回值
+# 生成音乐
+notes = list(generate_midi(
+    prompt=[(0, 0)],
+    model=model,
+    tokenizer=tokenizer,
+    temperature=0.7
+))
 
-返回一个生成器，每次迭代生成一个乐谱事件 token 的字符串表示。
+# 保存为MIDI
+track = notes_to_track(notes)
+mido.MidiFile(tracks=[track]).save("output.mid")
+```
 
----
+## 技术架构
 
-### `generate_midi(prompt: list[tuple[int, int]], model: MidiNet, tokenizer: PreTrainedTokenizerFast, seed: Optional[int] = None, temperature: float = 1., max_pitch_span_semitones: int = 64, max_length: Optional[int] = None, device: torch.device = None) -> Iterator[tuple[int, int]]`
+1. **模型结构**：
+   - Transformer-based架构
+   - 多头注意力机制
+   - 可配置的层数和维度
 
-实时流式生成 MIDI 音符序列。
+2. **音乐表示**：
+   - 将音符事件转换为token序列
+   - 支持升降调、八度跳跃等控制事件
 
-#### 参数
+3. **生成控制**：
+   - 温度采样
+   - Top-K过滤
+   - 重复惩罚机制
 
-| 参数                         | 类型                        | 描述                         |
-| -------------------------- | ------------------------- | -------------------------- |
-| `prompt`                   | `list[tuple[int, int]]`   | 初始音符序列，每个元素为 (音高, 间隔时间) 元组 |
-| `model`                    | `MidiNet`                 | 预训练的音乐生成模型实例               |
-| `tokenizer`                | `PreTrainedTokenizerFast` | 用于乐谱事件与文本互相转换的分词器          |
-| `seed`                     | `Optional[int]`           | 随机种子，不指定表示随机生成             |
-| `temperature`              | `float`                   | 控制生成多样性的温度参数               |
-| `top_k`		             | `Optional[int]`           | 仅对概率前`top_k`个token采样，减小随机性 |
-| `max_pitch_span_semitones` | `int`                     | 音高跨度超过该值时将进行音高调整           |
-| `max_length`               | `Optional[int]`           | 限制最多生成的音符数量                |
-| `device`                   | `torch.device`            | 模型运行的设备 (cpu/cuda)         |
+## 已知限制
 
-#### 返回值
-
-返回一个迭代器，生成每个音符的音高和时间间隔。
-
----
-
-### `center_pitches(pitches: list[int]) -> list[tuple[int, int]]`
-
-将音符序列的音高居中化处理，使平均音高移动到 64 附近。
-
-#### 参数
-
-| 参数        | 类型          | 描述   |
-| --------- | ----------- | ---- |
-| `pitches` | `list[int]` | 音高序列 |
-
-#### 返回值
-
-返回调整后的音高序列，音高整体平移，使得平均音高接近 64。
-
----
-
-### `clamp_midi_pitch(pitches: list[int])`
-
-将音符音高值标准化到有效的 MIDI 音高范围 \[0, 127] 内。
-
-#### 参数
-
-| 参数        | 类型          | 描述                      |
-| --------- | ----------- | ----------------------- |
-| `pitches` | `list[int]` | 原始音高序列，可能包含超出 MIDI 范围的值 |
-
-#### 返回值
-
-返回标准化后的音高序列，所有值都在 \[0, 127] 范围内。
-
----
-
-## 注意事项
-
-* 在使用 `--seed` 参数时，确保种子的随机性不会导致重复的结果，除非故意指定相同的种子。
-* 温度参数影响生成的多样性，较高的温度会生成更多样的结果，较低的温度则使结果更为保守。
-* `max_pitch_span_semitones` 参数有助于防止生成音符时出现过大的音高跨度，可以防止音域过度漂移。
+1. 极端的温度参数可能导致不和谐的音乐
+2. 生成的音乐结构依赖提示片段的质量
+3. 复杂和弦的生成需要更大规模的模型

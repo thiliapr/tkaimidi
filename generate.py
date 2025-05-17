@@ -11,11 +11,11 @@ import pathlib
 import random
 import mido
 import math
+import numpy as np
 import torch
 import torch.nn.functional as F
 from transformers import PreTrainedTokenizerFast
 from typing import Iterator, Generator, Optional
-from collections import deque
 
 # 内置音乐曲库（爱情买卖）
 EXAMPLE_MIDI = [(45, 0), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (84, 0), (64, 1), (84, 1), (76, 2), (81, 2), (57, 1), (69, 1), (84, 0), (64, 1), (60, 1), (43, 2), (83, 0), (50, 1), (55, 1), (83, 0), (57, 1), (59, 1), (81, 0), (62, 1), (79, 1), (76, 2), (55, 3), (67, 1), (62, 1), (59, 1), (55, 1), (41, 1), (74, 0), (48, 1), (53, 1), (74, 0), (55, 1), (57, 1), (74, 0), (60, 1), (69, 1), (74, 2), (76, 2), (53, 1), (65, 1), (79, 0), (60, 1), (57, 1), (43, 2), (76, 0), (50, 1), (55, 1), (83, 0), (57, 1), (59, 1), (83, 0), (62, 1), (79, 1), (76, 2), (74, 3), (71, 1), (67, 1), (62, 1), (64, 1), (45, 1), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (84, 0), (64, 1), (84, 1), (76, 2), (81, 2), (57, 1), (69, 1), (84, 0), (64, 1), (60, 1), (43, 2), (88, 0), (50, 1), (55, 1), (88, 0), (57, 1), (59, 1), (86, 0), (62, 1), (84, 1), (86, 2), (55, 3), (67, 1), (62, 1), (59, 1), (55, 1), (41, 1), (88, 0), (48, 1), (53, 1), (55, 1), (88, 0), (57, 1), (86, 0), (60, 1), (84, 1), (43, 2), (86, 0), (50, 1), (55, 1), (57, 1), (86, 0), (59, 1), (84, 0), (62, 1), (83, 1), (45, 2), (79, 0), (52, 1), (57, 1), (76, 0), (59, 1), (60, 1), (79, 0), (64, 1), (81, 1), (81, 2), (76, 3), (72, 1), (69, 1), (64, 1), (69, 1)]
@@ -23,7 +23,7 @@ EXAMPLE_MIDI = [(45, 0), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (
 
 # 在非 Jupyter 环境下导入常量、模型、检查点、工具、分词库
 if "get_ipython" not in globals():
-    from constants import TIME_PRECISION, DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, LOOKAHEAD_COUNT
+    from constants import TIME_PRECISION, DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN
     from model import MidiNet
     from checkpoint import load_checkpoint
     from utils import midi_to_notes, notes_to_sheet, sheet_to_notes
@@ -86,6 +86,7 @@ def generate_sheet(
     seed: int,
     temperature: float,
     top_k: Optional[int],
+    repetition_penalty: float,
     device: torch.device
 ) -> Generator[str, Optional[list[tuple[str, float]]], None]:
     """
@@ -101,6 +102,7 @@ def generate_sheet(
         seed: 随机数生成种子，用于控制生成过程的确定性
         temperature: 采样温度参数，值越高生成结果越多样，值越低结果越保守
         top_k: 仅对概率前`top_k`个token采样，减小随机性
+        repetition_penalty: 重复惩罚，大于 1 则减少重复
         device: 指定模型运行的计算设备
 
     Yields:
@@ -147,6 +149,11 @@ def generate_sheet(
         logits[tokenizer.pad_token_id] = -torch.inf
         logits[tokenizer.unk_token_id] = -torch.inf
 
+        # Repetition Penalty
+        score = torch.gather(logits, 0, input_tensor)
+        score = torch.where(score < 0, score * repetition_penalty, score / repetition_penalty)
+        logits.scatter_(0, input_tensor, score)
+
         # Top-K
         if top_k:
             values, _ = torch.topk(logits, top_k)
@@ -154,13 +161,14 @@ def generate_sheet(
 
         # 应用温度参数并计算概率分布
         probs = F.softmax(logits / temperature, dim=-1)
+        probs = torch.nan_to_num(probs, nan=-torch.inf)
 
         # 如果存在需要调整概率的事件，则降低其相关token的概率
         if events_to_dampen:
             for event, frequency_reduction in events_to_dampen:
                 for token, token_id in tokenizer.vocab.items():
                     if event in token and token != tokenizer.eos_token:
-                        probs[token_id] *= 1 - frequency_reduction
+                        probs[token_id] *= (1 - frequency_reduction) ** token.count(event)
 
         # 保证概率不为负并重新归一化
         probs = F.relu(probs)
@@ -186,47 +194,31 @@ def generate_midi(
     tokenizer: PreTrainedTokenizerFast,
     seed: Optional[int] = None,
     temperature: float = 1.,
-    top_k: Optional[float] = None,
-    max_pitch_span_semitones: int = 64,
+    top_k: Optional[int] = None,
+    repetition_penalty: float = 1,
+    pitch_volatility_threshold: float = 20.,
     max_length: Optional[int] = None,
     device: torch.device = None
 ) -> Iterator[tuple[int, int]]:
     """
-    实时流式生成MIDI音符序列。
+    MIDI音乐流式生成器
 
-    该函数基于输入音符提示序列，采用后台线程异步生成MIDI事件流，同时主线程实时输出音符(pitch, interval)。
-    音高跨度超过设定阈值时，会动态降低升高/降低音调事件的概率，以避免音域漂移。
+    通过神经网络模型实时生成音乐音符序列，支持动态音高稳定性控制
 
-    处理流程：
-    1. 将输入的(pitch, interval)音符序列转换为模型可识别的乐谱事件
-    2. 启动后台线程异步调用生成器生成事件序列
-    3. 主线程实时读取事件流，转换为音符并输出
-    4. 根据当前音高跨度实时调整音调变换事件的生成概率
-
-    Args:
-        prompt: 初始音符序列，每个元素为(音高, 间隔时间)元组
-        model: 预训练的音乐生成模型实例
-        tokenizer: 乐谱事件与文本互相转换的分词器
+    参数:
+        prompt: 初始音符提示序列，每个元素为(音高, 间隔时间)的元组
+        model: 用于生成的神经网络模型
+        tokenizer: 文本tokenizer
         seed: 随机种子，None表示随机生成
-        temperature: 控制生成多样性的温度参数(默认1.0)
-        top_k: 仅对概率前`top_k`的token采样，减小随机性
-        max_pitch_span_semitones: 音高跨度超过该值时将进行音高调整（单位: 半音）
-        max_length: 限制最多生成的音符数量（计算长度不包括提示音符）
-        device: 模型运行的设备(cpu/cuda)
+        temperature: 控制生成随机性的温度参数
+        top_k: 只考虑概率最高的k个token
+        repetition_penalty: 重复惩罚系数
+        pitch_volatility_threshold: 音高波动阈值(半音标准差)，超过此值会触发抑制机制
+        max_length: 生成的最大音符数量
+        device: 使用的计算设备(CPU/GPU)
 
-    Yields:
-        生成的音符(音高pitch, 间隔时间interval)
-
-    Note:
-        1. 采用守护线程确保主程序退出时自动终止生成
-        2. 当音高跨度超过阈值时自动降低升调/降调事件概率
-        3. 音高调整强度与超出阈值幅度成正比
-
-    Examples:
-        >>> # 获取 prompt 并开始生成
-        >>> prompt = midi_to_notes(mido.MidiFile("Touhou Broken_Moon.mid"))
-        >>> for pitch, interval in generate_midi(prompt, model, tokenizer, seed=19890604):
-        ...     print(f"生成音符: 音高{pitch}，与前一个音符的时间间隔{interval}")
+    返回:
+        生成器，产出(音高, 间隔时间)元组
     """
     # 初始化随机种子
     if seed is None:
@@ -236,14 +228,11 @@ def generate_midi(
     sheet_music, _ = notes_to_sheet(prompt)
     prompt_text = data_to_str(sheet_music)
 
-    # 初始化滑动窗口，用于追踪最近生成的音高
-    recent_pitch_window = deque([0])
-
-    # 初始化生成音符的计数器
-    generated_notes_counter = 0
+    # 初始化窗口，用于追踪生成的音高
+    pitch_window = np.array([], dtype=int)
 
     # 创建主生成器
-    generator = generate_sheet(prompt_text, model, tokenizer, seed, temperature, top_k, device)
+    generator = generate_sheet(prompt_text, model, tokenizer, seed, temperature, top_k, repetition_penalty, device)
 
     # 初始化状态变量
     global_offset = sheet_music.count(KEY_UP) - sheet_music.count(KEY_DOWN)  # 当前全局偏移
@@ -251,8 +240,9 @@ def generate_midi(
     accumulated_interval = 0  # 累计时间间隔
 
     # 返回提示音符
-    for note in sheet_to_notes(sheet_music):
-        yield note
+    for pitch, interval in sheet_to_notes(sheet_music):
+        yield pitch, interval
+        pitch_window = np.concatenate((pitch_window, [pitch]))
 
     # 生成token并转化为音符
     for token in generator:
@@ -264,17 +254,12 @@ def generate_midi(
                 # 返回音符
                 yield final_pitch, accumulated_interval
 
+                # 更新窗口和全局平均音高
+                pitch_window = np.concatenate((pitch_window, [final_pitch]))
+
                 # 判断是否终止生成循环
-                generated_notes_counter += 1
-                if max_length is not None and generated_notes_counter >= max_length:
+                if max_length is not None and len(pitch_window) >= max_length:
                     return
-
-                # 更新窗口
-                recent_pitch_window.append(final_pitch)
-
-                # 控制窗口大小
-                if len(recent_pitch_window) > LOOKAHEAD_COUNT:
-                    recent_pitch_window.popleft()
 
                 # 重置状态
                 octave_offset = accumulated_interval = 0
@@ -289,23 +274,20 @@ def generate_midi(
             else:
                 accumulated_interval += 1  # 增加时间间隔
 
-        # 计算当前音高跨度
-        pitch_span = max(recent_pitch_window) - min(recent_pitch_window)
+        # 如果音高波动超过阈值则进行调整
+        if pitch_window.std() > pitch_volatility_threshold:
+            # 计算抑制比率(基于当前波动与阈值的差值)
+            suppression_ratio = (pitch_window.std() - pitch_volatility_threshold) * 0.1
 
-        # 检查是否需要调整
-        if pitch_span > max_pitch_span_semitones:
-            # 每超过1个八度（12半音）增加10%惩罚
-            suppression_ratio = (pitch_span - max_pitch_span_semitones) / 12 * 0.1
-
-            # 对升调/降调应用概率抑制
-            if global_offset > 0:
+            # 根据最近音高趋势决定抑制方向
+            if pitch_window[-64:].mean() > pitch_window.mean():
                 suppressed_events = [KEY_UP, OCTAVE_JUMP_UP]
             else:
                 suppressed_events = [KEY_DOWN, OCTAVE_JUMP_DOWN]
 
+            # 向生成器发送抑制信号
             try:
                 generator.send([(event, suppression_ratio) for event in data_to_str(suppressed_events)])
-                pass
             except StopIteration:
                 pass
 
@@ -390,6 +372,7 @@ def main():
     parser.add_argument("-m", "--midi-path", type=pathlib.Path, help="指定的 MIDI 文件，将作为生成的音乐的前面部分。如果未指定，将使用内置的音乐来生成。")
     parser.add_argument("-t", "--temperature", type=float, default=1.0, help="采样温度参数，值越高生成结果越多样，值越低结果越保守")
     parser.add_argument("-k", "--top-k", type=float, default=None, help="仅对概率前`top_k`个token采样，减小随机性")
+    parser.add_argument("-r", "--repetition-penalty", type=float, default=1, help="重复惩罚，大于 1 则减少重复")
     parser.add_argument("-s", "--seed", type=int, help="随机种子，不指定表示随机生成")
     parser.add_argument("-p", "--max-pitch-span-semitones", type=int, default=64, help="触发音高调整的阈值（半音数），当生成的音高跨度大于阈值时，包含音调上升或下降事件的 token 将被降低概率。")
     parser.add_argument("-l", "--max-length", type=int, help="限制最多生成的音符数量。如果不指定，将会持续生成直到遇到结束标志。")
@@ -434,7 +417,7 @@ def main():
 
     # 模型推理生成
     music = []
-    for note in generate_midi(prompt_notes, model, tokenizer, seed=args.seed, temperature=args.temperature, max_pitch_span_semitones=args.max_pitch_span_semitones, max_length=args.max_length, device=device):
+    for note in generate_midi(prompt_notes, model, tokenizer, seed=args.seed, temperature=args.temperature, repetition_penalty=args.repetition_penalty, max_pitch_span_semitones=args.max_pitch_span_semitones, max_length=args.max_length, device=device):
         music.append(note)
         print(note)
 
