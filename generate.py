@@ -23,7 +23,7 @@ EXAMPLE_MIDI = [(45, 0), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (
 
 # 在非 Jupyter 环境下导入常量、模型、检查点、工具、分词库
 if "get_ipython" not in globals():
-    from constants import TIME_PRECISION, DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN
+    from constants import TIME_PRECISION, DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, LOOKAHEAD_COUNT
     from model import MidiNet
     from checkpoint import load_checkpoint
     from utils import midi_to_notes, notes_to_sheet, sheet_to_notes
@@ -280,7 +280,7 @@ def generate_midi(
             suppression_ratio = (pitch_window.std() - pitch_volatility_threshold) * 0.1
 
             # 根据最近音高趋势决定抑制方向
-            if pitch_window[-64:].mean() > pitch_window.mean():
+            if pitch_window[-LOOKAHEAD_COUNT:].mean() > pitch_window.mean():
                 suppressed_events = [KEY_UP, OCTAVE_JUMP_UP]
             else:
                 suppressed_events = [KEY_DOWN, OCTAVE_JUMP_DOWN]
