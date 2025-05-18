@@ -10,6 +10,8 @@ import argparse
 import pathlib
 import mido
 import json
+import random
+import multiprocessing
 
 # 根据是否在 Jupyter 环境下导入不同库
 if "get_ipython" in globals():
@@ -20,52 +22,118 @@ else:
     from tokenizer import data_to_str
 
 
-def main():
-    parser = argparse.ArgumentParser(description="从 MIDI 文件夹中提取训练信息")
-    parser.add_argument("input_dir", type=pathlib.Path, help="要提取的 MIDI 文件夹。")
-    parser.add_argument("output_dir", type=pathlib.Path, help="MIDI 信息输出文件夹。")
-    parser.add_argument("-m", "--min-sequence-length", default=128, type=int, help="最小序列长度，小于该长度的样本不会被转换（单位: 音符）")
-    parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断（单位: 字符）")
-    args = parser.parse_args()
+def process_midi_to_json(
+    rank: int,
+    midi_files: list[pathlib.Path],
+    root_dir: pathlib.Path,
+    output_dir: pathlib.Path,
+    max_sequence_length: int,
+    min_sequence_length: int
+):
+    """
+    将 MIDI 文件转换为训练用的 JSON 格式
 
-    # 遍历输入目录中的所有 MIDI 文件
-    for filepath in tqdm(list(args.input_dir.glob("**/*.mid"))):
-        # 读取并转化 MIDI 文件
+    处理流程:
+    1. 读取 MIDI 文件并解析音符
+    2. 过滤无效或过短的音符序列
+    3. 将音符转换为电子乐谱表示
+    4. 根据长度要求截断或跳过序列
+    5. 将结果保存为 JSON 文件
+
+    Args:
+        rank: 进程标识符，用于显示进度条
+        midi_files: 要处理的 MIDI 文件列表
+        root_dir: 输入文件的根目录
+        output_dir: 输出 JSON 文件的目录
+        max_sequence_length: 最大允许的序列长度
+        min_sequence_length: 最小允许的音符数量
+    """
+    print(f"进程 {rank} 已启动。")
+    for filepath in tqdm(midi_files, desc=f"进程 {rank}", position=rank):
         try:
+            # 读取 MIDI 文件，clip=True 自动处理异常事件
             midi_file = mido.MidiFile(filepath, clip=True)
-        except Exception:
-            # 跳过有错误的 MIDI 文件
+        except Exception as e:
+            print(f"跳过损坏文件 {filepath}: {str(e)}")
             continue
 
-        # 提取音符并跳过没有音符的 MIDI 文件
         notes = midi_to_notes(midi_file)
         if not notes:
             continue
 
-        # 转化为电子乐谱形式
         sheet, positions = notes_to_sheet(notes)
 
         # 截断超长序列
-        if len(sheet) > args.max_sequence_length:
-            notes_end, sheet_end = max((i, position) for i, position in enumerate(positions) if position < args.max_sequence_length)
+        if len(sheet) > max_sequence_length:
+            # 找到最后一个不超过最大长度的位置
+            notes_end, sheet_end = max(
+                (i, pos) for i, pos in enumerate(positions)
+                if pos < max_sequence_length
+            )
             notes = notes[:notes_end]
             sheet = sheet[:sheet_end]
 
-        # 跳过过短序列
-        if len(notes) < args.min_sequence_length:
+        if len(notes) < min_sequence_length:
             continue
 
-        # 构建输出路径并确保目录存在
-        output_path = args.output_dir / filepath.relative_to(args.input_dir).parent / (filepath.name[:-3] + "json")
+        # 构建输出路径，保持原始目录结构
+        relative_path = filepath.relative_to(root_dir)
+        output_path = output_dir / relative_path.parent / (filepath.stem + ".json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 将提取的信息保存为 JSON 文件
+        # 保存为紧凑的 JSON 格式
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump({
                 "num_notes": len(notes),
                 "positions": positions,
                 "data": data_to_str(sheet)
-            }, f)
+            }, f, separators=(",", ":"))
+
+
+def main():
+    """
+    MIDI 文件批量转换的主程序
+
+    工作流程:
+    1. 解析命令行参数
+    2. 收集所有 MIDI 文件
+    3. 分配任务到多个进程
+    4. 并行处理文件转换
+    """
+    parser = argparse.ArgumentParser(description="从 MIDI 文件夹中提取训练信息")
+    parser.add_argument("input_dir", type=pathlib.Path, help="要提取的 MIDI 文件夹。")
+    parser.add_argument("output_dir", type=pathlib.Path, help="MIDI 信息输出文件夹。")
+    parser.add_argument("-m", "--min-sequence-length", default=128, type=int, help="最小序列长度，小于该长度的样本不会被转换（单位: 音符）")
+    parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断（单位: 字符）")
+    parser.add_argument("-j", "--jobs", type=int, help="并行工作进程数（默认: 使用所有CPU核心）")
+    args = parser.parse_args()
+
+    # 获取并行进程数
+    n_jobs = args.jobs
+    if not n_jobs:
+        n_jobs = multiprocessing.cpu_count()
+    print(f"使用 {n_jobs} 个进程并行处理")
+
+    # 遍历输入目录中的所有 MIDI 文件
+    midi_files = list(args.input_dir.glob("**/*.mid"))
+    print(f"发现 {len(midi_files)} 个 MIDI 文件")
+
+    # 随机打乱文件顺序以实现负载均衡
+    random.shuffle(midi_files)
+
+    # 分配任务批次
+    batch_size = (len(midi_files) + n_jobs - 1) // n_jobs
+    batches = [midi_files[i:i + batch_size] for i in range(0, len(midi_files), batch_size)]
+
+    # 准备多进程参数
+    task_args = [
+        (rank, batch, args.input_dir, args.output_dir, args.max_sequence_length, args.min_sequence_length)
+        for rank, batch in enumerate(batches)
+    ]
+
+    # 使用进程池并行处理
+    with multiprocessing.Pool() as pool:
+        pool.starmap(process_midi_to_json, task_args)
 
 
 if __name__ == "__main__":
