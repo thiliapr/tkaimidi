@@ -55,9 +55,6 @@ def main():
         if len(notes) < args.min_sequence_length:
             continue
 
-        # 过滤出可以用于训练的偏移量
-        train_notes = [i for i, (_, interval) in enumerate(notes) if i == 0 or interval != 0]
-
         # 构建输出路径并确保目录存在
         output_path = args.output_dir / filepath.relative_to(args.input_dir).parent / (filepath.name[:-3] + "json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,8 +63,7 @@ def main():
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump({
                 "num_notes": len(notes),
-                "train_notes": train_notes,
-                "positions": [position for i, position in enumerate(positions) if i in train_notes],
+                "positions": positions,
                 "data": data_to_str(sheet)
             }, f)
 

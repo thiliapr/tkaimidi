@@ -152,7 +152,11 @@ def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2
 
         # 截断超长序列
         if len(sheet) > max_sequence_length:
-            notes_end, sheet_end = max((i, position) for i, position in enumerate(positions) if position < max_sequence_length)
+            notes_end, sheet_end = max(
+                (i, position)
+                for i, position in enumerate(positions)
+                if position < max_sequence_length
+            )
             notes = notes[:notes_end]
             sheet = sheet[:sheet_end]
 
@@ -165,7 +169,11 @@ def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2
 
         # 截断超长序列
         if len(data["data"]) > max_sequence_length:
-            notes_end, sheet_end = max((note, data["positions"][i]) for i, note in enumerate(data["train_notes"]) if data["positions"][i] < max_sequence_length)
+            notes_end, sheet_end = max(
+                (i, position)
+                for i, position in enumerate(data["positions"])
+                if position < max_sequence_length
+            )
             data["num_notes"] = notes_end
             data["data"] = data["data"][:sheet_end]
 
@@ -179,6 +187,7 @@ def validate(samples: Iterator[tuple[int, str]], tokenizer: PreTrainedTokenizerF
     Args:
         samples: 样本列表，每个样本包含音符数量和字符串表示
         tokenizer: 要评估的分词器
+        length: 样本列表长度。由于`samples`可能没有`__len__`，所以如有需要请在这里指定
 
     Returns:
         元组，包含:

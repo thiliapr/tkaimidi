@@ -114,18 +114,19 @@ class MidiDataset(Dataset):
             with open(filepath, encoding="utf-8") as f:
                 data = json.load(f)
 
+            # 截断超长序列
+            if len(data["data"]) > max_sequence_length:
+                notes_end, sheet_end = max(
+                    (i, position)
+                    for i, position in enumerate(data["positions"])
+                    if position < max_sequence_length
+                )
+                data["num_notes"] = notes_end
+                data["data"] = data["data"][:sheet_end]
+
             # 跳过超短序列
             if data["num_notes"] < min_sequence_length:
                 continue
-
-            # 截断超长序列
-            if len(data["data"]) > max_sequence_length:
-                _, sheet_end = max(
-                    (note, data["positions"][i])
-                    for i, note in enumerate(data["train_notes"])
-                    if data["positions"][i] < max_sequence_length
-                )
-                data["data"] = data["data"][:sheet_end]
 
             # 将当前 MIDI 文件的音符数据加入到 music_sequences 列表中
             self.music_sequences.append(tokenizer.encode(data["data"]))
