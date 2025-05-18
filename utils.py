@@ -16,6 +16,55 @@ if "get_ipython" not in globals():
     from constants import NATURAL_SCALE, TIME_PRECISION, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, TIME_INTERVAL, LOOKAHEAD_COUNT
 
 
+def notes_to_track(notes: list[int]) -> mido.MidiTrack:
+    """
+    将音符和时间信息转换为 MIDI 轨道。
+
+    Args:
+        notes: 音符间隔格式的列表
+
+    Returns:
+        包含音符事件及结束标记的 MIDI 轨道
+    """
+    # 生成 MIDI 事件队列
+    events = []
+    cumulative_time = 0  # 累计时间
+
+    for pitch, interval in notes:
+        # 计算事件绝对时间
+        cumulative_time += interval * TIME_PRECISION
+
+        # 添加音符开启和关闭事件
+        events.append(("note_on", pitch, cumulative_time))
+        events.append(("note_off", pitch, cumulative_time + TIME_PRECISION))
+
+    # 按事件发生时间排序（确保事件顺序正确）
+    events.sort(key=lambda x: x[2])
+
+    # 构建 MIDI 轨道
+    track = [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(128))]
+    last_event_time = 0  # 上一个事件的绝对时间
+
+    for event_type, note, event_time in events:
+        # 计算相对于上一个事件的时间差
+        delta_ticks = event_time - last_event_time
+
+        # 创建 MIDI 消息
+        track.append(mido.Message(
+            event_type,
+            note=note,
+            velocity=100 if event_type == "note_on" else 0,  # 音符力度
+            time=delta_ticks,  # 相对时间
+            channel=0  # MIDI 通道
+        ))
+
+        # 更新最后事件时间
+        last_event_time = event_time
+
+    # 添加轨道结束标记
+    return mido.MidiTrack(track + [mido.MetaMessage("end_of_track")])
+
+
 def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     """
     从给定的MIDI文件中提取音符信息并返回一个包含音符及其相对时间间隔的列表。

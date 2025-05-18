@@ -420,7 +420,7 @@ def main():
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-m", "--min-sequence-length", default=DEFAULT_MIN_SEQUENCE_LENGTH, type=int, help="最小序列长度，小于该长度的样本不会被训练")
     parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断")
-    parser.add_argument("-b", "--max-batch-size", default=8 * 1536 ** 2, type=int, help="每个批次的序列长度的平方和上限")
+    parser.add_argument("-b", "--max-batch-size", default=1536 ** 2, type=int, help="每个批次的序列长度的平方和上限")
     parser.add_argument("-l", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率")
     parser.add_argument("-w", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数")
     parser.add_argument("-n", "--num-heads", default=DEFAULT_NUM_HEADS, type=int, help="多头注意力中的注意力头数量")

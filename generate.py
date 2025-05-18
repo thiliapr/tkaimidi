@@ -23,60 +23,11 @@ EXAMPLE_MIDI = [(45, 0), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (
 
 # 在非 Jupyter 环境下导入常量、模型、检查点、工具、分词库
 if "get_ipython" not in globals():
-    from constants import TIME_PRECISION, DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, LOOKAHEAD_COUNT
+    from constants import DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, LOOKAHEAD_COUNT
     from model import MidiNet
     from checkpoint import load_checkpoint
-    from utils import midi_to_notes, notes_to_sheet, sheet_to_notes
+    from utils import midi_to_notes, notes_to_sheet, sheet_to_notes, notes_to_track
     from tokenizer import data_to_str, str_to_data
-
-
-def notes_to_track(notes: list[int]) -> mido.MidiTrack:
-    """
-    将音符和时间信息转换为 MIDI 轨道。
-
-    Args:
-        notes: 音符间隔格式的列表
-
-    Returns:
-        包含音符事件及结束标记的 MIDI 轨道
-    """
-    # 生成 MIDI 事件队列
-    events = []
-    cumulative_time = 0  # 累计时间
-
-    for pitch, interval in notes:
-        # 计算事件绝对时间
-        cumulative_time += interval * TIME_PRECISION
-
-        # 添加音符开启和关闭事件
-        events.append(("note_on", pitch, cumulative_time))
-        events.append(("note_off", pitch, cumulative_time + TIME_PRECISION))
-
-    # 按事件发生时间排序（确保事件顺序正确）
-    events.sort(key=lambda x: x[2])
-
-    # 构建 MIDI 轨道
-    track = [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(128))]
-    last_event_time = 0  # 上一个事件的绝对时间
-
-    for event_type, note, event_time in events:
-        # 计算相对于上一个事件的时间差
-        delta_ticks = event_time - last_event_time
-
-        # 创建 MIDI 消息
-        track.append(mido.Message(
-            event_type,
-            note=note,
-            velocity=100 if event_type == "note_on" else 0,  # 音符力度
-            time=delta_ticks,  # 相对时间
-            channel=0  # MIDI 通道
-        ))
-
-        # 更新最后事件时间
-        last_event_time = event_time
-
-    # 添加轨道结束标记
-    return mido.MidiTrack(track + [mido.MetaMessage("end_of_track")])
 
 
 def generate_sheet(
