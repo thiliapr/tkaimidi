@@ -104,7 +104,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], max_length: Optional[int] = Non
         max_length: 乐谱的最大允许长度（事件数量）。如果超过，则截断。
 
     Returns:
-        tuple[list[tuple[str, int]], list[int]]: 返回两个值：
+        返回包括两个值的数组:
             - sheet: 电子乐谱事件列表，包含以下事件类型：
                 - 0-11: 音符（音阶中的音高，0=C, 1=C#, ..., 11=B）
                 - 12 (KEY_DOWN): 音高下调一个半音
