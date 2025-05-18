@@ -148,18 +148,7 @@ def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2
             continue
 
         # 转化为电子乐谱形式
-        sheet, positions = notes_to_sheet(notes)
-
-        # 截断超长序列
-        if len(sheet) > max_sequence_length:
-            notes_end, sheet_end = max(
-                (i, position)
-                for i, position in enumerate(positions)
-                if position < max_sequence_length
-            )
-            notes = notes[:notes_end]
-            sheet = sheet[:sheet_end]
-
+        sheet, positions = notes_to_sheet(notes, max_length=max_sequence_length)
         yield len(notes), data_to_str(sheet)
 
     # 加载转换后的 JSON 文件

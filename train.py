@@ -89,19 +89,15 @@ class MidiDataset(Dataset):
                 # 跳过有错误的 MIDI 文件
                 continue
 
-            # 提取音符并跳过小于指定长度的 MIDI 文件
+            # 提取音符
             notes = midi_to_notes(midi_file)
-            if len(notes) < min_sequence_length:
-                continue
 
             # 转化为电子乐谱形式
-            sheet, positions = notes_to_sheet(notes)
+            sheet, positions = notes_to_sheet(notes, max_length=max_sequence_length)
 
-            # 截断超长序列
-            if len(sheet) > max_sequence_length:
-                notes_end, sheet_end = max((i, position) for i, position in enumerate(positions) if position < max_sequence_length)
-                notes = notes[:notes_end]
-                sheet = sheet[:sheet_end]
+            # 跳过小于指定长度的 MIDI 文件
+            if len(positions) < min_sequence_length:
+                continue
 
             # 保存序列的内容
             self.music_sequences.append(tokenizer.encode(data_to_str(sheet)))

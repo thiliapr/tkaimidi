@@ -9,7 +9,7 @@
 
 import math
 import mido
-from typing import Iterator
+from typing import Iterator, Optional
 
 # 在非 Jupyter 环境下导入常量库
 if "get_ipython" not in globals():
@@ -93,89 +93,106 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     return final_notes
 
 
-def notes_to_sheet(notes: list[tuple[int, int]]) -> tuple[list[tuple[str, int]], list[int]]:
+def notes_to_sheet(notes: list[tuple[int, int]], max_length: Optional[int] = None) -> tuple[list[tuple[str, int]], list[int]]:
     """
-    将MIDI音符列表转换为电子乐谱。
+    将MIDI音符列表转换为电子乐谱（事件序列）。
 
     Args:
-        notes: MIDI音符列表，每个元组格式为(音高, 时间间隔)
+        notes: MIDI音符列表，每个音符是一个元组 (pitch, interval)：
+            - pitch: 音高（MIDI音符编号，0-127）
+            - interval: 时间间隔（单位：ticks或自定义时间单位）
+        max_length: 乐谱的最大允许长度（事件数量）。如果超过，则截断。
 
     Returns:
-        sheet: 电子乐谱事件列表，包含下列事件类型：
-            - 0-11: 音符（音阶中的音高）。
-            - 12: 音高下调一个半音。
-            - 13: 音高上调一个半音。
-            - 14: 音符下跳一个八度。
-            - 15: 音符上跳一个八度。
-            - 16: 时间间隔。
-        positions: 每个音符在乐谱中的位置，记录每个音符出现的索引。
+        tuple[list[tuple[str, int]], list[int]]: 返回两个值：
+            - sheet: 电子乐谱事件列表，包含以下事件类型：
+                - 0-11: 音符（音阶中的音高，0=C, 1=C#, ..., 11=B）
+                - 12 (KEY_DOWN): 音高下调一个半音
+                - 13 (KEY_UP): 音高上调一个半音
+                - 14 (OCTAVE_DOWN): 音符下移一个八度
+                - 15 (OCTAVE_UP): 音符上移一个八度
+                - 16 (TIME_INTERVAL): 时间间隔
+            - positions: 每个音符在 sheet 中的索引位置列表
     """
+    # 如果指定了最大长度，截断音符序列
+    if max_length:
+        notes = notes[:max_length]
+
     # 分离音高和时间间隔
     pitches, intervals = zip(*notes)
 
     # 定义最佳偏移量检测函数
-    def offset_func(start: int, cur_offset: int) -> dict[int, int]:
-        "计算分别在 0-11 的偏移量时有多少个音符在自然音阶。"
-        end = min(start + LOOKAHEAD_COUNT, len(pitches))
-        segment = [pitch + cur_offset for pitch in pitches[start:end]]
+    def calculate_natural_scale_matches(start_idx: int, current_pitch_offset: int) -> dict[int, int]:
+        "计算不同音高偏移量下，音符符合自然音阶的数量。"
+        end = min(start_idx + LOOKAHEAD_COUNT, len(pitches))
+        segment = [pitch + current_pitch_offset for pitch in pitches[start_idx:end]]
         return {offset: sum((pitch + offset) % 12 in NATURAL_SCALE for pitch in segment) for offset in range(12)}
 
-    def octave_offset_func(start: int, cur_offset: int):
-        "计算使音高集中在一个八度范围内的偏移量。"
-        end = min(start + LOOKAHEAD_COUNT, len(pitches))
-        segment = [pitch + cur_offset for pitch in pitches[start:end]]
+    def calculate_octave_offset(start_idx: int, current_pitch_offset: int):
+        "计算最佳八度偏移，使音符集中在合理的八度范围内。"
+        end = min(start_idx + LOOKAHEAD_COUNT, len(pitches))
+        segment = [pitch + current_pitch_offset for pitch in pitches[start_idx:end]]
         segment_mean = sum(segment) / len(segment)
+
+        # 如果平均音高偏离中央区域(±18半音)太远，则调整八度
         return -int(segment_mean / 12) if abs(segment_mean) > 18 else 0
 
-    # 计算调整音高的偏移量，使其尽量符合自然音阶
-    cur_offset = max(offset_func(0, 0).items(), key=lambda x: x[1])[0]
+    # 初始音高偏移: 选择使前 LOOKAHEAD_COUNT 个音符最匹配自然音阶的偏移量
+    current_pitch_offset = max(calculate_natural_scale_matches(0, 0).items(), key=lambda x: x[1])[0]
 
-    # 计算使音高集中在一个八度范围内的偏移量
-    octave_offset = octave_offset_func(0, cur_offset)
-    cur_offset += octave_offset * 12
+    # 调整八度使音符集中在合理范围内
+    octave_offset = calculate_octave_offset(0, current_pitch_offset)
+    current_pitch_offset += octave_offset * 12
 
-    # 准备偏移量分数缓存
-    offset_scores = offset_func(0, cur_offset)
+    # 初始化自然音阶匹配分数缓存
+    natural_scale_scores = calculate_natural_scale_matches(0, current_pitch_offset)
 
-    # 消除不参与分数计算的音符的影响
+    # 预先移除即将离开滑动窗口的音符对分数的影响
     if LOOKAHEAD_COUNT - 1 < len(pitches):
         for offset in range(12):
-            if (pitches[LOOKAHEAD_COUNT - 1] + cur_offset + offset) % 12 in NATURAL_SCALE:
-                offset_scores[offset] -= 1
+            if (pitches[LOOKAHEAD_COUNT - 1] + current_pitch_offset + offset) % 12 in NATURAL_SCALE:
+                natural_scale_scores[offset] -= 1
 
-    # 开始转换音符为电子乐谱
-    sheet = []
-    positions = []
+    # 开始转换每个音符
+    sheet = []  # 乐谱事件序列
+    positions = []  # 每个音符在`sheet`中的位置
     for i in range(len(pitches)):
-        offset_sum = 0
+        total_pitch_adjustment = 0  # 当前位置需要调整的总半音数
 
-        # 将最远能够看到的音符加入偏移量的分数计算
+        # 添加新进入窗口的音符到分数计算
         if i + LOOKAHEAD_COUNT - 1 < len(pitches):
             for offset in range(12):
-                if (pitches[i + LOOKAHEAD_COUNT - 1] + cur_offset + offset) % 12 in NATURAL_SCALE:
-                    offset_scores[offset] += 1
+                if (pitches[i + LOOKAHEAD_COUNT - 1] + current_pitch_offset + offset) % 12 in NATURAL_SCALE:
+                    natural_scale_scores[offset] += 1
 
-        # 如果最佳偏移量不为 0，则调整偏移量并重新获取偏移量的分数
-        best_offset = max(offset_scores.items(), key=lambda x: (x[1], x[0] == 0))[0]
-        if best_offset != 0:
-            offset_sum += best_offset
-            cur_offset += best_offset
-            offset_scores = offset_func(i, cur_offset)
+        # 选择最佳音高调整（分数相同时，优先选择0偏移）
+        best_pitch_adjustment = max(natural_scale_scores.items(), key=lambda x: (x[1], x[0] == 0))[0]
+        if best_pitch_adjustment != 0:
+            total_pitch_adjustment += best_pitch_adjustment
+            current_pitch_offset += best_pitch_adjustment
+            natural_scale_scores = calculate_natural_scale_matches(i, current_pitch_offset)
 
-        # 消除当前音符音高对分数的影响
+        # 移除当前处理音符对分数的影响（因为它即将离开窗口）
         for offset in range(12):
-            if (pitches[i] + cur_offset + offset) % 12 in NATURAL_SCALE:
-                offset_scores[offset] -= 1
+            if (pitches[i] + current_pitch_offset + offset) % 12 in NATURAL_SCALE:
+                natural_scale_scores[offset] -= 1
 
-        # 如果音高不在一个八度范围内，调整音高
-        best_octave_offset = octave_offset_func(i, cur_offset)
-        if best_octave_offset != 0:
-            offset_sum += best_octave_offset * 12
-            cur_offset += best_octave_offset * 12
+        # 检查是否需要八度调整
+        optimal_octave_shift = calculate_octave_offset(i, current_pitch_offset)
+        if optimal_octave_shift != 0:
+            total_pitch_adjustment += optimal_octave_shift * 12
+            current_pitch_offset += optimal_octave_shift * 12
 
-        # 如果有音高偏移，在乐谱中做标记
-        if offset_sum:
-            sheet.extend(KEY_UP if offset_sum > 0 else KEY_DOWN for _ in range(abs(offset_sum)))
+        # 检查乐谱长度限制
+        if max_length:
+            # 音高调整事件 + 时间间隔事件 + 八度跳跃事件 + 音符本身
+            events_needed = abs(total_pitch_adjustment) + intervals[i] + abs((pitches[i] + current_pitch_offset) // 12) + 1
+            if len(sheet) + events_needed > max_length:
+                break
+
+        # 添加音高调整事件到乐谱
+        if total_pitch_adjustment:
+            sheet.extend(KEY_UP if total_pitch_adjustment > 0 else KEY_DOWN for _ in range(abs(total_pitch_adjustment)))
 
         # 记录时间间隔
         if intervals[i]:
@@ -184,8 +201,8 @@ def notes_to_sheet(notes: list[tuple[int, int]]) -> tuple[list[tuple[str, int]],
         # 记录乐谱中音符开始的位置
         positions.append(len(sheet))
 
-        # 将当前音高调整到0-11范围内，并记录八度跳跃
-        pitch = pitches[i] + cur_offset
+        # 将当前音高调整到[0, 11]范围内，并记录八度跳跃
+        pitch = pitches[i] + current_pitch_offset
         if pitch < 0 or pitch > 11:
             octave_jump = pitch // 12
             sheet.extend(OCTAVE_JUMP_UP if octave_jump > 0 else OCTAVE_JUMP_DOWN for _ in range(abs(octave_jump)))

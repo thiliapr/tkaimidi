@@ -60,18 +60,10 @@ def process_midi_to_json(
         if not notes:
             continue
 
-        sheet, positions = notes_to_sheet(notes)
+        # 转化为电子乐谱形式
+        sheet, positions = notes_to_sheet(notes, max_length=max_sequence_length)
 
-        # 截断超长序列
-        if len(sheet) > max_sequence_length:
-            # 找到最后一个不超过最大长度的位置
-            notes_end, sheet_end = max(
-                (i, pos) for i, pos in enumerate(positions)
-                if pos < max_sequence_length
-            )
-            notes = notes[:notes_end]
-            sheet = sheet[:sheet_end]
-
+        # 跳过小于指定长度的 MIDI 文件
         if len(notes) < min_sequence_length:
             continue
 
