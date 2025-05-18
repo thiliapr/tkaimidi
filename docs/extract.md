@@ -15,10 +15,11 @@
 | `output_dir` | Path | 必填 | 输出JSON文件的目录 |
 | `-m/--min-sequence-length` | int | 128 | 最小序列长度(小于将被跳过) |
 | `-e/--max-sequence-length` | int | 131072 | 最大序列长度(超过将被截断) |
+| `-j/--jobs` | int | 使用所有CPU核心 | 并行工作进程数 |
 
 ### 执行示例
 ```bash
-python extract_midi.py /path/to/midi/files /path/to/output
+python extract.py /path/to/midi/files /path/to/output
 ```
 
 ## 处理流程

@@ -53,8 +53,7 @@ def process_midi_to_json(
         try:
             # 读取 MIDI 文件，clip=True 自动处理异常事件
             midi_file = mido.MidiFile(filepath, clip=True)
-        except Exception as e:
-            print(f"跳过损坏文件 {filepath}: {str(e)}")
+        except Exception:
             continue
 
         notes = midi_to_notes(midi_file)
