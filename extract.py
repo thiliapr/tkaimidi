@@ -56,15 +56,16 @@ def process_midi_to_json(
         except Exception:
             continue
 
+        # 提取音符序列并跳过小于指定长度的 MIDI 文件
         notes = midi_to_notes(midi_file)
-        if not notes:
+        if len(notes) < min_sequence_length:
             continue
 
         # 转化为电子乐谱形式
         sheet, positions = notes_to_sheet(notes, max_length=max_sequence_length)
 
         # 跳过小于指定长度的 MIDI 文件
-        if len(notes) < min_sequence_length:
+        if len(positions) < min_sequence_length:
             continue
 
         # 构建输出路径，保持原始目录结构

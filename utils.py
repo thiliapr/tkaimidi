@@ -77,6 +77,12 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
 
     # 计算时间间隔的最大公约数，用于压缩时间轴
     gcd = math.gcd(*relative_intervals) if relative_intervals else 1
+
+    # 如果所有音符都没有时间间隔，就返回当作有错误的 MIDI 并返回空列表
+    if gcd == 0:
+        return []
+
+    # 压缩时间轴
     compressed_intervals = [interval // gcd for interval in relative_intervals]
 
     # 去除重复的音符（相同音符与零时间间隔的重复）
