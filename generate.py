@@ -30,6 +30,7 @@ if "get_ipython" not in globals():
     from tokenizer import data_to_str, str_to_data
 
 
+@torch.no_grad()
 def generate_sheet(
     prompt: str,
     model: MidiNet,
@@ -90,10 +91,8 @@ def generate_sheet(
 
     # 自回归生成循环
     while True:
-        # 模型前向计算
-        with torch.no_grad():
-            # 增加输入张量的批次维度，再进行推理
-            logits = model(input_tensor.unsqueeze(0), torch.zeros(1, *input_tensor.size()))[0, -1, :]
+        # 增加输入张量的批次维度，再进行推理
+        logits = model(input_tensor.unsqueeze(0), torch.zeros(1, *input_tensor.size()))[0, -1, :]
 
         # 屏蔽特殊标记(BOS/PAD/UNK)
         logits[tokenizer.bos_token_id] = -torch.inf

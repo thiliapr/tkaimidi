@@ -14,11 +14,11 @@ import json
 import argparse
 import torch
 import matplotlib.pyplot as plt
+import numpy as np
 from torch import nn, optim
-from torch.nn import DataParallel
-from torch.utils.data import Dataset, DataLoader, Sampler
+from torch.nn import DataParallel, functional as F
+from torch.utils.data import Dataset, DataLoader, Sampler, SequentialSampler
 from transformers import PreTrainedTokenizerFast
-from collections.abc import Callable
 
 import warnings
 import os
@@ -137,91 +137,82 @@ class MidiDataset(Dataset):
 
 class MidiDatasetSampler(Sampler[list[int]]):
     """
-    MIDI 数据集采样器类，用于从 MIDI 数据集中按批次生成索引。
+    用于根据MIDI数据的长度动态分批的采样器类，适配最大token数限制。
 
-    该类的功能包括:
-    1. 根据 MIDI 数据集的音符序列长度生成批次。
-    2. 每个批次的样本数量和总长度会满足指定的 `max_batch_size` 参数。
-    3. 提供批次数据的迭代功能，便于模型训练时使用。
+    该采样器会根据给定的基础采样器顺序（如SequentialSampler或DistributedSampler），
+    获取数据集中所有样本的长度信息，并按序列长度排序，确保每个批次中样本的
+    总token数平方和不超过预设的max_batch_tokens。较长的序列可能会被跳过。
+
+    每个批次被打乱顺序，以提升模型训练的泛化能力。
 
     Args:
-        dataset: 一个包含 MIDI 数据的 `MidiDataset` 实例。
-        max_batch_size: 每个批次的序列长度的平方和上限。
-        drop_last: 如果最后一个批次的序列长度的平方小于 `max_batch_size`，则丢弃该批次。
+        sampler: 一个返回索引的基础采样器（如RandomSampler）
+        dataset: 一个包含MIDI音乐序列的数据集对象，要求具备music_sequences属性
+        max_batch_tokens: 一个整数，指定每个批次中最大token平方和限制
 
     Returns:
-        一个生成器，每次迭代返回一个包含批次索引的列表。
+        一个批次索引列表的迭代器，每个元素是一个样本索引组成的列表
 
     Examples:
-        >>> dataset = MidiDataset(midi_dirs=["/path/to/midi/files"], tokenizer=tokenizer)
-        >>> sampler = MidiDatasetSampler(dataset=dataset, max_batch_size=2 * 768 ** 2)
-        >>> for batch in sampler:
-        >>>     print(batch)  # 打印每个批次的索引
+        sampler = RandomSampler(dataset)
+        batch_sampler = MidiDatasetSampler(sampler, dataset, max_batch_tokens=4096)
+        for batch_indices in batch_sampler:
+            batch = [dataset[i] for i in batch_indices]
     """
 
-    def __init__(self, dataset: MidiDataset, max_batch_size: int, drop_last: bool = False):
+    def __init__(self, sampler: Sampler[int], dataset, max_batch_tokens: int):
+        self.sampler = sampler
         self.dataset = dataset
-        self.max_batch_size = max_batch_size
-        self.drop_last = drop_last
-        self.length = 0
-
-        # 计算每个批次的大小
-        self.batches_size = [0]
-        cur_batch_size = 0
-
-        # 按序列长度排序
-        for sequence in sorted(self.dataset.music_sequences, key=lambda x: len(x)):
-            # 计算序列长度平方
-            sequence_size = len(sequence) ** 2
-
-            # 跳过长度平方大于 max_batch_size 的序列
-            if sequence_size > self.max_batch_size:
-                continue
-
-            # 如果当前批次的长度平方和大于 max_batch_size，则保存并清空当前批次
-            if cur_batch_size + sequence_size > self.max_batch_size:
-                self.batches_size.append(0)
-                cur_batch_size = 0
-
-            # 添加样本，累积当前批次大小
-            self.batches_size[-1] += 1
-            cur_batch_size += sequence_size
-
-        # 如果没有序列剩余或要求丢弃最后一个批次
-        if self.drop_last or not self.batches_size[-1]:
-            self.batches_size.pop(-1)
+        self.max_batch_tokens = max_batch_tokens
 
     def __iter__(self):
-        # 获取数据集的长度
-        length = len(self.dataset)
+        # 获取基础采样器的所有索引
+        indices = list(self.sampler)
 
-        # 初始化批次列表
-        batches = []
-        batch = []
+        # 存储最终的所有批次
+        all_batches = []
+        current_batch = []
+        current_token_sum = 0
 
-        # 先按序列长度排序，如果序列长度相同就随机排序
-        for index, sequence in sorted(zip(range(length), self.dataset.music_sequences), key=lambda x: len(x[1])):
-            # 跳过长度平方大于 max_batch_size 的序列
-            if len(sequence) ** 2 > self.max_batch_size:
+        # 计算每个样本的序列长度 (index, length)，用于后续排序
+        indexed_lengths = [
+            (index, len(self.dataset.music_sequences[index])) for index in indices
+        ]
+
+        # 根据长度升序排序，长度相同时使用随机扰动避免固定排序
+        sorted_indices = sorted(
+            indexed_lengths,
+            key=lambda x: (x[1], random.random())
+        )
+
+        for index, sequence_length in sorted_indices:
+            estimated_cost = sequence_length ** 2
+
+            # 如果单个样本就超过限制，则作为单独一个批次
+            if estimated_cost > self.max_batch_tokens:
+                all_batches.append([index])
                 continue
 
-            # 添加样本
-            batch.append(index)
+            # 如果当前批次加上该样本会超出限制，则保存当前批次并开始新批次
+            if current_token_sum + estimated_cost > self.max_batch_tokens:
+                all_batches.append(current_batch)
+                current_batch = []
+                current_token_sum = 0
 
-            # 如果达到批次大小，则下一个批次
-            if len(batch) == self.batches_size[len(batches)]:
-                batches.append(batch)
-                batch = []
+            # 添加样本到当前批次
+            current_batch.append(index)
+            current_token_sum += estimated_cost
 
-        # 打乱所有批次顺序
-        random.shuffle(batches)
+        # 添加最后一个非空批次
+        if current_batch:
+            all_batches.append(current_batch)
 
-        # 返回每个批次
-        for batch in batches:
+        # 打乱批次顺序以增加训练随机性
+        random.shuffle(all_batches)
+
+        # 依次返回每个批次
+        for batch in all_batches:
             yield batch
-
-    def __len__(self):
-        return len(self.batches_size)
 
 
 def sequence_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor]], pad_token: int):
@@ -236,15 +227,14 @@ def train(
     model: MidiNet,
     dataloader: DataLoader,
     optimizer: optim.Adam,
-    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
     vocab_size: int,
     pad_token: int = 0,
     device: torch.device = None,
-    pbar_desc: str = "训练"
-) -> tuple[list[float], float]:
+    show_progress: bool = True
+) -> list[float]:
     """
     训练模型的函数。
-    此函数进行一轮训练，逐步优化模型参数，输出每一步的训练损失和平均困惑度。
+    此函数进行一轮训练，逐步优化模型参数，输出训练损失。
 
     工作流程:
         1. 初始化数据加载器。
@@ -253,28 +243,28 @@ def train(
         4. 使用进度条显示训练进度。
         5. 切换模型到训练模式。
         6. 对每个batch进行前向传播、计算损失、反向传播和更新参数。
-        7. 累积损失和困惑度。
-        8. 返回这个epoch每一步的训练损失和困惑度平均值。
+        7. 累积损失。
+        8. 返回这个epoch的平均训练损失。
 
     Args:
         model: 需要训练的神经网络模型。
         dataloader: 训练数据加载器。
         optimizer: 用于优化模型的优化器。
-        criterion: 指定的损失函数。通常使用交叉熵损失函数。
         vocab_size: 词汇表的大小，用于调整输出层的维度。
         pad_token: 填充token的标记，用于忽略计算损失。
         device: 指定训练的设备。
+        show_progress: 是否显示加载进度条。
 
     Returns:
-        该epoch每一步的训练损失和训练困惑度的平均值。
+        训练损失。
 
     Examples:
         >>> tokenizer = PreTrainedTokenizerFast.from_pretrained("ckpt/tokenizer")
         >>> model = MidiNet(len(tokenizer), 768, 12, 2048, 12)
         >>> optimizer = optim.AdamW(model.parameters(), lr=1e-2, weight_decay=1e-2)
         >>> criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-        >>> train(model, dataset, optimizer, criterion, len(tokenizer), tokenizer.pad_token_id)
-        ([1.9, 0.89, 0.6, 0.4], 42.6)
+        >>> train(model, dataloader, optimizer, len(tokenizer), tokenizer.pad_token_id)
+        [1.9, 0.89, 0.6, 0.4]
     """
     # 清理缓存以释放内存
     empty_cache()
@@ -284,139 +274,153 @@ def train(
 
     # 设置模型为训练模式
     model.train()
-    train_loss, train_ppl = [], []  # 初始化损失、困惑度列表
+    losses = []  # 初始化损失列表
 
     # 创建进度条，显示训练进度
-    for inputs, labels in tqdm(dataloader, desc=pbar_desc):
+    progress_bar = tqdm(total=len(dataloader.dataset), disable=not show_progress)
+    for inputs, labels in dataloader:
         inputs, labels = inputs.to(device), labels.to(device).view(-1)
         optimizer.zero_grad()  # 清空梯度
         try:
             outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
-            loss = criterion(outputs, labels)  # 计算损失
+            loss = F.cross_entropy(outputs, labels, ignore_index=pad_token)  # 计算损失
             loss.backward()  # 反向传播
             optimizer.step()  # 更新模型参数
         except torch.cuda.OutOfMemoryError:
             empty_cache()
             continue
 
-        train_ppl.append(torch.exp(loss).item())  # 累积训练困惑度
-        train_loss.append(loss.item())  # 累积训练损失
+        # 更新进度条
+        progress_bar.update(inputs.size(0))
 
-    return train_loss, sum(train_ppl) / len(train_ppl)
+        # 累积训练损失
+        losses.append(loss.item())
+
+    # 返回训练损失
+    return losses
 
 
+@torch.no_grad()
 def validate(
     model: MidiNet,
     dataloader: DataLoader,
-    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
     vocab_size: int,
     pad_token: int = 0,
     device: torch.device = None,
-    pbar_desc: str = "验证"
-) -> tuple[float, float]:
+    show_progress: bool = True
+) -> list[float]:
     """
     对模型进行验证，返回平均损失和平均困惑度。
 
-    此函数遍历验证集，对模型进行前向传播，计算每个 batch 的交叉熵损失和困惑度。
-    所有 batch 的损失与困惑度将被平均后返回，以衡量模型在整个验证集上的性能表现。
+    此函数遍历验证集，对模型进行前向传播，计算每个 batch 的交叉熵损失。
+    所有 batch 的损失将被平均后返回，以衡量模型在整个验证集上的性能表现。
 
     Args:
         model: 需要验证的 MidiNet 模型。
         dataloader: 验证数据加载器。
-        criterion: 指定的损失函数。通常使用交叉熵损失函数。
         vocab_size: 词表大小，用于 reshape 输出。
         pad_token: padding 的 token 值，用于掩码处理和损失忽略。
         device: 计算设备。
+        show_progress: 是否显示加载进度条。
 
     Returns:
-        平均损失和平均困惑度。
+        验证损失。
     """
     # 清理缓存以释放内存
     empty_cache()
 
     # 初始化损失、困惑度列表
-    val_loss = []
-    val_ppl = []
+    losses = []
 
     # 遍历整个验证集，不进行梯度计算
-    for inputs, labels in tqdm(dataloader, desc=pbar_desc):
-        with torch.no_grad():
-            # 将输入移动到计算设备
-            inputs, labels = inputs.to(device), labels.to(device).view(-1)
+    progress_bar = tqdm(total=len(dataloader.dataset), disable=not show_progress)
+    for inputs, labels in dataloader:
+        # 将输入移动到计算设备
+        inputs, labels = inputs.to(device), labels.to(device).view(-1)
 
-            # 模型前向传播，得到输出并 reshape 成二维张量
-            outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)
+        # 模型前向传播，得到输出并 reshape 成二维张量
+        outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)
 
-            # 计算损失
-            loss = criterion(outputs, labels)
+        # 计算并记录损失
+        losses.extend(F.cross_entropy(outputs, labels, ignore_index=pad_token, reduction="none").tolist())
 
-            # 记录损失和困惑度
-            val_loss.append(loss.item())
-            val_ppl.append(torch.exp(loss).item())
+        # 更新进度条
+        progress_bar.update(inputs.size(0))
 
-    # 返回平均损失和平均困惑度
-    return sum(val_loss) / len(val_loss), sum(val_ppl) / len(val_ppl)
+    # 返回损失
+    return losses
 
 
-def plot_training_process(metries: dict[str, list], img_path: pathlib.Path | str):
+def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str):
     """
-    绘制训练过程中的损失、困惑度曲线。
+    绘制损失变化过程。训练损失使用红线，验证损失用蓝色点线。
+    为每种损失分别绘制25%和75%两个独立置信区间。
 
     Args:
-        metries: 指标，包含
-          - train_loss(list[list[float]]): 每个epoch的每一步的训练损失
-          - train_ppl(list[float]): 每个epoch的训练困惑度平均值
-          - val_loss(list[float]): 每个epoch的验证损失平均值
-          - val_ppl(list[float]): 每个epoch的验证困惑度平均值
+        metrics: 指标，包含
+          - train_loss(list[list[float]]): 每个epoch的的训练损失平均值
+          - val_loss(list[list[float]]): 每个epoch的每一个验证样本的损失
         img_path: 图形保存的文件路径，可以是字符串或Path对象。
     """
-    fig, ax1 = plt.subplots(figsize=(10, 6))  # 创建一个图形和一组坐标轴
+    # 创建图形和坐标轴
+    fig, ax1 = plt.subplots(figsize=(10, 6))
 
-    # 绘制训练过程中的损失曲线
-    train_loss_x = [
-        epoch + epoch_step / len(epoch_loss)
-        for epoch, epoch_loss in enumerate(metries["train_loss"])
-        for epoch_step in range(len(epoch_loss))
-    ]
-    ax1.plot(train_loss_x, [loss for epoch in metries["train_loss"] for loss in epoch], label="Train Loss", color="red")
+    # 计算验证点的x坐标（每个epoch的起始位置）
+    val_iteration_points = []  # 存储每个epoch的起始迭代次数
+    current_iteration = 0  # 当前累计的迭代次数
+    for epoch in metrics["train_loss"]:
+        val_iteration_points.append(current_iteration)
+        current_iteration += len(epoch)  # 累加当前epoch的迭代次数
 
-    # 绘制验证过程中的损失曲线
-    val_steps = list(range(1, len(metries["train_loss"]) + 1))
-    ax1.plot(val_steps, metries["val_loss"], label="Validation Loss", marker=".", color="blue")
+    # 计算训练损失曲线的x坐标偏移量（0.5个epoch的位置）
+    train_x_offset = sum(len(epoch_losses) for epoch_losses in metrics["train_loss"]) / len(metrics["train_loss"]) / 2
+    train_x = [x + train_x_offset for x in val_iteration_points]
 
-    # 设置第一个Y轴的标签
+    # 计算训练损失的统计量
+    train_loss_avg = [np.mean(epoch_losses) for epoch_losses in metrics["train_loss"]]
+    train_loss_upper = [train_loss_avg[i] + np.std(epoch_losses) for i, epoch_losses in enumerate(metrics["train_loss"])]
+    train_loss_lower = [train_loss_avg[i] - np.std(epoch_losses) for i, epoch_losses in enumerate(metrics["train_loss"])]
+
+    # 绘制训练损失曲线和两个独立区间
+    ax1.plot(train_x, train_loss_avg, label="Train Loss", color="red", linestyle="-", marker=".")
+    ax1.fill_between(train_x, train_loss_upper, train_loss_lower, color="red", alpha=0.2)
+
+    # 计算验证损失的统计量
+    val_loss_avg = [np.mean(epoch_losses) for epoch_losses in metrics["val_loss"]]
+    val_loss_upper = [val_loss_avg[i] + np.std(epoch_losses) for i, epoch_losses in enumerate(metrics["val_loss"])]
+    val_loss_lower = [val_loss_avg[i] - np.std(epoch_losses) for i, epoch_losses in enumerate(metrics["val_loss"])]
+
+    # 绘制验证损失曲线和两个独立区间
+    ax1.plot(val_iteration_points, val_loss_avg, label="Validation Loss", color="blue", linestyle="-", marker=".")
+    ax1.fill_between(val_iteration_points, val_loss_upper, val_loss_lower, color="blue", alpha=0.2)
+
+    # 设置坐标轴标签和标题
     ax1.set_ylabel("Loss")
-    ax1.set_xlabel("Epochs")
+    ax1.set_xlabel("Iteration")
+    ax1.set_title("Training Process with Dual Confidence Intervals")
 
-    # 创建第二个Y轴用于困惑度
-    ax2 = ax1.twinx()  # 创建共享X轴的第二个Y轴
+    # 添加图例和网格
+    ax1.legend(loc="upper right")
+    ax1.grid(True, linestyle="--", alpha=0.5)
 
-    # 绘制训练过程中的困惑度曲线
-    ax2.plot([x - 0.5 for x in val_steps], metries["train_ppl"], label="Train Perplexity", marker=".", color="green", linestyle="--")
-
-    # 绘制验证过程中的困惑度曲线
-    ax2.plot(val_steps, metries["val_ppl"], label="Validation Perplexity", marker=".", color="blue", linestyle="--")
-
-    # 设置第二个Y轴的标签
-    ax2.set_ylabel("Perplexity")
-
-    # 设置标题和图例
-    ax1.set_title("Training Process")  # 设置标题
-    ax1.legend(loc="upper left")  # 为损失曲线添加图例
-    ax2.legend(loc="upper right")  # 为困惑度曲线添加图例
-
-    plt.tight_layout()  # 自动调整布局，防止标签重叠
-    pathlib.Path(img_path).parent.mkdir(parents=True, exist_ok=True)  # 确保保存路径存在
-    plt.savefig(img_path, dpi=300, bbox_inches="tight")  # 保存图形
-    plt.show()  # 显示图形
+    # 保存并展示图形
+    plt.tight_layout()
+    pathlib.Path(img_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(img_path, dpi=300, bbox_inches="tight")
+    plt.show()
+    plt.close()
 
 
-def main():
-    # 设置命令行参数解析
+def parse_args() -> argparse.Namespace:
+    # 创建命令行参数解析器
     parser = argparse.ArgumentParser(description="训练 MIDI 模型并绘制训练过程中的损失、困惑度曲线。")
+
+    # 添加必须参数
     parser.add_argument("num_epochs", type=int, help="训练的总轮数")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="加载和保存检查点的路径")
     parser.add_argument("-t", "--train-dataset", action="append", type=pathlib.Path, required=True, help="训练集文件路径（可多次指定以使用多个数据集）")
+
+    # 添加可选参数
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-m", "--min-sequence-length", default=DEFAULT_MIN_SEQUENCE_LENGTH, type=int, help="最小序列长度，小于该长度的样本不会被训练")
     parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断")
@@ -428,22 +432,29 @@ def main():
     parser.add_argument("-f", "--dim-feedforward", default=DEFAULT_DIM_FEEDFORWARD, type=int, help="前馈神经网络的隐藏层维度")
     parser.add_argument("-s", "--num-layers", default=DEFAULT_NUM_LAYERS, type=int, help="模型 Transformer 编码器中的层数")
     parser.add_argument("-o", "--dropout", default=DEFAULT_DROPOUT, type=float, help="Dropout 概率，用于防止过拟合")
-    args = parser.parse_args()
+
+    # 解析命令行参数并返回
+    return parser.parse_args()
+
+
+def main():
+    # 解析命令行参数
+    args = parse_args()
 
     # 清理缓存以释放内存
     empty_cache()
 
     # 加载检查点
-    tokenizer, model_state, optimizer_state, metries = load_checkpoint(args.ckpt_path, train=True)
+    tokenizer, model_state, optimizer_state, metrics = load_checkpoint(args.ckpt_path, train=True)
 
     # 加载训练集并创建数据加载器
     train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
-    train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(train_dataset, args.max_batch_size), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
+    train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(SequentialSampler(train_dataset), train_dataset, args.max_batch_size), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 如果有的话，加载验证集并创建数据加载器
     if args.val_dataset:
         val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
-        val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(val_dataset, args.max_batch_size), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
+        val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(SequentialSampler(val_dataset), val_dataset, args.max_batch_size), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 获取设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -455,7 +466,7 @@ def main():
     try:
         model.load_state_dict(model_state)
     except RuntimeError:
-        metries = {"val_ppl": [], "train_ppl": [], "val_loss": [], "train_loss": []}
+        metrics = {"train_loss": [], "val_loss": []}
 
     # 转移模型到设备
     model = model.to(device)
@@ -473,31 +484,26 @@ def main():
     except (ValueError, KeyError):
         pass
 
-    # 定义交叉熵损失函数
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-
     # 开始训练模型
     for epoch in range(args.num_epochs):
-        # 训练并添加损失和困惑度到指标
-        train_loss, train_ppl = train(model, train_loader, optimizer, criterion, len(tokenizer), tokenizer.pad_token_id, device, f"训练第 {epoch + 1} 个 Epoch")
-        metries["train_loss"].append(train_loss)
-        metries["train_ppl"].append(train_ppl)
+        # 训练并添加损失到指标
+        train_loss = train(model, train_loader, optimizer, len(tokenizer), tokenizer.pad_token_id, device)
+        metrics["train_loss"].append(train_loss)
 
-        # 如果指定了验证集，就进行验证，否则跳过验证并设置验证损失和困惑度为 NaN
+        # 如果指定了验证集，就进行验证，否则跳过验证并设置验证损失为 NaN
         if args.val_dataset:
-            val_loss, val_ppl = validate(model, val_loader, criterion, len(tokenizer), tokenizer.pad_token_id, device, f"验证第 {epoch + 1} 个 Epoch")
+            val_loss = validate(model, val_loader, len(tokenizer), tokenizer.pad_token_id, device)
         else:
-            val_loss = val_ppl = float("nan")
+            val_loss = [float("nan")]
 
-        # 添加验证损失和困惑度到指标
-        metries["val_loss"].append(val_loss)
-        metries["val_ppl"].append(val_ppl)
+        # 添加验证损失到指标
+        metrics["val_loss"].append(val_loss)
 
     # 保存当前模型的检查点
-    save_checkpoint(model, optimizer, metries, args.ckpt_path)
+    save_checkpoint(model, optimizer, metrics, args.ckpt_path)
 
     # 绘制训练过程中的损失和困惑度曲线
-    plot_training_process(metries, "statistics.png")
+    plot_training_process(metrics, "statistics.png")
 
 
 if __name__ == "__main__":
