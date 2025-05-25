@@ -354,7 +354,7 @@ def validate(
 def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str):
     """
     绘制损失变化过程。训练损失使用红线，验证损失用蓝色点线。
-    为每种损失分别绘制25%和75%两个独立置信区间。
+    为每种损失分别绘制置信区间。
 
     Args:
         metrics: 指标，包含
@@ -381,7 +381,7 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
     train_loss_upper = [train_loss_avg[i] + np.std(epoch_losses) for i, epoch_losses in enumerate(metrics["train_loss"])]
     train_loss_lower = [train_loss_avg[i] - np.std(epoch_losses) for i, epoch_losses in enumerate(metrics["train_loss"])]
 
-    # 绘制训练损失曲线和两个独立区间
+    # 绘制训练损失曲线和标准差区间
     ax1.plot(train_x, train_loss_avg, label="Train Loss", color="red", linestyle="-", marker=".")
     ax1.fill_between(train_x, train_loss_upper, train_loss_lower, color="red", alpha=0.2)
 
@@ -390,7 +390,7 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
     val_loss_upper = [val_loss_avg[i] + np.std(epoch_losses) for i, epoch_losses in enumerate(metrics["val_loss"])]
     val_loss_lower = [val_loss_avg[i] - np.std(epoch_losses) for i, epoch_losses in enumerate(metrics["val_loss"])]
 
-    # 绘制验证损失曲线和两个独立区间
+    # 绘制验证损失曲线和标准差区间
     ax1.plot(val_iteration_points, val_loss_avg, label="Validation Loss", color="blue", linestyle="-", marker=".")
     ax1.fill_between(val_iteration_points, val_loss_upper, val_loss_lower, color="blue", alpha=0.2)
 
