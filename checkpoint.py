@@ -10,21 +10,22 @@
 import json
 import pathlib
 import torch
-from torch import nn, optim
+from torch import nn
 from transformers import PreTrainedTokenizerFast
+from typing import Any
 
 # 在非 Jupyter 环境下导入模型库
 if "get_ipython" not in globals():
     from model import MidiNet
 
 
-def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, metrics: dict[str, list], path: pathlib.Path):
+def save_checkpoint(model: MidiNet, optimizer_state_dict: dict[str, Any], metrics: dict[str, list], path: pathlib.Path):
     """
     保存模型的检查点到指定路径，包括模型的权重以及训练的进度信息。
 
     Args:
         model: 要保存的模型实例
-        optimizer: 要保存的优化器实例
+        optimizer_state_dict: 要保存的优化器实例
         metrics: 指标
         path: 保存检查点的目录路径
     """
@@ -35,7 +36,7 @@ def save_checkpoint(model: MidiNet, optimizer: optim.AdamW, metrics: dict[str, l
     if isinstance(model, nn.DataParallel):
         model = model.module
     torch.save(model.state_dict(), path / "model.pth")  # 保存模型权重
-    torch.save(optimizer.state_dict(), path / "optimizer.pth")  # 保存优化器权重
+    torch.save(optimizer_state_dict, path / "optimizer.pth")  # 保存优化器权重
 
     # 保存训练信息
     with open(path / "metrics.json", "w") as f:

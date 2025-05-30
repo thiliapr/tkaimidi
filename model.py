@@ -11,11 +11,8 @@ import math
 import copy
 import torch
 from torch import nn
+from torch.nn import functional as F
 from typing import Optional
-
-# 在非 Jupyter 环境下导入注意力库
-if "get_ipython" not in globals():
-    from attention import FlashAttention
 
 
 class PositionalEncoding(nn.Module):
@@ -23,28 +20,28 @@ class PositionalEncoding(nn.Module):
     实现基于正弦和余弦函数的位置编码，用于为输入序列中的每个位置提供唯一的表示。
 
     工作流程:
-    1. 初始化时，根据模型维度 `model_dim` 计算出频率的倒数 `inv_freq`，用于构造正弦/余弦函数
+    1. 初始化时，根据模型维度 `dim_model` 计算出频率的倒数 `inv_freq`，用于构造正弦/余弦函数
     2. 在前向传播中，根据输入的序列长度生成位置索引
     3. 使用外积计算每个位置和频率的乘积
     4. 分别对这些乘积应用正弦和余弦函数，并与输入张量进行相加，增强位置信息
 
     Args:
-        model_dim: 模型的隐藏维度，必须为偶数。
+        dim_model: 模型的隐藏维度，必须为偶数。
 
     Returns:
-        一个形状为 (batch_size, seq_len, model_dim) 的位置编码张量，与输入 `x` 的数据类型相同。
+        一个形状为 (batch_size, seq_len, dim_model) 的位置编码张量，与输入 `x` 的数据类型相同。
 
     Examples:
         >>> pe = PositionalEncoding(512)
-        >>> x = torch.randn(32, 128, 512)  # batch_size=32, seq_len=128, model_dim=512
+        >>> x = torch.randn(32, 128, 512)  # batch_size=32, seq_len=128, dim_model=512
         >>> x = pe(x)  # 返回形状为 (32, 128, 512) 的经过位置编码的张量
     """
 
-    def __init__(self, model_dim: int):
+    def __init__(self, dim_model: int):
         super().__init__()
 
         # 只对偶数维度（从0开始每隔两位）计算
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, model_dim, 2).float() / model_dim))
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim_model, 2).float() / dim_model))
 
         # 注册为buffer，意味着它不是参数，不会被训练，且不随模型保存
         self.register_buffer("inv_freq", inv_freq, persistent=False)
@@ -58,7 +55,7 @@ class PositionalEncoding(nn.Module):
         # 计算外积: positions[i] * inv_freq[j]
         sinusoid_input = torch.einsum("i,j->ij", positions, self.inv_freq)
 
-        # 最后一维合并为 model_dim 维度
+        # 最后一维合并为 dim_model 维度
         positional_embedding = torch.cat([sinusoid_input.sin(), sinusoid_input.cos()], dim=-1)
 
         # 增加 batch 维度，并确保返回类型与输入相同
@@ -107,6 +104,89 @@ class ScaleNorm(nn.Module):
         return self.g * x / norm  # 对输入张量进行缩放归一化
 
 
+class MultiqueryAttention(nn.Module):
+    """
+    多查询注意力。
+    与标准多头注意力不同，多查询注意力共享键和值的头，
+    仅查询保持多头，可显著减少计算量和内存占用。
+
+    工作流程：
+    1. 输入通过线性层分别生成查询、键和值
+    2. K和V被复制到与Q相同的头数
+    3. 使用PyTorch的高效`nn.functional.scaled_dot_product_attention`计算注意力
+    4. 合并多头输出并返回最终结果
+
+    Args:
+        dim_head: 每个注意力头的维度
+        num_heads: 注意力头的数量
+        dropout: 注意力权重dropout概率，默认为0
+        device: 模型参数所在的设备
+
+    Examples:
+        >>> attention = MultiqueryAttention(dim_head=64, num_heads=8)
+        >>> x = torch.randn(32, 100, 512)  # (batch, seq_len, dim)
+        >>> output = attention(x)
+    """
+
+    def __init__(self, dim_head: int, num_heads: int, dropout: float = 0., device: torch.device = None):
+        super().__init__()
+        self.dim_head = dim_head
+        self.num_heads = num_heads
+        dim_model = dim_head * num_heads
+
+        # 查询投影矩阵 (保持多头)
+        self.query_proj = nn.Linear(dim_model, dim_model, device=device)
+
+        # 键值共享投影矩阵 (输出维度为 2 * dim_head)
+        self.kv_proj = nn.Linear(dim_model, dim_head * 2, device=device)
+        self.dropout_rate = dropout
+
+    def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor = None) -> torch.Tensor:
+        batch_size, seq_len, _ = x.shape
+
+        # 计算查询投影并重塑为多头形状 (batch, heads, seq_len, head_dim)
+        queries = self.query_proj(x)
+        queries = queries.view(batch_size, seq_len, self.num_heads, self.dim_head).transpose(1, 2)
+
+        # 计算共享的键和值 (batch, seq_len, head_dim)
+        kv = self.kv_proj(x)
+        keys, values = kv.chunk(2, dim=-1)
+
+        # 将键和值扩展到多头 (batch, heads, seq_len, head_dim)
+        keys = keys.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
+        values = values.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
+
+        # 处理注意力掩码
+        if padding_mask is None:
+            # 使用内置的注意力掩码
+            attn_mask = None
+            use_builtin_causal = True
+        else:
+            # 不使用内置的因果注意力（因为不能同时使用`attn_mask`和`is_causal`，需要自定义掩码）
+            use_builtin_causal = False
+
+            # 创建因果掩码
+            causal_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device).tril(diagonal=0)
+
+            # 将 padding_mask 转换为注意力掩码形状 [batch, 1, seq_len, 1]
+            padding_mask = padding_mask.view(batch_size, 1, seq_len, 1)
+
+            # 生成注意力掩码 (需要同时考虑因果和padding)
+            attn_mask = causal_mask.view(1, 1, seq_len, seq_len)  # [1, 1, seq_len, seq_len]
+            attn_mask = attn_mask & ~padding_mask
+
+        # 计算缩放点积注意力
+        attn_output = F.scaled_dot_product_attention(
+            queries, keys, values,
+            attn_mask=attn_mask,
+            dropout_p=(self.dropout_rate if self.training else 0.),
+            is_causal=use_builtin_causal
+        )
+
+        # 合并多头输出 (batch, seq_len, dim_model)
+        return attn_output.transpose(1, 2).reshape(batch_size, seq_len, -1)
+
+
 class MidiNetLayer(nn.Module):
     """
     MidiNetLayer 是一个神经网络层，结合了注意力机制和前馈网络，常用于序列数据建模。该层包含以下组件：
@@ -120,7 +200,7 @@ class MidiNetLayer(nn.Module):
         dim_head: 每个注意力头的维度。
         dim_feedforward: 前馈网络的隐藏层维度。
         dropout: Dropout 概率，用于防止过拟合。
-        device: 模型的设备（如 CPU 或 GPU。
+        device: 模型的设备。
     """
 
     def __init__(
@@ -132,21 +212,21 @@ class MidiNetLayer(nn.Module):
         device: torch.device = None
     ):
         super().__init__()
-        model_dim = num_heads * dim_head  # 模型总维度
+        dim_model = dim_head * num_heads  # 模型总维度
 
-        # 使用 FlashAttention 实现高效的多头注意力
-        self.attention = FlashAttention(dim=model_dim, heads=num_heads, dim_head=dim_head, causal=True).to(device)
+        # 多查询注意力
+        self.attention = MultiqueryAttention(dim_head, num_heads, dropout=dropout, device=device)
 
         # 前馈网络部分: 线性 -> GELU 激活 -> 线性
         self.feedforward = nn.Sequential(
-            nn.Linear(model_dim, dim_feedforward, device=device),
-            nn.GELU(),
-            nn.Linear(dim_feedforward, model_dim, device=device)
+            nn.Linear(dim_model, dim_feedforward, device=device),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(dim_feedforward, dim_model, device=device)
         )
 
         # 使用 ScaleNorm 归一化，替代 LayerNorm 以提升效率和性能
-        self.norm1 = ScaleNorm(model_dim)
-        self.norm2 = ScaleNorm(model_dim)
+        self.norm1 = ScaleNorm(dim_model)
+        self.norm2 = ScaleNorm(dim_model)
 
         # 添加 Dropout 防止过拟合
         self.dropout = nn.Dropout(dropout)
@@ -162,14 +242,14 @@ class MidiNetLayer(nn.Module):
         执行前向传播操作，输入通过注意力模块和前馈网络后输出。
 
         Args:
-            x: 输入张量，形状为 (batch_size, seq_len, model_dim)。
+            x: 输入张量，形状为 (batch_size, seq_len, dim_model)。
             padding_mask: 可选的 padding 掩码，用于注意力机制中忽略填充部分。
 
         Returns:
             输出张量，形状与输入相同。
         """
         # 执行自注意力计算，添加残差连接，并通过 Dropout 防止过拟合
-        x = self.dropout(x + self.attention(self.norm1(x), mask=padding_mask))
+        x = self.dropout(x + self.attention(self.norm1(x), padding_mask=padding_mask))
 
         # 执行前馈网络计算，添加残差连接，并通过 Dropout 防止过拟合
         x = self.dropout(x + self.feedforward(self.norm2(x)))
@@ -209,20 +289,20 @@ class MidiNet(nn.Module):
         device: torch.device = None
     ):
         super().__init__()
-        self.model_dim = dim_head * num_heads  # 模型总维度
+        self.dim_model = dim_head * num_heads  # 模型总维度
 
         # 将 token 映射为向量
-        self.embedding = nn.Embedding(vocab_size, self.model_dim, device=device)
+        self.embedding = nn.Embedding(vocab_size, self.dim_model, device=device)
 
         # 位置编码
-        self.positional_encoding = PositionalEncoding(self.model_dim)
+        self.positional_encoding = PositionalEncoding(self.dim_model)
 
         # 堆叠多个 MidiNetLayer 层
         layer = MidiNetLayer(num_heads, dim_head, dim_feedforward, dropout=dropout, device=device)
         self.layers = nn.ModuleList(copy.deepcopy(layer) for _ in range(num_layers))
 
         # 将模型输出映射回 vocab 空间
-        self.output_layer = nn.Linear(self.model_dim, vocab_size, device=device)
+        self.output_layer = nn.Linear(self.dim_model, vocab_size, device=device)
 
         # 添加 Dropout 防止过拟合
         self.dropout = nn.Dropout(dropout)
@@ -236,8 +316,8 @@ class MidiNet(nn.Module):
         torch.nn.init.zeros_(self.output_layer.bias)
 
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.BoolTensor] = None):
-        # 将 token 转为向量，并乘以 sqrt(model_dim) 进行缩放
-        x = self.dropout(self.embedding(x) * math.sqrt(self.model_dim))
+        # 将 token 转为向量，并乘以 sqrt(dim_model) 进行缩放
+        x = self.dropout(self.embedding(x) * math.sqrt(self.dim_model))
 
         # 添加位置编码
         x = self.positional_encoding(x)
@@ -245,7 +325,7 @@ class MidiNet(nn.Module):
         # 逐层应用 Transformer 结构
         for layer in self.layers:
             # 进入单层 Transformer 结构
-            x = layer(x)
+            x = layer(x, padding_mask)
 
         # 映射回词汇表空间，得到每个位置的预测分布
         logits = self.output_layer(x)

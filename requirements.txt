@@ -4,6 +4,3 @@ tqdm
 matplotlib
 tokenizers
 transformers
-
-# attention.py
-einops

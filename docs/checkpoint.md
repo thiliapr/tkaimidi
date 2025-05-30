@@ -16,7 +16,7 @@
 | 参数 | 类型 | 说明 |
 | - | - | - |
 | `model` | MidiNet | 要保存的模型实例 |
-| `optimizer` | AdamW | 优化器实例 |
+| `optimizer_state_dict` | AdamW | 优化器状态字典 |
 | `metrics` | dict[str, Any] | 训练指标字典 |
 | `path` | Path | 保存路径 |
 
@@ -27,7 +27,7 @@
 2. **优化器状态**
    - 保存为`optimizer.pth`
 3. **训练指标**
-   - 包括验证集/训练集的PPL和loss
+   - 包括验证集/训练集的loss
    - 保存为`metrics.json`
 
 ### `load_checkpoint` 函数
@@ -63,12 +63,10 @@
 ```python
 save_checkpoint(
     model=training_model,
-    optimizer=optimizer,
+    optimizer_state_dict=optimizer,
     metrics={
         "val_ppl": [...],
-        "train_ppl": [...],
-        "val_loss": [...],
-        "train_loss": [...]
+        "train_ppl": [...]
     },
     path=Path("checkpoints/epoch_10")
 )

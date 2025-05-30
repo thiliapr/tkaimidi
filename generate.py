@@ -350,6 +350,8 @@ def main():
         num_heads = dim_model // DEFAULT_DIM_HEAD
     elif dim_model % DEFAULT_NUM_HEADS == 0:
         num_heads = DEFAULT_NUM_HEADS
+    else:
+        num_heads = 1
     dim_head = dim_model // num_heads
 
     # 打印模型参数

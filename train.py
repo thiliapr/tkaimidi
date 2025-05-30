@@ -160,7 +160,7 @@ class MidiDatasetSampler(Sampler[list[int]]):
             batch = [dataset[i] for i in batch_indices]
     """
 
-    def __init__(self, sampler: Sampler[int], dataset, max_batch_tokens: int):
+    def __init__(self, sampler: Sampler[int], dataset: MidiDataset, max_batch_tokens: int):
         self.sampler = sampler
         self.dataset = dataset
         self.max_batch_tokens = max_batch_tokens
@@ -244,7 +244,7 @@ def train(
         5. 切换模型到训练模式。
         6. 对每个batch进行前向传播、计算损失、反向传播和更新参数。
         7. 累积损失。
-        8. 返回这个epoch的平均训练损失。
+        8. 返回这个epoch的训练损失。
 
     Args:
         model: 需要训练的神经网络模型。
@@ -262,7 +262,6 @@ def train(
         >>> tokenizer = PreTrainedTokenizerFast.from_pretrained("ckpt/tokenizer")
         >>> model = MidiNet(len(tokenizer), 768, 12, 2048, 12)
         >>> optimizer = optim.AdamW(model.parameters(), lr=1e-2, weight_decay=1e-2)
-        >>> criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
         >>> train(model, dataloader, optimizer, len(tokenizer), tokenizer.pad_token_id)
         [1.9, 0.89, 0.6, 0.4]
     """
@@ -281,14 +280,19 @@ def train(
     for inputs, labels in dataloader:
         inputs, labels = inputs.to(device), labels.to(device).view(-1)
         optimizer.zero_grad()  # 清空梯度
-        try:
-            outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
-            loss = F.cross_entropy(outputs, labels, ignore_index=pad_token)  # 计算损失
-            loss.backward()  # 反向传播
-            optimizer.step()  # 更新模型参数
-        except torch.cuda.OutOfMemoryError:
-            empty_cache()
-            continue
+
+        # 如果内存爆炸了，就清空缓存再试一次
+        for counter in range(2):
+            try:
+                outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
+                loss = F.cross_entropy(outputs, labels, ignore_index=pad_token)  # 计算损失
+                loss.backward()  # 反向传播
+                optimizer.step()  # 更新模型参数
+                break
+            except torch.cuda.OutOfMemoryError:
+                print(f"OutOfMemoryError: inputs.shape={inputs.shape}")
+                empty_cache()  # 清理缓存以释放内存
+                continue  # 再试一次
 
         # 更新进度条
         progress_bar.update(inputs.size(0))
@@ -312,8 +316,8 @@ def validate(
     """
     对模型进行验证，返回平均损失和平均困惑度。
 
-    此函数遍历验证集，对模型进行前向传播，计算每个 batch 的交叉熵损失。
-    所有 batch 的损失将被平均后返回，以衡量模型在整个验证集上的性能表现。
+    此函数遍历验证集，对模型进行前向传播，计算每个样本的交叉熵损失。
+    返回所有样本的损失，以衡量模型在整个验证集上的性能表现。
 
     Args:
         model: 需要验证的 MidiNet 模型。
@@ -397,7 +401,7 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
     # 设置坐标轴标签和标题
     ax1.set_ylabel("Loss")
     ax1.set_xlabel("Iteration")
-    ax1.set_title("Training Process with Dual Confidence Intervals")
+    ax1.set_title("Training Process")
 
     # 添加图例和网格
     ax1.legend(loc="upper right")
@@ -424,7 +428,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-m", "--min-sequence-length", default=DEFAULT_MIN_SEQUENCE_LENGTH, type=int, help="最小序列长度，小于该长度的样本不会被训练")
     parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断")
-    parser.add_argument("-b", "--max-batch-size", default=1536 ** 2, type=int, help="每个批次的序列长度的平方和上限")
+    parser.add_argument("-b", "--max-batch-tokens", default=1536 ** 2, type=int, help="每个批次的序列长度的平方和上限")
     parser.add_argument("-l", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率")
     parser.add_argument("-w", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数")
     parser.add_argument("-n", "--num-heads", default=DEFAULT_NUM_HEADS, type=int, help="多头注意力中的注意力头数量")
@@ -445,16 +449,16 @@ def main():
     empty_cache()
 
     # 加载检查点
-    tokenizer, model_state, optimizer_state, metrics = load_checkpoint(args.ckpt_path, train=True)
+    tokenizer, model_state_dict, optimizer_state_dict, metrics = load_checkpoint(args.ckpt_path, train=True)
 
     # 加载训练集并创建数据加载器
     train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
-    train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(SequentialSampler(train_dataset), train_dataset, args.max_batch_size), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
+    train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(SequentialSampler(train_dataset), train_dataset, args.max_batch_tokens), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 如果有的话，加载验证集并创建数据加载器
     if args.val_dataset:
         val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
-        val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(SequentialSampler(val_dataset), val_dataset, args.max_batch_size), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
+        val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(SequentialSampler(val_dataset), val_dataset, args.max_batch_tokens), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 获取设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -464,7 +468,7 @@ def main():
 
     # 加载模型状态
     try:
-        model.load_state_dict(model_state)
+        model.load_state_dict(model_state_dict)
     except RuntimeError:
         metrics = {"train_loss": [], "val_loss": []}
 
@@ -479,10 +483,8 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
     # 加载优化器状态
-    try:
-        optimizer.load_state_dict(optimizer_state)
-    except (ValueError, KeyError):
-        pass
+    if optimizer_state_dict:
+        optimizer.load_state_dict(optimizer_state_dict)
 
     # 开始训练模型
     for epoch in range(args.num_epochs):
@@ -500,9 +502,9 @@ def main():
         metrics["val_loss"].append(val_loss)
 
     # 保存当前模型的检查点
-    save_checkpoint(model, optimizer, metrics, args.ckpt_path)
+    save_checkpoint(model, optimizer.state_dict(), metrics, args.ckpt_path)
 
-    # 绘制训练过程中的损失和困惑度曲线
+    # 绘制训练过程中的损失曲线
     plot_training_process(metrics, "statistics.png")
 
 
