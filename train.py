@@ -20,13 +20,10 @@ from torch.nn import DataParallel, functional as F
 from torch.utils.data import Dataset, DataLoader, Sampler, SequentialSampler
 from transformers import PreTrainedTokenizerFast
 
-import warnings
+# 解除线程数量限制
 import os
 from multiprocessing import cpu_count
 
-# 忽略警告
-warnings.filterwarnings("ignore", message=".*torch.cuda.amp.autocast.*deprecated.*")
-# 解除线程数量限制
 os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(cpu_count())
 torch.set_num_threads(cpu_count())
 
@@ -275,26 +272,29 @@ def train(
     model.train()
     losses = []  # 初始化损失列表
 
+    # 用于梯度缩放
+    scaler = torch.amp.GradScaler()
+
     # 创建进度条，显示训练进度
     progress_bar = tqdm(total=len(dataloader.dataset), disable=not show_progress)
     for inputs, labels in dataloader:
         inputs, labels = inputs.to(device), labels.to(device).view(-1)
         optimizer.zero_grad()  # 清空梯度
 
-        # 如果内存爆炸了，就清空缓存再试一次
-        for counter in range(2):
-            try:
+        try:
+            with torch.amp.autocast(device.type, dtype=torch.float16):
                 outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
                 loss = F.cross_entropy(outputs, labels, ignore_index=pad_token)  # 计算损失
-                loss.backward()  # 反向传播
-                optimizer.step()  # 更新模型参数
-                break
-            except torch.cuda.OutOfMemoryError:
-                print(f"OutOfMemoryError: inputs.shape={inputs.shape}")
-                empty_cache()  # 清理缓存以释放内存
-                continue  # 再试一次
+
+            scaler.scale(loss).backward()  # 反向传播
+            scaler.step(optimizer)  # 更新模型参数
+            scaler.update()  # 调整缩放因子
+        except torch.cuda.OutOfMemoryError:
+            print(f"OutOfMemoryError: inputs.shape={inputs.shape}")
+            empty_cache()  # 清理缓存以释放内存
 
         # 更新进度条
+        progress_bar.set_postfix(loss=loss.item())
         progress_bar.update(inputs.size(0))
 
         # 累积训练损失
@@ -428,7 +428,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-m", "--min-sequence-length", default=DEFAULT_MIN_SEQUENCE_LENGTH, type=int, help="最小序列长度，小于该长度的样本不会被训练")
     parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断")
-    parser.add_argument("-b", "--max-batch-tokens", default=1536 ** 2, type=int, help="每个批次的序列长度的平方和上限")
+    parser.add_argument("-b", "--max-batch-tokens", default=4096 ** 2, type=int, help="每个批次的序列长度的平方和上限")
     parser.add_argument("-l", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率")
     parser.add_argument("-w", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数")
     parser.add_argument("-n", "--num-heads", default=DEFAULT_NUM_HEADS, type=int, help="多头注意力中的注意力头数量")
