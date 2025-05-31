@@ -326,7 +326,6 @@ def main():
     parser.add_argument("-s", "--seed", type=int, help="随机种子，不指定表示随机生成")
     parser.add_argument("-p", "--max-pitch-span-semitones", type=int, default=64, help="触发音高调整的阈值（半音数），当生成的音高跨度大于阈值时，包含音调上升或下降事件的 token 将被降低概率。")
     parser.add_argument("-l", "--max-length", type=int, help="限制最多生成的音符数量。如果不指定，将会持续生成直到遇到结束标志。")
-    parser.add_argument("-n", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="模型注意力头的数量。一般情况下不需要动它，除非你所用的模型注意力头数量和默认的不同，一般这种情况会注明的。")
     args = parser.parse_args()
 
     # 加载模型的预训练检查点
@@ -343,16 +342,9 @@ def main():
     # 推导模型参数
     vocab_size, dim_model = state_dict["embedding.weight"].size()
     dim_feedforward = state_dict["layers.0.feedforward.0.weight"].size(0)
+    dim_head = (state_dict["layers.0.attention.qkv_proj"].size(1) - dim_model) // 2
+    num_heads = dim_model // dim_head
     num_layers = len(set(key.split(".")[1] for key in state_dict.keys() if key.startswith("layers.")))
-    if dim_model % args.num_heads == 0:
-        num_heads = args.num_heads
-    elif dim_model % DEFAULT_DIM_HEAD == 0:
-        num_heads = dim_model // DEFAULT_DIM_HEAD
-    elif dim_model % DEFAULT_NUM_HEADS == 0:
-        num_heads = DEFAULT_NUM_HEADS
-    else:
-        num_heads = 1
-    dim_head = dim_model // num_heads
 
     # 打印模型参数
     print(f"模型参数:\n- 词汇表大小: {vocab_size}\n- 嵌入层维度: {dim_model}\n- 前馈层维度: {dim_feedforward}\n- 注意力头的数量: {num_heads}\n- 层数: {num_layers}\n")
