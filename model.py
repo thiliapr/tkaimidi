@@ -106,15 +106,13 @@ class ScaleNorm(nn.Module):
 
 class MultiqueryAttention(nn.Module):
     """
-    多查询注意力。
+    多查询注意力 (Multi-Query Attention)。
     与标准多头注意力不同，多查询注意力共享键和值的头，
     仅查询保持多头，可显著减少计算量和内存占用。
 
-    工作流程：
-    1. 输入通过线性层分别生成查询、键和值
-    2. K和V被复制到与Q相同的头数
-    3. 使用PyTorch的高效`nn.functional.scaled_dot_product_attention`计算注意力
-    4. 合并多头输出并返回最终结果
+    1. 键/值投影合并为单头（`dim_head`维），查询保持多头（`num_heads * dim_head`维）
+    2. 计算时通过广播机制将键/值复制到与查询相同的头数
+    3. 使用PyTorch原生`scaled_dot_product_attention`实现高效注意力计算
 
     Args:
         dim_head: 每个注意力头的维度
@@ -132,29 +130,33 @@ class MultiqueryAttention(nn.Module):
         super().__init__()
         self.dim_head = dim_head
         self.num_heads = num_heads
-        dim_model = dim_head * num_heads
-
-        # 查询投影矩阵 (保持多头)
-        self.query_proj = nn.Linear(dim_model, dim_model, device=device)
-
-        # 键值共享投影矩阵 (输出维度为 2 * dim_head)
-        self.kv_proj = nn.Linear(dim_model, dim_head * 2, device=device)
         self.dropout_rate = dropout
+        dim_model = dim_head * num_heads  # 总模型维度 = 头数 * 每头维度
+
+        # 查询、键值投影矩阵 (合并计算效率更高)
+        # 输出维度: Queries (dim_model) + Keys (dim_head) + Values (dim_head)
+        self.qkv_proj = nn.Linear(dim_model, dim_model + dim_head * 2, device=device)
 
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor = None) -> torch.Tensor:
         batch_size, seq_len, _ = x.shape
 
-        # 计算查询投影并重塑为多头形状 (batch, heads, seq_len, head_dim)
-        queries = self.query_proj(x)
-        queries = queries.view(batch_size, seq_len, self.num_heads, self.dim_head).transpose(1, 2)
+        # 计算查询、键值投影 [batch, seq_len, dim_model + 2 * dim_head]
+        qkv = self.qkv_proj(x)
 
-        # 计算共享的键和值 (batch, seq_len, head_dim)
-        kv = self.kv_proj(x)
-        keys, values = kv.chunk(2, dim=-1)
+        # 分割查询、键和值 (注意顺序: Q -> K -> V)
+        queries, keys, values = qkv.split([self.dim_head * self.num_heads, self.dim_head, self.dim_head], dim=-1)
 
-        # 将键和值扩展到多头 (batch, heads, seq_len, head_dim)
-        keys = keys.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
-        values = values.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
+        # 调整查询形状为 [batch, seq_len, num_heads, dim_head]
+        queries = queries.view(batch_size, seq_len, self.num_heads, self.dim_head)
+
+        # 将键和值从单头扩展到多头 [batch, seq_len, 1, dim_head] -> [batch, seq_len, num_heads, dim_head]
+        keys = keys.unsqueeze(2).expand(-1, -1, self.num_heads, -1)
+        values = values.unsqueeze(2).expand(-1, -1, self.num_heads, -1)
+
+        # 重排维度为 PyTorch 注意力要求的形状 [batch, heads, seq_len, dim_head]
+        queries = queries.transpose(1, 2)
+        keys = keys.transpose(1, 2)
+        values = values.transpose(1, 2)
 
         # 处理注意力掩码
         if padding_mask is None:
@@ -165,15 +167,14 @@ class MultiqueryAttention(nn.Module):
             # 不使用内置的因果注意力（因为不能同时使用`attn_mask`和`is_causal`，需要自定义掩码）
             use_builtin_causal = False
 
-            # 创建因果掩码
-            causal_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device).tril(diagonal=0)
+            # 创建因果掩码 [seq_len, seq_len]
+            causal_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device).triu(diagonal=1)
 
-            # 将 padding_mask 转换为注意力掩码形状 [batch, 1, seq_len, 1]
-            padding_mask = padding_mask.view(batch_size, 1, seq_len, 1)
+            # 生成注意力掩码 (同时考虑因果和padding)
+            attn_mask = causal_mask.unsqueeze(0) | padding_mask.view(batch_size, 1, 1, seq_len) | padding_mask.view(batch_size, 1, seq_len, 1)
 
-            # 生成注意力掩码 (需要同时考虑因果和padding)
-            attn_mask = causal_mask.view(1, 1, seq_len, seq_len)  # [1, 1, seq_len, seq_len]
-            attn_mask = attn_mask & ~padding_mask
+            # 将布尔掩码转换为浮点掩码
+            attn_mask = torch.where(attn_mask, -torch.inf, 0.)
 
         # 计算缩放点积注意力
         attn_output = F.scaled_dot_product_attention(
