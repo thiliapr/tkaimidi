@@ -130,20 +130,26 @@ class MidiDataset(Dataset):
 
 class MidiDatasetSampler(Sampler[list[int]]):
     """
-    用于根据MIDI数据的长度动态分批的采样器类，适配最大token数限制。
+    动态批次采样器，根据序列长度智能分组，确保每个批次的token总数不超过限制。
 
-    该采样器会根据给定的数据集，获取数据集中所有样本的长度信息，并按序列长度排序，
-    确保每个批次中样本的总token数平方和不超过预设的`max_batch_tokens`。
-    较长的序列可能会被跳过。
-
-    每个批次被打乱顺序，以提升模型训练的泛化能力。
+    工作流程:
+        1. 计算每个样本的序列长度
+        2. 按长度升序排序（相同长度随机扰动）
+        3. 动态填充批次，确保 (批次大小 × 序列长度²) ≤ max_batch_tokens
+        4. 打乱批次顺序后逐批产出
 
     Args:
-        dataset: 一个包含MIDI音乐序列的数据集对象，要求具备`music_sequences`属性
-        max_batch_tokens: 一个整数，指定每个批次中最大token平方和限制
+        dataset: 包含音乐序列的数据集
+        max_batch_tokens: 单个批次允许的最大token数（按序列长度平方计算）
 
     Returns:
-        一个批次索引列表的迭代器，每个元素是一个样本索引组成的列表
+        生成包含样本索引的批次列表
+
+    Examples:
+        >>> dataset = MidiDataset("data/")
+        >>> sampler = MidiDatasetSampler(dataset, max_batch_tokens=65536)
+        >>> next(iter(sampler))
+        [12, 45, 32]  # 长度相近的样本索引
     """
 
     def __init__(self, dataset: MidiDataset, max_batch_tokens: int):
@@ -152,47 +158,42 @@ class MidiDatasetSampler(Sampler[list[int]]):
 
     def __iter__(self):
         # 存储最终的所有批次
-        all_batches = []
+        batch_indices = []
         current_batch = []
-        current_token_sum = 0
 
         # 计算每个样本的序列长度 (index, length)，用于后续排序
-        indexed_lengths = [(index, len(sequence)) for index, sequence in enumerate(self.dataset.music_sequences)]
+        index_length_pairs = [(index, len(sequence)) for index, sequence in enumerate(self.dataset.music_sequences)]
 
         # 根据长度升序排序，长度相同时使用随机扰动避免固定排序
         sorted_indices = sorted(
-            indexed_lengths,
+            index_length_pairs,
             key=lambda x: (x[1], random.random())
         )
 
         for index, sequence_length in sorted_indices:
-            estimated_cost = sequence_length ** 2
-
-            # 如果单个样本就超过限制，则作为单独一个批次
-            if estimated_cost > self.max_batch_tokens:
-                all_batches.append([index])
+            # 处理超长序列（单独成批）
+            if sequence_length ** 2 > self.max_batch_tokens:
+                batch_indices.append([index])
                 continue
 
             # 如果当前批次加上该样本会超出限制，则保存当前批次并开始新批次
-            if current_token_sum + estimated_cost > self.max_batch_tokens:
-                all_batches.append(current_batch)
+            predicted_tokens = (len(current_batch) + 1) * sequence_length ** 2
+            if predicted_tokens > self.max_batch_tokens:
+                batch_indices.append(current_batch)
                 current_batch = []
-                current_token_sum = 0
 
             # 添加样本到当前批次
             current_batch.append(index)
-            current_token_sum += estimated_cost
 
         # 添加最后一个非空批次
         if current_batch:
-            all_batches.append(current_batch)
+            batch_indices.append(current_batch)
 
         # 打乱批次顺序以增加训练随机性
-        random.shuffle(all_batches)
+        random.shuffle(batch_indices)
 
         # 依次返回每个批次
-        for batch in all_batches:
-            yield batch
+        yield from batch_indices
 
 
 def sequence_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor]], pad_token: int):
