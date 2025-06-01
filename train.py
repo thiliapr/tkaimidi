@@ -135,12 +135,12 @@ class MidiDatasetSampler(Sampler[list[int]]):
     工作流程:
         1. 计算每个样本的序列长度
         2. 按长度升序排序（相同长度随机扰动）
-        3. 动态填充批次，确保 (批次大小 × 序列长度²) ≤ max_batch_tokens
+        3. 动态填充批次，确保 (批次大小 × 序列长度) ≤ max_batch_tokens
         4. 打乱批次顺序后逐批产出
 
     Args:
         dataset: 包含音乐序列的数据集
-        max_batch_tokens: 单个批次允许的最大token数（按序列长度平方计算）
+        max_batch_tokens: 单个批次允许的最大token数
 
     Returns:
         生成包含样本索引的批次列表
@@ -172,12 +172,12 @@ class MidiDatasetSampler(Sampler[list[int]]):
 
         for index, sequence_length in sorted_indices:
             # 处理超长序列（单独成批）
-            if sequence_length ** 2 > self.max_batch_tokens:
+            if sequence_length > self.max_batch_tokens:
                 batch_indices.append([index])
                 continue
 
             # 如果当前批次加上该样本会超出限制，则保存当前批次并开始新批次
-            predicted_tokens = (len(current_batch) + 1) * sequence_length ** 2
+            predicted_tokens = (len(current_batch) + 1) * sequence_length
             if predicted_tokens > self.max_batch_tokens:
                 batch_indices.append(current_batch)
                 current_batch = []
@@ -271,10 +271,11 @@ def train(
     progress_bar = tqdm(total=dataset_tokens, disable=dataset_tokens is None)
     for inputs, labels in dataloader:
         inputs, labels = inputs.to(device), labels.to(device)
-        progress_n = ((labels != pad_token).sum(dim=1) + 1).pow(2).sum().item()  # 进度条更新的步数（批次原序列长度的平方和）
+        progress_n = ((labels != pad_token).sum(dim=1) + 1).sum().item()  # 进度条更新的步数（批次原序列长度的和）
         optimizer.zero_grad()  # 清空梯度
 
         try:
+            # 使用半精度节省显存
             with torch.amp.autocast(device.type, dtype=torch.float16):
                 outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
                 loss = F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token)  # 计算损失
@@ -343,14 +344,16 @@ def validate(
         # 将输入移动到计算设备
         inputs, labels = inputs.to(device), labels.to(device)
 
-        # 模型前向传播，得到输出并 reshape 成二维张量
-        outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)
+        # 使用半精度节省显存
+        with torch.amp.autocast(device.type, dtype=torch.float16):
+            # 模型前向传播，得到输出并 reshape 成二维张量
+            outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)
 
-        # 计算并记录损失
-        losses.extend(F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token, reduction="none").tolist())
+            # 计算并记录损失
+            losses.extend(F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token, reduction="none").tolist())
 
         # 更新进度条
-        progress_bar.update(((labels != pad_token).sum(dim=1) + 1).pow(2).sum().item())
+        progress_bar.update(((labels != pad_token).sum(dim=1) + 1).sum().item())
 
     # 关闭进度条
     progress_bar.close()
@@ -434,8 +437,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-m", "--min-sequence-length", default=DEFAULT_MIN_SEQUENCE_LENGTH, type=int, help="最小序列长度，小于该长度的样本不会被训练")
     parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断")
-    parser.add_argument("-b", "--train-max-batch-tokens", default=4096 ** 2, type=int, help="训练时，每个批次的序列长度的平方和上限")
-    parser.add_argument("-q", "--val-max-batch-tokens", default=2 * 4096 ** 2, type=int, help="验证时，每个批次的序列长度的平方和上限")
+    parser.add_argument("-b", "--train-max-batch-tokens", default=16384, type=int, help="训练时，每个批次的序列长度的和上限")
+    parser.add_argument("-q", "--val-max-batch-tokens", default=32678, type=int, help="验证时，每个批次的序列长度的和上限")
     parser.add_argument("-l", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率")
     parser.add_argument("-w", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数")
     parser.add_argument("-n", "--num-heads", default=DEFAULT_NUM_HEADS, type=int, help="多头注意力中的注意力头数量")
@@ -494,9 +497,9 @@ def main():
         optimizer.load_state_dict(optimizer_state_dict)
 
     # 统计数据集的数据量（每个序列的长度的平方和）
-    train_dataset_tokens = sum(len(sequence) ** 2 for sequence in train_dataset.music_sequences)
+    train_dataset_tokens = sum(len(sequence) for sequence in train_dataset.music_sequences)
     if args.val_dataset:
-        val_dataset_tokens = sum(len(sequence) ** 2 for sequence in val_dataset.music_sequences)
+        val_dataset_tokens = sum(len(sequence) for sequence in val_dataset.music_sequences)
 
     # 开始训练模型
     for epoch in range(args.num_epochs):

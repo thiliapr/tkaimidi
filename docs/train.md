@@ -21,18 +21,18 @@
 * `<num_epochs>`: 训练的总轮数。
 * `<ckpt_path>`: 检查点保存路径。
 * `-t <train_dataset>`: 训练集路径，可以指定多个数据集。
-* `-v <val_dataset>`: 验证集路径（可选）。
-* `-m <min-sequence-length>`: 最小序列长度，默认为 64。
-* `-e <max-sequence-length>`: 最大序列长度，默认为 2^17。
-* `-b <train-max-batch-size>`: 训练最大批次大小，默认为 4096^2。
-* `-q <val-max-batch-size>`: 验证最大批次大小，默认为 2 \* 4096^2。
-* `-l <learning-rate>`: 学习率，默认为 1e-2。
-* `-w <weight-decay>`: 权重衰减系数，默认为 1e-2。
-* `-n <num-heads>`: 多头注意力的头数量，默认为 12。
-* `-d <dim-head>`: 注意力头的维度，默认为 64。
-* `-f <dim-feedforward>`: 前馈层的维度，默认为 2048。
-* `-s <num-layers>`: Transformer 编码器的层数，默认为 12。
-* `-o <dropout>`: Dropout 概率，默认为 0.1。
+* `-v <val_dataset>`: 验证集路径。
+* `-m <min-sequence-length>`: 最小序列长度
+* `-e <max-sequence-length>`: 最大序列长度
+* `-b <train-max-batch-size>`: 训练时，每个批次的序列长度的和上限。
+* `-q <val-max-batch-size>`: 验证时，每个批次的序列长度的和上限。
+* `-l <learning-rate>`: 学习率
+* `-w <weight-decay>`: 权重衰减系数
+* `-n <num-heads>`: 多头注意力的头数量
+* `-d <dim-head>`: 注意力头的维度
+* `-f <dim-feedforward>`: 前馈层的维度
+* `-s <num-layers>`: Transformer 编码器的层数
+* `-o <dropout>`: Dropout 概率
 
 ## 结语
 
