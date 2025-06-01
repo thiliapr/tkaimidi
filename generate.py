@@ -30,7 +30,7 @@ if "get_ipython" not in globals():
     from tokenizer import data_to_str, str_to_data
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def generate_sheet(
     prompt: str,
     model: MidiNet,

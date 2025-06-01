@@ -305,7 +305,7 @@ def train(
     return losses, oom_shapes
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def validate(
     model: MidiNet,
     dataloader: DataLoader,
