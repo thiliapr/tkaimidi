@@ -515,7 +515,7 @@ def main():
     if oom_shapes:
         with open("oom_shapes.txt", "w", encoding="utf-8") as f:
             f.write("Shape (e.g: Batch Size x Sequence Length)\n")
-            f.writelines(f"{batch_size} x {sequence_length}" for batch_size, sequence_length in oom_shapes)
+            f.write("\n".join(f"{batch_size} x {sequence_length}" for batch_size, sequence_length in oom_shapes))
 
     # 保存当前模型的检查点
     save_checkpoint(model, optimizer.state_dict(), metrics, args.ckpt_path)

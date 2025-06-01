@@ -23,7 +23,7 @@ EXAMPLE_MIDI = [(45, 0), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (
 
 # 在非 Jupyter 环境下导入常量、模型、检查点、工具、分词库
 if "get_ipython" not in globals():
-    from constants import DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, LOOKAHEAD_COUNT
+    from constants import KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, LOOKAHEAD_COUNT
     from model import MidiNet
     from checkpoint import load_checkpoint
     from utils import midi_to_notes, notes_to_sheet, sheet_to_notes, notes_to_track
