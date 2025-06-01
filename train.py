@@ -285,15 +285,18 @@ def train(
             losses.append(loss.item())  # 累积训练损失
             progress_bar.set_postfix(loss=loss.item())  # 更新进度条
         except torch.OutOfMemoryError:
-            oom_shapes.append(list(inputs.shape))  # 记录OOM时的输入形状
+            # 记录OOM时的输入形状
+            oom_shapes.append(list(inputs.shape))
 
+            # 消除引用，方便垃圾回收
             del inputs, labels
             try:
                 del outputs, loss
             except UnboundLocalError:
                 pass
 
-            empty_cache()  # 清理缓存以释放内存
+            # 清理缓存以释放内存
+            empty_cache()
 
         # 更新进度条
         progress_bar.update(progress_n)
