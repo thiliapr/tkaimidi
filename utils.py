@@ -320,10 +320,10 @@ def empty_cache():
     import torch
     import gc
 
+    # 执行 Python 垃圾回收
+    gc.collect()
+
     # 检查是否有可用的 CUDA 设备
     if torch.cuda.is_available():
         # 仅在 CUDA 设备上调用 empty_cache()
         torch.cuda.empty_cache()
-
-    # 执行 Python 垃圾回收
-    gc.collect()

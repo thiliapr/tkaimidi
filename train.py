@@ -290,11 +290,7 @@ def train(
             oom_shapes.append(list(inputs.shape))
 
             # 消除引用，方便垃圾回收
-            del inputs, labels
-            try:
-                del outputs, loss
-            except UnboundLocalError:
-                pass
+            inputs = labels = outputs = loss = None
 
             # 清理缓存以释放内存
             empty_cache()
