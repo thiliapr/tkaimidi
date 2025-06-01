@@ -371,18 +371,17 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
         img_path: 图形保存的文件路径，可以是字符串或Path对象。
     """
     # 创建图形和坐标轴
-    fig, ax1 = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     # 计算验证点的x坐标（每个epoch的起始位置）
-    val_iteration_points = []  # 存储每个epoch的起始迭代次数
-    current_iteration = 0  # 当前累计的迭代次数
-    for epoch in metrics["train_loss"]:
-        val_iteration_points.append(current_iteration)
+    current_iteration = len(metrics["train_loss"][0])  # 当前累计的迭代次数
+    val_iteration_points = [current_iteration]  # 存储每个epoch的起始迭代次数
+    for epoch in metrics["train_loss"][1:]:
         current_iteration += len(epoch)  # 累加当前epoch的迭代次数
+        val_iteration_points.append(current_iteration)
 
-    # 计算训练损失曲线的x坐标偏移量（0.5个epoch的位置）
-    train_x_offset = sum(len(epoch_losses) for epoch_losses in metrics["train_loss"]) / len(metrics["train_loss"]) / 2
-    train_x = [x + train_x_offset for x in val_iteration_points]
+    # 计算训练损失曲线的x坐标（偏移半个epoch）
+    train_x = [val_iteration_points[i] - len(train_loss) / 2 for i, train_loss in enumerate(metrics["train_loss"])]
 
     # 计算训练损失的统计量
     train_loss_avg = [np.mean(epoch_losses) for epoch_losses in metrics["train_loss"]]
@@ -390,8 +389,8 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
     train_loss_lower = [train_loss_avg[i] - np.std(epoch_losses) for i, epoch_losses in enumerate(metrics["train_loss"])]
 
     # 绘制训练损失曲线和标准差区间
-    ax1.plot(train_x, train_loss_avg, label="Train Loss", color="red", linestyle="-", marker=".")
-    ax1.fill_between(train_x, train_loss_upper, train_loss_lower, color="red", alpha=0.2)
+    ax.plot(train_x, train_loss_avg, label="Train Loss", color="red", linestyle="-", marker=".")
+    ax.fill_between(train_x, train_loss_upper, train_loss_lower, color="red", alpha=0.2)
 
     # 计算验证损失的统计量
     val_loss_avg = [np.mean(epoch_losses) for epoch_losses in metrics["val_loss"]]
@@ -399,17 +398,20 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
     val_loss_lower = [val_loss_avg[i] - np.std(epoch_losses) for i, epoch_losses in enumerate(metrics["val_loss"])]
 
     # 绘制验证损失曲线和标准差区间
-    ax1.plot(val_iteration_points, val_loss_avg, label="Validation Loss", color="blue", linestyle="-", marker=".")
-    ax1.fill_between(val_iteration_points, val_loss_upper, val_loss_lower, color="blue", alpha=0.2)
+    ax.plot(val_iteration_points, val_loss_avg, label="Validation Loss", color="blue", linestyle="-", marker=".")
+    ax.fill_between(val_iteration_points, val_loss_upper, val_loss_lower, color="blue", alpha=0.2)
+
+    # 设置X轴为整数刻度
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
 
     # 设置坐标轴标签和标题
-    ax1.set_ylabel("Loss")
-    ax1.set_xlabel("Iteration")
-    ax1.set_title("Training Process")
+    ax.set_ylabel("Loss")
+    ax.set_xlabel("Iteration")
+    ax.set_title("Training Process")
 
     # 添加图例和网格
-    ax1.legend(loc="upper right")
-    ax1.grid(True, linestyle="--", alpha=0.5)
+    ax.legend(loc="upper right")
+    ax.grid(True, linestyle="--", alpha=0.5)
 
     # 保存并展示图形
     plt.tight_layout()
