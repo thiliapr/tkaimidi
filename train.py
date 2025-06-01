@@ -284,7 +284,7 @@ def train(
 
             losses.append(loss.item())  # 累积训练损失
             progress_bar.set_postfix(loss=loss.item())  # 更新进度条
-        except torch.cuda.OutOfMemoryError:
+        except torch.OutOfMemoryError:
             oom_shapes.append(list(inputs.shape))  # 记录OOM时的输入形状
 
             del inputs, labels
