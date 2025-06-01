@@ -17,8 +17,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from torch import nn, optim
 from torch.nn import DataParallel, functional as F
-from torch.utils.data import Dataset, DataLoader, Sampler, SequentialSampler
+from torch.utils.data import Dataset, DataLoader, Sampler
 from transformers import PreTrainedTokenizerFast
+from typing import Optional
 
 # 解除线程数量限制
 import os
@@ -48,11 +49,6 @@ class MidiDataset(Dataset):
     2. 将 MIDI 文件转换为音符序列
     3. 将音符序列分割为指定长度的训练样本
     4. 提供数据集大小和索引访问功能
-
-    Attributes:
-        all_music_data: 存储所有音乐文件的数据(原始字符串格式)
-        music_sequences: 存储每个训练序列的元信息(文件索引、起始位置、长度)
-        tokenizer: 用于将音乐数据转换为模型输入的分词器
 
     Args:
         midi_dirs: 包含 MIDI/JSON 文件的目录列表
@@ -128,53 +124,40 @@ class MidiDataset(Dataset):
         return len(self.music_sequences)
 
     def __getitem__(self, index: int):
-        sequence = self.music_sequences[index]
-        return torch.tensor(sequence[:-1], dtype=int), torch.tensor(sequence[1:], dtype=int)
+        sequence = torch.tensor(self.music_sequences[index], dtype=int)
+        return sequence[:-1], sequence[1:]
 
 
 class MidiDatasetSampler(Sampler[list[int]]):
     """
     用于根据MIDI数据的长度动态分批的采样器类，适配最大token数限制。
 
-    该采样器会根据给定的基础采样器顺序（如SequentialSampler或DistributedSampler），
-    获取数据集中所有样本的长度信息，并按序列长度排序，确保每个批次中样本的
-    总token数平方和不超过预设的max_batch_tokens。较长的序列可能会被跳过。
+    该采样器会根据给定的数据集，获取数据集中所有样本的长度信息，并按序列长度排序，
+    确保每个批次中样本的总token数平方和不超过预设的`max_batch_tokens`。
+    较长的序列可能会被跳过。
 
     每个批次被打乱顺序，以提升模型训练的泛化能力。
 
     Args:
-        sampler: 一个返回索引的基础采样器（如RandomSampler）
-        dataset: 一个包含MIDI音乐序列的数据集对象，要求具备music_sequences属性
+        dataset: 一个包含MIDI音乐序列的数据集对象，要求具备`music_sequences`属性
         max_batch_tokens: 一个整数，指定每个批次中最大token平方和限制
 
     Returns:
         一个批次索引列表的迭代器，每个元素是一个样本索引组成的列表
-
-    Examples:
-        sampler = RandomSampler(dataset)
-        batch_sampler = MidiDatasetSampler(sampler, dataset, max_batch_tokens=4096)
-        for batch_indices in batch_sampler:
-            batch = [dataset[i] for i in batch_indices]
     """
 
-    def __init__(self, sampler: Sampler[int], dataset: MidiDataset, max_batch_tokens: int):
-        self.sampler = sampler
+    def __init__(self, dataset: MidiDataset, max_batch_tokens: int):
         self.dataset = dataset
         self.max_batch_tokens = max_batch_tokens
 
     def __iter__(self):
-        # 获取基础采样器的所有索引
-        indices = list(self.sampler)
-
         # 存储最终的所有批次
         all_batches = []
         current_batch = []
         current_token_sum = 0
 
         # 计算每个样本的序列长度 (index, length)，用于后续排序
-        indexed_lengths = [
-            (index, len(self.dataset.music_sequences[index])) for index in indices
-        ]
+        indexed_lengths = [(index, len(sequence)) for index, sequence in enumerate(self.dataset.music_sequences)]
 
         # 根据长度升序排序，长度相同时使用随机扰动避免固定排序
         sorted_indices = sorted(
@@ -226,12 +209,12 @@ def train(
     optimizer: optim.Adam,
     vocab_size: int,
     pad_token: int = 0,
-    device: torch.device = None,
-    show_progress: bool = True
-) -> list[float]:
+    dataset_tokens: Optional[int] = None,
+    device: torch.device = None
+) -> tuple[list[float], list[tuple[int, int]]]:
     """
     训练模型的函数。
-    此函数进行一轮训练，逐步优化模型参数，输出训练损失。
+    此函数进行一轮训练，逐步优化模型参数，输出训练损失和触发OOM的输入形状。
 
     工作流程:
         1. 初始化数据加载器。
@@ -241,7 +224,7 @@ def train(
         5. 切换模型到训练模式。
         6. 对每个batch进行前向传播、计算损失、反向传播和更新参数。
         7. 累积损失。
-        8. 返回这个epoch的训练损失。
+        8. 返回这个epoch的训练损失和触发OOM的输入形状。
 
     Args:
         model: 需要训练的神经网络模型。
@@ -249,18 +232,23 @@ def train(
         optimizer: 用于优化模型的优化器。
         vocab_size: 词汇表的大小，用于调整输出层的维度。
         pad_token: 填充token的标记，用于忽略计算损失。
+        dataset_tokens: 数据集每个序列长度的平方和。如果没有提供，将不显示进度条。
         device: 指定训练的设备。
-        show_progress: 是否显示加载进度条。
+
+    Notes:
+        - 默认使用混合精度训练（FP16 +梯度缩放）。
+        - 遇到OOM时会自动跳过当前batch并记录输入形状。
 
     Returns:
-        训练损失。
+        - losses: 每个batch的训练损失列表。
+        - oom_shapes: 触发CUDA OOM（内存不足）的输入形状列表，例如 `[[batch_size, seq_len], ...]`。
 
     Examples:
         >>> tokenizer = PreTrainedTokenizerFast.from_pretrained("ckpt/tokenizer")
-        >>> model = MidiNet(len(tokenizer), 768, 12, 2048, 12)
+        >>> model = MidiNet(len(tokenizer), 8, 64, 2048, 12)
         >>> optimizer = optim.AdamW(model.parameters(), lr=1e-2, weight_decay=1e-2)
         >>> train(model, dataloader, optimizer, len(tokenizer), tokenizer.pad_token_id)
-        [1.9, 0.89, 0.6, 0.4]
+        ([1.9, 0.89, 0.6, 0.4], [])
     """
     # 清理缓存以释放内存
     empty_cache()
@@ -270,38 +258,43 @@ def train(
 
     # 设置模型为训练模式
     model.train()
-    losses = []  # 初始化损失列表
+
+    # 初始化损失列表、触发OOM的输入形状列表
+    losses = []
+    oom_shapes = []  # shape: [batch_size, seq_len]
 
     # 用于梯度缩放
     scaler = torch.amp.GradScaler()
 
     # 创建进度条，显示训练进度
-    progress_bar = tqdm(total=len(dataloader.dataset), disable=not show_progress)
+    progress_bar = tqdm(total=dataset_tokens, disable=dataset_tokens is None)
     for inputs, labels in dataloader:
-        inputs, labels = inputs.to(device), labels.to(device).view(-1)
+        inputs, labels = inputs.to(device), labels.to(device)
         optimizer.zero_grad()  # 清空梯度
 
         try:
             with torch.amp.autocast(device.type, dtype=torch.float16):
                 outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
-                loss = F.cross_entropy(outputs, labels, ignore_index=pad_token)  # 计算损失
+                loss = F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token)  # 计算损失
 
             scaler.scale(loss).backward()  # 反向传播
             scaler.step(optimizer)  # 更新模型参数
             scaler.update()  # 调整缩放因子
+
+            losses.append(loss.item())  # 累积训练损失
+            progress_bar.set_postfix(loss=loss.item())  # 更新进度条
         except torch.cuda.OutOfMemoryError:
-            print(f"OutOfMemoryError: inputs.shape={inputs.shape}")
+            oom_shapes.append(list(inputs.shape))  # 记录OOM时的输入形状
             empty_cache()  # 清理缓存以释放内存
 
         # 更新进度条
-        progress_bar.set_postfix(loss=loss.item())
-        progress_bar.update(inputs.size(0))
+        progress_bar.update(((labels != pad_token).sum(dim=1) + 1).pow(2).sum().item())
 
-        # 累积训练损失
-        losses.append(loss.item())
+    # 关闭进度条
+    progress_bar.close()
 
-    # 返回训练损失
-    return losses
+    # 返回训练损失和OOM输入形状
+    return losses, oom_shapes
 
 
 @torch.no_grad()
@@ -310,8 +303,8 @@ def validate(
     dataloader: DataLoader,
     vocab_size: int,
     pad_token: int = 0,
-    device: torch.device = None,
-    show_progress: bool = True
+    dataset_tokens: Optional[int] = None,
+    device: torch.device = None
 ) -> list[float]:
     """
     对模型进行验证，返回平均损失和平均困惑度。
@@ -324,8 +317,8 @@ def validate(
         dataloader: 验证数据加载器。
         vocab_size: 词表大小，用于 reshape 输出。
         pad_token: padding 的 token 值，用于掩码处理和损失忽略。
+        dataset_tokens: 数据集每个序列长度的平方和。如果没有提供，将不显示进度条。
         device: 计算设备。
-        show_progress: 是否显示加载进度条。
 
     Returns:
         验证损失。
@@ -333,23 +326,26 @@ def validate(
     # 清理缓存以释放内存
     empty_cache()
 
-    # 初始化损失、困惑度列表
+    # 初始化损失列表
     losses = []
 
     # 遍历整个验证集，不进行梯度计算
-    progress_bar = tqdm(total=len(dataloader.dataset), disable=not show_progress)
+    progress_bar = tqdm(total=dataset_tokens, disable=dataset_tokens is None)
     for inputs, labels in dataloader:
         # 将输入移动到计算设备
-        inputs, labels = inputs.to(device), labels.to(device).view(-1)
+        inputs, labels = inputs.to(device), labels.to(device)
 
         # 模型前向传播，得到输出并 reshape 成二维张量
         outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)
 
         # 计算并记录损失
-        losses.extend(F.cross_entropy(outputs, labels, ignore_index=pad_token, reduction="none").tolist())
+        losses.extend(F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token, reduction="none").tolist())
 
         # 更新进度条
-        progress_bar.update(inputs.size(0))
+        progress_bar.update(((labels != pad_token).sum(dim=1) + 1).pow(2).sum().item())
+
+    # 关闭进度条
+    progress_bar.close()
 
     # 返回损失
     return losses
@@ -428,7 +424,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-m", "--min-sequence-length", default=DEFAULT_MIN_SEQUENCE_LENGTH, type=int, help="最小序列长度，小于该长度的样本不会被训练")
     parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断")
-    parser.add_argument("-b", "--max-batch-tokens", default=4096 ** 2, type=int, help="每个批次的序列长度的平方和上限")
+    parser.add_argument("-b", "--train-max-batch-tokens", default=4096 ** 2, type=int, help="训练时，每个批次的序列长度的平方和上限")
+    parser.add_argument("-q", "--val-max-batch-tokens", default=2 * 4096 ** 2, type=int, help="验证时，每个批次的序列长度的平方和上限")
     parser.add_argument("-l", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率")
     parser.add_argument("-w", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数")
     parser.add_argument("-n", "--num-heads", default=DEFAULT_NUM_HEADS, type=int, help="多头注意力中的注意力头数量")
@@ -453,12 +450,12 @@ def main():
 
     # 加载训练集并创建数据加载器
     train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
-    train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(SequentialSampler(train_dataset), train_dataset, args.max_batch_tokens), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
+    train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(train_dataset, args.train_max_batch_tokens), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 如果有的话，加载验证集并创建数据加载器
     if args.val_dataset:
         val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
-        val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(SequentialSampler(val_dataset), val_dataset, args.max_batch_tokens), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
+        val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(val_dataset, args.val_max_batch_tokens), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 获取设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -486,20 +483,31 @@ def main():
     if optimizer_state_dict:
         optimizer.load_state_dict(optimizer_state_dict)
 
+    # 统计数据集的数据量（每个序列的长度的平方和）
+    train_dataset_tokens = sum(len(sequence) ** 2 for sequence in train_dataset.music_sequences)
+    if args.val_dataset:
+        val_dataset_tokens = sum(len(sequence) ** 2 for sequence in val_dataset.music_sequences)
+
     # 开始训练模型
     for epoch in range(args.num_epochs):
         # 训练并添加损失到指标
-        train_loss = train(model, train_loader, optimizer, len(tokenizer), tokenizer.pad_token_id, device)
+        train_loss, oom_shapes = train(model, train_loader, optimizer, len(tokenizer), tokenizer.pad_token_id, train_dataset_tokens, device)
         metrics["train_loss"].append(train_loss)
 
         # 如果指定了验证集，就进行验证，否则跳过验证并设置验证损失为 NaN
         if args.val_dataset:
-            val_loss = validate(model, val_loader, len(tokenizer), tokenizer.pad_token_id, device)
+            val_loss = validate(model, val_loader, len(tokenizer), tokenizer.pad_token_id, val_dataset_tokens, device)
         else:
             val_loss = [float("nan")]
 
         # 添加验证损失到指标
         metrics["val_loss"].append(val_loss)
+
+    # 保存最后一次训练时，使内存爆炸的张量的形状
+    if oom_shapes:
+        with open("oom_shapes.txt", "w", encoding="utf-8") as f:
+            f.write("Shape (e.g: Batch Size x Sequence Length)")
+            f.writelines(f"{batch_size} x {sequence_length}" for batch_size, sequence_length in oom_shapes)
 
     # 保存当前模型的检查点
     save_checkpoint(model, optimizer.state_dict(), metrics, args.ckpt_path)
