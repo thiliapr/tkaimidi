@@ -270,6 +270,7 @@ def train(
     progress_bar = tqdm(total=dataset_tokens, disable=dataset_tokens is None)
     for inputs, labels in dataloader:
         inputs, labels = inputs.to(device), labels.to(device)
+        progress_n = ((labels != pad_token).sum(dim=1) + 1).pow(2).sum().item()  # 进度条更新的步数（批次原序列长度的平方和）
         optimizer.zero_grad()  # 清空梯度
 
         try:
@@ -285,10 +286,17 @@ def train(
             progress_bar.set_postfix(loss=loss.item())  # 更新进度条
         except torch.cuda.OutOfMemoryError:
             oom_shapes.append(list(inputs.shape))  # 记录OOM时的输入形状
+
+            del inputs, labels
+            try:
+                del outputs, loss
+            except UnboundLocalError:
+                pass
+
             empty_cache()  # 清理缓存以释放内存
 
         # 更新进度条
-        progress_bar.update(((labels != pad_token).sum(dim=1) + 1).pow(2).sum().item())
+        progress_bar.update(progress_n)
 
     # 关闭进度条
     progress_bar.close()
