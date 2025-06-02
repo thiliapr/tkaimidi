@@ -226,8 +226,8 @@ class MidiNetLayer(nn.Module):
         )
 
         # 使用 ScaleNorm 归一化，替代 LayerNorm 以提升效率和性能
-        self.norm1 = ScaleNorm(dim_model)
-        self.norm2 = ScaleNorm(dim_model)
+        self.norm1 = ScaleNorm(dim_model, device=device)
+        self.norm2 = ScaleNorm(dim_model, device=device)
 
         # 添加 Dropout 防止过拟合
         self.dropout = nn.Dropout(dropout)
