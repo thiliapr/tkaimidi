@@ -159,6 +159,7 @@ class MidiDatasetSampler(Sampler[list[int]]):
         self.iter = None
 
     def total_tokens(self) -> int:
+        "返回这次迭代的总token数（包括pad）"
         if not self.iter:
             iter(self)
         return self.iter.total_tokens
@@ -617,6 +618,7 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
 
 
 def main():
+    "主函数，负责调配多进程训练"
     # 解析命令行参数
     args = parse_args()
 
