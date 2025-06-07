@@ -14,6 +14,7 @@ import json
 import itertools
 import os
 from multiprocessing import cpu_count
+import re
 from typing import Optional, Iterator
 import mido
 import torch
@@ -161,13 +162,20 @@ class MidiDatasetSampler(Sampler[list[int]]):
         self.dataset = dataset
         self.max_batch_tokens = max_batch_tokens
         self.sampler = sampler
-        self.iter = []
+        self.iter = None
+
+    def total_tokens(self) -> int:
+        if not self.iter:
+            iter(self)
+        return self.iter.total_tokens
 
     def __iter__(self) -> "MidiDatasetSamplerIter":
         self.iter = MidiDatasetSamplerIter(self.dataset, self.max_batch_tokens, self.sampler)
         return self.iter
 
     def __len__(self) -> int:
+        if not self.iter:
+            iter(self)
         return len(self.iter)
 
 
@@ -207,31 +215,36 @@ class MidiDatasetSamplerIter(Iterator[list[int]]):
 
         batches: list[list[int]] = []
         current_batch: list[int] = []
+        self.total_tokens = 0
 
         for idx, seq_len in sorted_pairs:
             # 过长样本单独为一个批次
-            if seq_len > max_batch_tokens:
+            if seq_len - 1 > max_batch_tokens:
+                # 这里（以及下面）减去 1 是因为 inputs 的维度始终比原序列少 1（input = seq[:-1], lables = seq[1:]）
+                self.total_tokens += seq_len - 1
                 batches.append([idx])
                 continue
 
             # 预测当前批次加上该样本后的 token 总数
-            estimated_tokens = (len(current_batch) + 1) * seq_len
+            estimated_tokens = (len(current_batch) + 1) * (seq_len - 1)
             if estimated_tokens > max_batch_tokens:
-                if current_batch:
-                    batches.append(current_batch)
+                # 所有样本已按序列长度升序排序，因此 current_batch[-1] 一定是该批次中最长的
+                self.total_tokens += len(current_batch) * (len(self.dataset.music_sequences[current_batch[-1]]) - 1)
+                batches.append(current_batch)
                 current_batch = []
 
             current_batch.append(idx)
 
         if current_batch:
+            self.total_tokens += (len(self.dataset.music_sequences[current_batch[-1]]) - 1) * len(current_batch)
             batches.append(current_batch)
 
         # 打乱批次顺序，增加训练扰动
         random.shuffle(batches)
 
-        # 存储批次列表迭代器
+        # 存储批次列表迭代器和长度
         self._batch_iter = iter(batches)
-        self._batches = batches  # 保存用于 __len__
+        self._batch_count = len(batches)
 
     def __iter__(self):
         return self
@@ -240,11 +253,7 @@ class MidiDatasetSamplerIter(Iterator[list[int]]):
         return next(self._batch_iter)
 
     def __len__(self) -> int:
-        # 返回总的批次数，或者总 token 数（也可以改为返回批次数）
-        return sum(
-            max(len(self.dataset.music_sequences[i]) for i in batch) * len(batch)
-            for batch in self._batches
-        )
+        return self._batch_count
 
 
 def sequence_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor]], pad_token: int):
@@ -320,10 +329,10 @@ def train(
 
     # 创建进度条，显示训练进度
     dataloader_iter = iter(dataloader)
-    progress_bar = tqdm(total=len(dataloader), disable=not show_progress)
+    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens, disable=not show_progress)
     for inputs, labels in dataloader_iter:
         inputs, labels = inputs.to(device), labels.to(device)
-        progress_n = ((labels != pad_token).sum(dim=1) + 1).sum().item()  # 进度条更新的步数（批次原序列长度的和）
+        progress_n = inputs.size(0) * inputs.size(1)  # 进度条更新的步数
         optimizer.zero_grad()  # 清空梯度
 
         try:
@@ -364,8 +373,8 @@ def validate(
     dataloader: DataLoader,
     vocab_size: int,
     pad_token: int = 0,
-    dataset_tokens: Optional[int] = None,
-    device: Optional[torch.device] = None
+    device: Optional[torch.device] = None,
+    show_progress: bool = True
 ) -> list[float]:
     """
     对模型进行验证，返回平均损失和平均困惑度。
@@ -378,8 +387,8 @@ def validate(
         dataloader: 验证数据加载器。
         vocab_size: 词表大小，用于 reshape 输出。
         pad_token: padding 的 token 值，用于掩码处理和损失忽略。
-        dataset_tokens: 数据集每个序列长度的平方和。如果没有提供，将不显示进度条。
         device: 计算设备。
+        show_progress: 是否显示进度条。
 
     Returns:
         验证损失。
@@ -391,8 +400,9 @@ def validate(
     losses = []
 
     # 遍历整个验证集，不进行梯度计算
-    progress_bar = tqdm(total=dataset_tokens, disable=dataset_tokens is None)
-    for inputs, labels in dataloader:
+    dataloader_iter = iter(dataloader)
+    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens, disable=not show_progress)
+    for inputs, labels in dataloader_iter:
         # 将输入移动到计算设备
         inputs, labels = inputs.to(device), labels.to(device)
 
@@ -405,7 +415,7 @@ def validate(
             losses.extend(F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token, reduction="none").tolist())
 
         # 更新进度条
-        progress_bar.update(((labels != pad_token).sum(dim=1) + 1).sum().item())
+        progress_bar.update(inputs.size(0) * inputs.size(1))
 
     # 关闭进度条
     progress_bar.close()
