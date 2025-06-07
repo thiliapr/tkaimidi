@@ -562,12 +562,12 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
     for epoch in range(args.num_epochs):
         # 训练一轮模型
         train_sampler.set_epoch(epoch)
-        train_loss, oom_shapes = train(model, train_loader, optimizer, len(tokenizer), tokenizer.pad_token_id, device)
+        train_loss, oom_shapes = train(model, train_loader, optimizer, len(tokenizer), tokenizer.pad_token_id, device, show_progress=rank == 0)
 
         # 如果指定了验证集，就进行验证，否则跳过验证并设置验证损失为 NaN
         if args.val_dataset:
             val_sampler.set_epoch(epoch)
-            val_loss = validate(model, val_loader, len(tokenizer), tokenizer.pad_token_id, device)
+            val_loss = validate(model, val_loader, len(tokenizer), tokenizer.pad_token_id, device, show_progress=rank == 0)
         else:
             val_loss = [float("nan")]
 
