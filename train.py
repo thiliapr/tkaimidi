@@ -575,14 +575,14 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
             val_loss = [float("nan")]
 
         # 将所有进程的损失汇集
-        if rank == 0:
-            all_train_loss = [None for _ in range(world_size)]
-            all_val_loss = [None for _ in range(world_size)]
-            dist.gather_object(train_loss, all_train_loss)
-            dist.gather_object(val_loss, all_val_loss)
-        else:
-            dist.gather_object(train_loss)
-            dist.gather_object(val_loss)
+        print(f"[Rank {rank}] Arrived ckpt 0")
+        all_train_loss = [None for _ in range(world_size)]
+        all_val_loss = [None for _ in range(world_size)]
+        dist.barrier()
+        print(f"[Rank {rank}] Arrived ckpt 0.5")
+        dist.all_gather_object(all_train_loss, train_loss)
+        dist.all_gather_object(all_val_loss, val_loss)
+        print(f"[Rank {rank}] Arrived ckpt 1")
 
         # 计算并添加损失平均值和标准差到指标
         if rank == 0:
@@ -592,11 +592,10 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
             metrics["val_loss"].append({"mean": all_val_loss.mean(), "std_dev": all_val_loss.std()})
 
     # 将所有进程中使内存爆炸的张量的形状汇集
-    if rank == 0:
-        all_oom_shapes = [None for _ in range(world_size)]
-        dist.gather_object(oom_shapes, all_oom_shapes)
-    else:
-        dist.gather_object(oom_shapes)
+    all_oom_shapes = [None for _ in range(world_size)]
+    dist.barrier()
+    dist.all_gather_object(all_oom_shapes, oom_shapes)
+    print(f"[Rank {rank}] Arrived ckpt 2")
 
     if rank == 0:
         # 保存最后一次训练时使内存爆炸的张量的形状
@@ -611,6 +610,7 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
 
         # 绘制训练过程中的损失曲线
         plot_training_process(metrics, "statistics.png")
+    print(f"[Rank {rank}] Arrived ckpt 3")
 
     # 释放资源
     if world_size > 1:
@@ -626,7 +626,7 @@ def main():
     world_size = torch.cuda.device_count()
     if world_size > 1:
         os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = "12355"
+        os.environ["MASTER_PORT"] = str(random.randint(2 ** 15, 2 ** 16 - 1))
         mp.spawn(_mp_fn, (world_size, args), nprocs=world_size)
     else:
         _mp_fn(0, 1, args)
