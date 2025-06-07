@@ -492,7 +492,7 @@ def parse_args() -> argparse.Namespace:
 def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
     # 部署分布式训练环境
     if world_size > 1:
-        dist.init_process_group(backend="nccl", init_method="env://")
+        dist.init_process_group(backend="nccl", world_size=world_size, rank=rank)
 
     # 获取设备
     device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
