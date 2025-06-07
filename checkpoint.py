@@ -19,23 +19,20 @@ if "get_ipython" not in globals():
     from model import MidiNet, MidiNetConfig
 
 
-def save_checkpoint(model: MidiNet, optimizer_state_dict: dict[str, Any], metrics: dict[str, list], path: pathlib.Path):
+def save_checkpoint(model_state_dict: dict[str, Any], optimizer_state_dict: dict[str, Any], metrics: dict[str, list], path: pathlib.Path):
     """
     保存模型的检查点到指定路径，包括模型的权重以及训练的进度信息。
 
     Args:
-        model: 要保存的模型实例
-        optimizer_state_dict: 要保存的优化器实例
+        optimizer_state_dict: 要保存的模型的状态字典
+        optimizer_state_dict: 要保存的优化器的状态字典
         metrics: 指标
         path: 保存检查点的目录路径
     """
     path.mkdir(parents=True, exist_ok=True)  # 确保目标目录存在，如果不存在则创建
 
     model = model.cpu()  # 将模型移到CPU进行保存
-    # 处理DataParallel情况
-    if isinstance(model, nn.DataParallel):
-        model = model.module
-    torch.save(model.state_dict(), path / "model.pth")  # 保存模型权重
+    torch.save(model_state_dict, path / "model.pth")  # 保存模型权重
     torch.save(optimizer_state_dict, path / "optimizer.pth")  # 保存优化器权重
 
     # 保存训练信息

@@ -14,7 +14,6 @@ import json
 import itertools
 import os
 from multiprocessing import cpu_count
-import re
 from typing import Optional, Iterator
 import mido
 import torch
@@ -330,6 +329,8 @@ def train(
     # 创建进度条，显示训练进度
     dataloader_iter = iter(dataloader)
     progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens(), disable=not show_progress)
+
+    # 遍历整个训练集
     for inputs, labels in dataloader_iter:
         inputs, labels = inputs.to(device), labels.to(device)
         progress_n = inputs.size(0) * inputs.size(1)  # 进度条更新的步数
@@ -396,10 +397,13 @@ def validate(
     # 清理缓存以释放内存
     empty_cache()
 
+    # 设置模型为评估模式
+    model.eval()
+
     # 初始化损失列表
     losses = []
 
-    # 遍历整个验证集，不进行梯度计算
+    # 遍历整个验证集
     dataloader_iter = iter(dataloader)
     progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens(), disable=not show_progress)
     for inputs, labels in dataloader_iter:
@@ -412,7 +416,7 @@ def validate(
             outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)
 
             # 计算并记录损失
-            losses.extend(F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token, reduction="none").tolist())
+            losses.append(F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token).item())
 
         # 更新进度条
         progress_bar.update(inputs.size(0) * inputs.size(1))
@@ -436,7 +440,7 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
         img_path: 图形保存的文件路径，可以是字符串或Path对象。
     """
     # 创建图形和坐标轴
-    fig, ax = plt.subplots(figsize=(10, 6))
+    _, ax = plt.subplots(figsize=(10, 6))
 
     # 计算验证点的x坐标（每个epoch的起始位置）
     current_iteration = len(metrics["train_loss"][0]["count"])  # 当前累计的迭代次数
@@ -510,11 +514,13 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
         dist.init_process_group(backend="nccl", world_size=world_size, rank=rank)
 
     # 获取设备
-    device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device(f"cuda:{rank}")
+    else:
+        device = torch.device("cpu")
 
     # 清理缓存以释放内存
-    with device:
-        empty_cache()
+    empty_cache()
 
     # 加载检查点
     tokenizer, model_state_dict, optimizer_state_dict, metrics = load_checkpoint_train(args.ckpt_path)
@@ -536,7 +542,8 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
     # 加载模型状态
     try:
         model.load_state_dict(model_state_dict)
-    except RuntimeError:
+    except RuntimeError as e:
+        print(f"[Rank {rank}] 加载模型状态时失败: {e}")
         metrics = {"train_loss": [], "val_loss": []}
 
     # 转移模型到设备
@@ -544,7 +551,7 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
 
     # 用 DDP 包装模型
     if world_size > 1:
-        model = nn.parallel.DistributedDataParallel(model)
+        model = nn.parallel.DistributedDataParallel(model, device_ids=[rank])
 
     # 创建优化器
     optimizer = optim.AdamW(model.parameters())
@@ -572,25 +579,39 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
             val_loss = [float("nan")]
 
         # 将所有进程的损失汇集
-        train_loss = np.array(itertools.chain(dist.gather_object(train_loss)))
-        val_loss = np.array(itertools.chain(dist.gather_object(val_loss)))
+        if rank == 0:
+            all_train_loss = [None for _ in range(world_size)]
+            all_val_loss = [None for _ in range(world_size)]
+            dist.gather_object(train_loss, all_train_loss)
+            dist.gather_object(val_loss, all_val_loss)
+        else:
+            dist.gather_object(train_loss)
+            dist.gather_object(val_loss)
 
         # 计算并添加损失平均值和标准差到指标
-        metrics["train_loss"].append({"mean": train_loss.mean(), "std_dev": train_loss.std(), "count": len(train_loss)})
-        metrics["val_loss"].append({"mean": val_loss.mean(), "std_dev": val_loss.std()})
+        if rank == 0:
+            all_train_loss = np.array(itertools.chain(all_train_loss))
+            all_val_loss = np.array(itertools.chain(all_val_loss))
+            metrics["train_loss"].append({"mean": all_train_loss.mean(), "std_dev": all_train_loss.std(), "count": len(all_train_loss)})
+            metrics["val_loss"].append({"mean": all_val_loss.mean(), "std_dev": all_val_loss.std()})
 
     # 将所有进程中使内存爆炸的张量的形状汇集
-    oom_shapes = list(itertools.chain(dist.gather_object(oom_shapes)))
+    if rank == 0:
+        all_oom_shapes = [None for _ in range(world_size)]
+        dist.gather_object(oom_shapes, all_oom_shapes)
+    else:
+        dist.gather_object(oom_shapes)
 
     if rank == 0:
         # 保存最后一次训练时使内存爆炸的张量的形状
-        if oom_shapes:
+        all_oom_shapes = list(itertools.chain(all_oom_shapes))
+        if all_oom_shapes:
             with open("oom_shapes.txt", "w", encoding="utf-8") as f:
                 f.write("Shape (e.g: Batch Size x Sequence Length)\n")
-                f.write("\n".join(f"{batch_size} x {sequence_length}" for batch_size, sequence_length in oom_shapes))
+                f.write("\n".join(f"{batch_size} x {sequence_length}" for batch_size, sequence_length in all_oom_shapes))
 
         # 保存当前模型的检查点
-        save_checkpoint(model, optimizer.state_dict(), metrics, args.ckpt_path)
+        save_checkpoint(model.module.state_dict() if world_size > 1 else model.state_dict(), optimizer.state_dict(), metrics, args.ckpt_path)
 
         # 绘制训练过程中的损失曲线
         plot_training_process(metrics, "statistics.png")
