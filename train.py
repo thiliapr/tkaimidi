@@ -505,13 +505,13 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
     tokenizer, model_state_dict, optimizer_state_dict, metrics = load_checkpoint_train(args.ckpt_path)
 
     # 加载训练集并创建数据加载器
-    train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
+    train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length, show_progress=rank == 0)
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(train_dataset, args.train_max_batch_tokens, train_sampler), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 如果有的话，加载验证集并创建数据加载器
     if args.val_dataset:
-        val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
+        val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length, show_progress=rank == 0)
         val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank)
         val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(val_dataset, args.val_max_batch_tokens, val_sampler), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
@@ -540,7 +540,7 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
 
     # 设置学习率、权重衰减系数
     for group in optimizer.param_groups:
-        group["lr"] = args.lr
+        group["lr"] = args.learning_rate
         group["weight_decay"] = args.weight_decay
 
     # 开始训练模型
