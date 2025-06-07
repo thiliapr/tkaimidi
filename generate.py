@@ -17,6 +17,9 @@ import torch.nn.functional as F
 from transformers import PreTrainedTokenizerFast
 from typing import Iterator, Generator, Optional
 
+from checkpoint import extract_config
+from model import MidiNetConfig
+
 # 内置音乐曲库（爱情买卖）
 EXAMPLE_MIDI = [(45, 0), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (84, 0), (64, 1), (84, 1), (76, 2), (81, 2), (57, 1), (69, 1), (84, 0), (64, 1), (60, 1), (43, 2), (83, 0), (50, 1), (55, 1), (83, 0), (57, 1), (59, 1), (81, 0), (62, 1), (79, 1), (76, 2), (55, 3), (67, 1), (62, 1), (59, 1), (55, 1), (41, 1), (74, 0), (48, 1), (53, 1), (74, 0), (55, 1), (57, 1), (74, 0), (60, 1), (69, 1), (74, 2), (76, 2), (53, 1), (65, 1), (79, 0), (60, 1), (57, 1), (43, 2), (76, 0), (50, 1), (55, 1), (83, 0), (57, 1), (59, 1), (83, 0), (62, 1), (79, 1), (76, 2), (74, 3), (71, 1), (67, 1), (62, 1), (64, 1), (45, 1), (76, 0), (52, 1), (57, 1), (81, 0), (59, 1), (60, 1), (84, 0), (64, 1), (84, 1), (76, 2), (81, 2), (57, 1), (69, 1), (84, 0), (64, 1), (60, 1), (43, 2), (88, 0), (50, 1), (55, 1), (88, 0), (57, 1), (59, 1), (86, 0), (62, 1), (84, 1), (86, 2), (55, 3), (67, 1), (62, 1), (59, 1), (55, 1), (41, 1), (88, 0), (48, 1), (53, 1), (55, 1), (88, 0), (57, 1), (86, 0), (60, 1), (84, 1), (43, 2), (86, 0), (50, 1), (55, 1), (57, 1), (86, 0), (59, 1), (84, 0), (62, 1), (83, 1), (45, 2), (79, 0), (52, 1), (57, 1), (76, 0), (59, 1), (60, 1), (79, 0), (64, 1), (81, 1), (81, 2), (76, 3), (72, 1), (69, 1), (64, 1), (69, 1)]
 
@@ -329,7 +332,7 @@ def main():
     args = parser.parse_args()
 
     # 加载模型的预训练检查点
-    tokenizer, state_dict = load_checkpoint(args.ckpt_path, train=False)
+    tokenizer, state_dict = load_checkpoint(args.ckpt_path)
 
     # 加载音乐生成的提示部分
     prompt_notes = EXAMPLE_MIDI.copy()
@@ -340,17 +343,13 @@ def main():
             print(f"加载指定的 MIDI 文件时出错: {e}\n将选择内置的音乐作为代替。")
 
     # 推导模型参数
-    vocab_size, dim_model = state_dict["embedding.weight"].size()
-    dim_feedforward = state_dict["layers.0.feedforward.0.weight"].size(0)
-    dim_head = (state_dict["layers.0.attention.qkv_proj"].size(1) - dim_model) // 2
-    num_heads = dim_model // dim_head
-    num_layers = len(set(key.split(".")[1] for key in state_dict.keys() if key.startswith("layers.")))
+    vocab_size, num_heads, dim_head, dim_feedforward, num_layers = extract_config(state_dict)
 
     # 打印模型参数
-    print(f"模型参数:\n- 词汇表大小: {vocab_size}\n- 嵌入层维度: {dim_model}\n- 前馈层维度: {dim_feedforward}\n- 注意力头的数量: {num_heads}\n- 层数: {num_layers}\n")
+    print(f"模型参数:\n- 词汇表大小: {vocab_size}\n- 注意力头数: {num_heads}\n- 注意力头的维度: {dim_head}\n- 前馈层维度: {dim_feedforward}\n- 注意力头的数量: {num_heads}\n- 层数: {num_layers}\n")
 
     # 初始化模型并加载状态
-    model = MidiNet(vocab_size, num_heads, dim_head, dim_feedforward, num_layers)
+    model = MidiNet(MidiNetConfig(vocab_size, num_heads, dim_head, dim_feedforward, num_layers))
     model.load_state_dict(state_dict)
 
     # 获取设备

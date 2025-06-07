@@ -12,7 +12,25 @@ import copy
 import torch
 from torch import nn
 from torch.nn import functional as F
-from typing import Optional
+from typing import NamedTuple, Optional
+
+
+class MidiNetConfig(NamedTuple):
+    """
+    MidiNet 的配置。
+
+    Attributes:
+        vocab_size: 词汇表大小。
+        num_heads: 注意力头数量。
+        dim_head: 每个注意力头的维度。
+        dim_feedforward: 前馈网络的隐藏层维度。
+        num_layers: Transformer 层的数量。
+    """
+    vocab_size: int
+    num_heads: int
+    dim_head: int
+    dim_feedforward: int
+    num_layers: int
 
 
 class PositionalEncoding(nn.Module):
@@ -270,40 +288,32 @@ class MidiNet(nn.Module):
     - 使用可选的 Dropout 机制进行正则化。
 
     Args:
-        vocab_size: 词汇表大小。
-        num_heads: 注意力头数量。
-        dim_head: 每个注意力头的维度。
-        dim_feedforward: 前馈网络的隐藏层维度。
-        num_layers: Transformer 层的数量。
+        config: 模型的配置。
         dropout: Dropout 概率。
         device: 模型所在设备。
     """
 
     def __init__(
         self,
-        vocab_size: int,
-        num_heads: int,
-        dim_head: int,
-        dim_feedforward: int,
-        num_layers: int,
+        config: MidiNetConfig,
         dropout: float = 0.1,
         device: torch.device = None
     ):
         super().__init__()
-        self.dim_model = dim_head * num_heads  # 模型总维度
+        self.dim_model = config.dim_head * config.num_heads  # 模型总维度
 
         # 将 token 映射为向量
-        self.embedding = nn.Embedding(vocab_size, self.dim_model, device=device)
+        self.embedding = nn.Embedding(config.vocab_size, self.dim_model, device=device)
 
         # 位置编码
         self.positional_encoding = PositionalEncoding(self.dim_model)
 
         # 堆叠多个 MidiNetLayer 层
-        layer = MidiNetLayer(num_heads, dim_head, dim_feedforward, dropout=dropout, device=device)
-        self.layers = nn.ModuleList(copy.deepcopy(layer) for _ in range(num_layers))
+        layer = MidiNetLayer(config.num_heads, config.dim_head, config.dim_feedforward, dropout=dropout, device=device)
+        self.layers = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_layers))
 
         # 将模型输出映射回 vocab 空间
-        self.output_layer = nn.Linear(self.dim_model, vocab_size, device=device)
+        self.output_layer = nn.Linear(self.dim_model, config.vocab_size, device=device)
 
         # 添加 Dropout 防止过拟合
         self.dropout = nn.Dropout(dropout)

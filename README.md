@@ -41,11 +41,7 @@ python3 generate.py ckpt output.mid
 **注意事项**
 - 值得注意的是，如果你不重新训练分词器，而是从已有检查点复制分词器过来的话，直接运行`train.py`。在这种情况下，检查点最好不要包含`optimizer.pth`、`model.pth`和`metrics.json`（根据经验，如果检查点包含不符合现在参数的模型和检查点的话，可能引发异常）
 - 更进一步，如果你不重新训练分词器，而且只运行`python3 train.py`一次，则不必先提取数据，即直接运行`python3 train.py 15 ckpt -t train_data -v valid_data`。（在这种情况下，先提取数据再训练和直接训练所耗费时间几乎是相等的。不过我个人还是建议不要这样做，毕竟万一你又不满意模型效果想重新训练了呢 :)）
-- 请在命令行输入`python3 file.py --help`获得帮助，或者参见详细的文档
-  + [数据提取](docs/extract.md)
-  + [分词器训练](docs/tokenizer.md)
-  + [模型训练](docs/train.md)
-  + [生成](docs/generate.md)
+- 请在命令行输入`python3 file.py --help`获得帮助
 
 ## 文档
 各个文件的文档见目录`docs`。

@@ -10,27 +10,22 @@
 import argparse
 import pathlib
 import json
+from typing import Iterable, Iterator, Optional, Any, Union
 import mido
 from tokenizers import Tokenizer, models, trainers
 from tokenizers.processors import TemplateProcessing
 from transformers import PreTrainedTokenizerFast
-from typing import Iterator, Optional, Any, Union
-
-# 解除限制
-import os
-from multiprocessing import cpu_count
-os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(cpu_count())
 
 # 根据是否在 Jupyter 环境下导入不同库
 if "get_ipython" in globals():
     from tqdm.notebook import tqdm_notebook as tqdm
 else:
+    from tqdm import tqdm
     from constants import BASE_CHAR_CODE
     from utils import midi_to_notes, notes_to_sheet, empty_cache
-    from tqdm import tqdm
 
 
-def data_to_str(data: Iterator[int]):
+def data_to_str(data: Iterable[int]):
     """
     将整数列表转换为字符串表示
 
@@ -56,7 +51,7 @@ def str_to_data(string: str):
     return [ord(char) - BASE_CHAR_CODE for char in string]
 
 
-def train_sheet_tokenizer(model_data_samples: Iterator[str], vocab_size: int, min_frequency: int):
+def train_sheet_tokenizer(model_data_samples: Iterable[str], vocab_size: int, min_frequency: int):
     """
     训练专门用于处理模型数据的 tokenizer
 
@@ -105,7 +100,7 @@ def train_sheet_tokenizer(model_data_samples: Iterator[str], vocab_size: int, mi
     return wrapped_tokenizer
 
 
-def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2 ** 16, show_progress: bool = True) -> Iterator[Union[int, tuple[int, str]]]:
+def get_samples(midi_dirs: Iterable[pathlib.Path] = (), max_sequence_length: int = 2 ** 16, show_progress: bool = True) -> Iterator[Union[int, tuple[int, str]]]:
     """
     从 MIDI 文件中提取样本，转换为模型输入所需的音符序列。
 
@@ -169,7 +164,7 @@ def get_samples(midi_dirs: list[pathlib.Path] = [], max_sequence_length: int = 2
         yield data["num_notes"], data["data"]
 
 
-def validate(samples: Iterator[tuple[int, str]], tokenizer: PreTrainedTokenizerFast, length: Optional[int] = None) -> tuple[int, float, float]:
+def validate(samples: Iterator[tuple[int, str]], tokenizer: PreTrainedTokenizerFast, length: Optional[int] = None) -> dict[str, Union[int, float]]:
     """
     评估分词器的效果
 
@@ -179,7 +174,7 @@ def validate(samples: Iterator[tuple[int, str]], tokenizer: PreTrainedTokenizerF
         length: 样本列表长度。由于`samples`可能没有`__len__`，所以如有需要请在这里指定
 
     Returns:
-        元组，包含:
+        字典，包含:
         - 总音符数量
         - 平均序列长度占音符总数的百分比
         - 使用的词汇占总词汇表的比例
@@ -244,7 +239,7 @@ def main():
     args.ckpt_path.mkdir(parents=True, exist_ok=True)
 
     # 处理所有MIDI样本文件
-    train_samples = list(get_samples(args.train_samples, max_sequence_length=args.max_sequence_length))[1:]
+    train_samples: list[tuple[int, str]] = list(get_samples(args.train_samples, max_sequence_length=args.max_sequence_length))[1:]
 
     # 清除缓存
     empty_cache()
@@ -262,7 +257,7 @@ def main():
     print(f"分词器已保存到 {tokenizer_path}")
 
     # 输出基本信息
-    print(f"\n训练结果:")
+    print("\n训练结果:")
     print(f"- 词汇表大小: {tokenizer.vocab_size}")
     print(f"- 训练样本数: {len(train_samples)}")
 
