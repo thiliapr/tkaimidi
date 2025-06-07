@@ -329,7 +329,7 @@ def train(
 
     # 创建进度条，显示训练进度
     dataloader_iter = iter(dataloader)
-    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens, disable=not show_progress)
+    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens()(), disable=not show_progress)
     for inputs, labels in dataloader_iter:
         inputs, labels = inputs.to(device), labels.to(device)
         progress_n = inputs.size(0) * inputs.size(1)  # 进度条更新的步数
@@ -401,7 +401,7 @@ def validate(
 
     # 遍历整个验证集，不进行梯度计算
     dataloader_iter = iter(dataloader)
-    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens, disable=not show_progress)
+    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens(), disable=not show_progress)
     for inputs, labels in dataloader_iter:
         # 将输入移动到计算设备
         inputs, labels = inputs.to(device), labels.to(device)
