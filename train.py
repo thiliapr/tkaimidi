@@ -161,9 +161,14 @@ class MidiDatasetSampler(Sampler[list[int]]):
         self.dataset = dataset
         self.max_batch_tokens = max_batch_tokens
         self.sampler = sampler
+        self.iter = []
 
     def __iter__(self) -> "MidiDatasetSamplerIter":
-        return MidiDatasetSamplerIter(self.dataset, self.max_batch_tokens, self.sampler)
+        self.iter = MidiDatasetSamplerIter(self.dataset, self.max_batch_tokens, self.sampler)
+        return self.iter
+
+    def __len__(self) -> int:
+        return len(self.iter)
 
 
 class MidiDatasetSamplerIter(Iterator[list[int]]):
@@ -315,7 +320,7 @@ def train(
 
     # 创建进度条，显示训练进度
     dataloader_iter = iter(dataloader)
-    progress_bar = tqdm(total=len(dataloader_iter), disable=not show_progress)
+    progress_bar = tqdm(total=len(dataloader), disable=not show_progress)
     for inputs, labels in dataloader_iter:
         inputs, labels = inputs.to(device), labels.to(device)
         progress_n = ((labels != pad_token).sum(dim=1) + 1).sum().item()  # 进度条更新的步数（批次原序列长度的和）
