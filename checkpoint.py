@@ -11,12 +11,8 @@ import json
 import pathlib
 from typing import Any
 import torch
-from torch import nn
 from transformers import PreTrainedTokenizerFast
-
-# 在非 Jupyter 环境下导入模型库
-if "get_ipython" not in globals():
-    from model import MidiNet, MidiNetConfig
+from model import MidiNetConfig
 
 
 def save_checkpoint(model_state_dict: dict[str, Any], optimizer_state_dict: dict[str, Any], metrics: dict[str, list], path: pathlib.Path):

@@ -19,26 +19,21 @@ import mido
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm import tqdm
 from torch import nn, optim, distributed as dist, multiprocessing as mp
 from torch.nn import functional as F
 from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, DataLoader, Sampler, DistributedSampler
 from transformers import PreTrainedTokenizerFast
+from constants import DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_LAYERS, DEFAULT_DROPOUT, DEFAULT_WEIGHT_DECAY, DEFAULT_LEARNING_RATE, DEFAULT_MIN_SEQUENCE_LENGTH
+from model import MidiNet, MidiNetConfig
+from checkpoint import load_checkpoint_train, save_checkpoint
+from utils import midi_to_notes, notes_to_sheet, empty_cache
+from tokenizer import data_to_str
 
 # 解除线程数量限制
 os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(cpu_count())
 torch.set_num_threads(cpu_count())
-
-# 根据是否在 Jupyter 环境下导入不同库
-if "get_ipython" in globals():
-    from tqdm.notebook import tqdm_notebook as tqdm
-else:
-    from tqdm import tqdm
-    from constants import DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_LAYERS, DEFAULT_DROPOUT, DEFAULT_WEIGHT_DECAY, DEFAULT_LEARNING_RATE, DEFAULT_MIN_SEQUENCE_LENGTH
-    from model import MidiNet, MidiNetConfig
-    from checkpoint import load_checkpoint_train, save_checkpoint
-    from utils import midi_to_notes, notes_to_sheet, empty_cache
-    from tokenizer import data_to_str
 
 
 class MidiDataset(Dataset):

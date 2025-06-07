@@ -12,14 +12,9 @@ import multiprocessing
 import argparse
 import pathlib
 import mido
-
-# 根据是否在 Jupyter 环境下导入不同库
-if "get_ipython" in globals():
-    from tqdm.notebook import tqdm_notebook as tqdm
-else:
-    from tqdm import tqdm
-    from utils import midi_to_notes, notes_to_sheet
-    from tokenizer import data_to_str
+from tqdm import tqdm
+from utils import midi_to_notes, notes_to_sheet
+from tokenizer import data_to_str
 
 
 def process_midi_to_json(

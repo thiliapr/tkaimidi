@@ -10,10 +10,7 @@
 import math
 import mido
 from typing import Iterator, Optional
-
-# 在非 Jupyter 环境下导入常量库
-if "get_ipython" not in globals():
-    from constants import NATURAL_SCALE, TIME_PRECISION, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, TIME_INTERVAL, LOOKAHEAD_COUNT
+from constants import NATURAL_SCALE, TIME_PRECISION, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, TIME_INTERVAL, LOOKAHEAD_COUNT
 
 
 def notes_to_track(notes: list[int]) -> mido.MidiTrack:

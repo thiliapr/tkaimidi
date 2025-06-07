@@ -12,17 +12,12 @@ import pathlib
 import json
 from typing import Iterable, Iterator, Optional, Any, Union
 import mido
+from tqdm import tqdm
 from tokenizers import Tokenizer, models, trainers
 from tokenizers.processors import TemplateProcessing
 from transformers import PreTrainedTokenizerFast
-
-# 根据是否在 Jupyter 环境下导入不同库
-if "get_ipython" in globals():
-    from tqdm.notebook import tqdm_notebook as tqdm
-else:
-    from tqdm import tqdm
-    from constants import BASE_CHAR_CODE
-    from utils import midi_to_notes, notes_to_sheet, empty_cache
+from constants import BASE_CHAR_CODE
+from utils import midi_to_notes, notes_to_sheet, empty_cache
 
 
 def data_to_str(data: Iterable[int]):
