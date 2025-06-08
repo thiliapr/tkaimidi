@@ -359,6 +359,7 @@ def train(
 
     # 关闭进度条
     progress_bar.close()
+    print(f"[Debug] [pbar={show_progress}] finished training.")
 
     # 返回训练损失和OOM输入形状
     return losses, oom_shapes
