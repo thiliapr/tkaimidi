@@ -11,7 +11,6 @@ import pathlib
 import random
 import argparse
 import json
-import itertools
 import os
 import tempfile
 from multiprocessing import cpu_count
@@ -638,8 +637,8 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
 
         # 计算并添加损失平均值和标准差到指标
         if rank == 0:
-            all_train_loss = np.array(list(itertools.chain(all_train_loss)))
-            all_val_loss = np.array(list(itertools.chain(all_val_loss)))
+            all_train_loss = np.array([loss for rank_loss in all_train_loss for loss in rank_loss])
+            all_val_loss = np.array([loss for rank_loss in all_val_loss for loss in rank_loss])
             metrics["train_loss"].append({"mean": all_train_loss.mean(), "std_dev": all_train_loss.std(), "count": len(all_train_loss)})
             metrics["val_loss"].append({"mean": all_val_loss.mean(), "std_dev": all_val_loss.std()})
 
