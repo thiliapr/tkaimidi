@@ -13,6 +13,7 @@ import argparse
 import json
 import itertools
 import os
+import tempfile
 from multiprocessing import cpu_count
 from typing import Optional, Iterator
 import mido
@@ -315,16 +316,16 @@ def train(
     # 设置模型为训练模式
     model.train()
 
-    # 初始化损失列表、触发OOM的输入形状列表
-    losses = []
-    oom_shapes = []  # shape: [batch_size, seq_len]
-
     # 用于梯度缩放
     scaler = GradScaler()
 
     # 创建进度条，显示训练进度
     dataloader_iter = iter(dataloader)
     progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens(), disable=not show_progress)
+
+    # 初始化损失列表、触发OOM的输入形状列表
+    losses = []
+    oom_shapes = []  # shape: [batch_size, seq_len]
 
     # 遍历整个训练集
     for inputs, labels in dataloader_iter:
@@ -396,13 +397,15 @@ def validate(
     # 设置模型为评估模式
     model.eval()
 
-    # 初始化损失列表
-    losses = []
-
-    # 遍历整个验证集
+    # 创建进度条，显示验证进度
     dataloader_iter = iter(dataloader)
     progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens(), disable=not show_progress)
-    for inputs, labels in dataloader_iter:
+
+    # 初始化损失列表
+    losses = [None] * len(dataloader)
+
+    # 遍历整个验证集
+    for i, (inputs, labels) in enumerate(dataloader_iter):
         # 将输入移动到计算设备
         inputs, labels = inputs.to(device), labels.to(device)
 
@@ -412,7 +415,7 @@ def validate(
             outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)
 
             # 计算并记录损失
-            losses.append(F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token).item())
+            losses[i] = F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token).item()
 
         # 更新进度条
         progress_bar.update(inputs.size(0) * inputs.size(1))
@@ -439,7 +442,7 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
     _, ax = plt.subplots(figsize=(10, 6))
 
     # 计算验证点的x坐标（每个epoch的起始位置）
-    current_iteration = len(metrics["train_loss"][0]["count"])  # 当前累计的迭代次数
+    current_iteration = metrics["train_loss"][0]["count"]  # 当前累计的迭代次数
     val_iteration_points = [current_iteration]  # 存储每个epoch的起始迭代次数
     for epoch in metrics["train_loss"][1:]:
         current_iteration += epoch["count"]  # 累加当前epoch的迭代次数
@@ -450,11 +453,11 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
 
     # 绘制训练损失曲线和标准差区间
     ax.plot(train_x, [epoch["mean"] for epoch in metrics["train_loss"]], label="Train Loss", color="red", linestyle="-", marker=".")
-    ax.fill_between(train_x, *zip((epoch["mean"] + epoch["std_dev"], epoch["mean"] - epoch["std_dev"]) for epoch in metrics["train_loss"]), color="red", alpha=0.2)
+    ax.fill_between(train_x, *zip(*[(epoch["mean"] + epoch["std_dev"], epoch["mean"] - epoch["std_dev"]) for epoch in metrics["train_loss"]]), color="red", alpha=0.2)
 
     # 绘制验证损失曲线和标准差区间
     ax.plot(val_iteration_points, [epoch["mean"] for epoch in metrics["val_loss"]], label="Validation Loss", color="blue", linestyle="-", marker=".")
-    ax.fill_between(val_iteration_points, *zip((epoch["mean"] + epoch["std_dev"], epoch["mean"] - epoch["std_dev"]) for epoch in metrics["val_loss"]), color="blue", alpha=0.2)
+    ax.fill_between(val_iteration_points, *zip(*[(epoch["mean"] + epoch["std_dev"], epoch["mean"] - epoch["std_dev"]) for epoch in metrics["val_loss"]]), color="blue", alpha=0.2)
 
     # 设置X轴为整数刻度
     ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
@@ -505,41 +508,60 @@ def parse_args() -> argparse.Namespace:
 
 
 def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
-    # 部署分布式训练环境
+    """
+    分布式训练主函数（用于 torch.multiprocessing.spawn）
+
+    初始化分布式训练环境、加载数据集和模型、执行训练与验证、同步和记录指标，
+    并最终保存模型检查点和训练统计信息。
+
+    工作流程：
+    1. 初始化分布式训练（如果 world_size > 1）
+    2. 加载模型、数据集、优化器、检查点等
+    3. 使用 DistributedDataParallel 进行模型并行训练
+    4. 在每轮训练后进行验证（如果有验证集）
+    5. 汇总各进程的损失指标，保存检查点和损失曲线
+    6. 汇总 OOM（内存溢出）信息
+    7. 销毁分布式训练环境
+
+    Args:
+        rank: 当前进程的 rank（用于分布式）
+        world_size: 总进程数（GPU 数）
+        args: 命令行参数命名空间，包含模型结构、训练设置、路径等
+
+    Examples:
+        >>> torch.multiprocessing.spawn(_mp_fn, args=(world_size, args), nprocs=world_size)
+    """
+    # 初始化分布式训练组
     if world_size > 1:
         dist.init_process_group(backend="nccl", world_size=world_size, rank=rank)
 
-    # 获取设备
-    if torch.cuda.is_available():
-        device = torch.device(f"cuda:{rank}")
-    else:
-        device = torch.device("cpu")
+    # 设置当前进程的设备
+    device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
 
     # 清理缓存以释放内存
     empty_cache()
 
-    # 加载检查点
+    # 加载训练检查点（包括 tokenizer、模型、优化器状态、指标）
     tokenizer, model_state_dict, optimizer_state_dict, metrics = load_checkpoint_train(args.ckpt_path)
 
-    # 加载训练集并创建数据加载器
+    # 加载训练数据集及分布式采样器
     train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length, show_progress=rank == 0)
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(train_dataset, args.train_max_batch_tokens, train_sampler), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
-    # 如果有的话，加载验证集并创建数据加载器
+    # 如果存在验证集，加载验证数据集
     if args.val_dataset:
         val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length, show_progress=rank == 0)
         val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank)
         val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(val_dataset, args.val_max_batch_tokens, val_sampler), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
-    # 初始化模型
+    # 初始化模型结构
     model = MidiNet(MidiNetConfig(len(tokenizer), args.num_heads, args.dim_head, args.dim_feedforward, args.num_layers), dropout=args.dropout)
 
-    # 加载模型状态
+    # 加载模型权重
     try:
         model.load_state_dict(model_state_dict)
-    except RuntimeError as e:
-        print(f"[Rank {rank}] 加载模型状态时失败: {e}")
+    except RuntimeError:
         metrics = {"train_loss": [], "val_loss": []}
 
     # 转移模型到设备
@@ -561,7 +583,7 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
         group["lr"] = args.learning_rate
         group["weight_decay"] = args.weight_decay
 
-    # 开始训练模型
+    # 开始训练
     for epoch in range(args.num_epochs):
         # 训练一轮模型
         train_sampler.set_epoch(epoch)
@@ -574,46 +596,99 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
         else:
             val_loss = [float("nan")]
 
-        # 将所有进程的损失汇集
+        # 主进程放入自己的损失
         if rank == 0:
-            all_train_loss = [None for _ in range(world_size)]
-            all_val_loss = [None for _ in range(world_size)]
-            dist.gather_object(train_loss, all_train_loss)
-            dist.gather_object(val_loss, all_val_loss)
-        else:
-            dist.gather_object(train_loss)
-            dist.gather_object(val_loss)
+            all_train_loss = [train_loss]
+            all_val_loss = [val_loss]
+
+        # 多进程时汇集所有进程的损失
+        if world_size > 1:
+            # 获取系统临时目录路径
+            temp_dir = pathlib.Path(tempfile.gettempdir())
+
+            # 非主进程将本地损失写入以 rank 命名的文件
+            if rank != 0:
+                with open(temp_dir / f"rank{rank}.dat", "w", encoding="utf-8") as f:
+                    f.write(json.dumps(train_loss))  # 序列化训练损失
+                    f.write("\n<sep>\n")  # 分隔符，用于区分两种损失
+                    f.write(json.dumps(val_loss))  # 序列化验证损失
+
+            # 所有进程同步，确保写入操作完成再进行下一步
+            dist.barrier()
+
+            # 主进程读取所有其他进程写入的数据文件
+            if rank == 0:
+                for other_rank in range(1, world_size):
+                    data_file = temp_dir / f"rank{other_rank}.dat"
+                    with open(data_file, encoding="utf-8") as f:
+                        content = f.read()
+
+                        # 读取完整内容，并分割为训练和验证损失
+                        rank_tl, rank_vl = content.split("\n<sep>\n")
+
+                        # 加入到列表中
+                        all_train_loss.append(json.loads(rank_tl))
+                        all_val_loss.append(json.loads(rank_vl))
+
+                    # 删除临时数据文件
+                    data_file.unlink(missing_ok=True)
+
+            # 所有进程同步，确保主进程读取完成再进行下一步
+            dist.barrier()
 
         # 计算并添加损失平均值和标准差到指标
         if rank == 0:
-            all_train_loss = np.array(itertools.chain(all_train_loss))
-            all_val_loss = np.array(itertools.chain(all_val_loss))
+            all_train_loss = np.array(list(itertools.chain(all_train_loss)))
+            all_val_loss = np.array(list(itertools.chain(all_val_loss)))
             metrics["train_loss"].append({"mean": all_train_loss.mean(), "std_dev": all_train_loss.std(), "count": len(all_train_loss)})
             metrics["val_loss"].append({"mean": all_val_loss.mean(), "std_dev": all_val_loss.std()})
 
-    # 将所有进程中使内存爆炸的张量的形状汇集
+    # 收集所有进程中的 OOM 张量形状
     if rank == 0:
-        all_oom_shapes = [None for _ in range(world_size)]
-        dist.gather_object(oom_shapes, all_oom_shapes)
-    else:
-        dist.gather_object(oom_shapes)
+        all_oom_shapes = [oom_shapes]
 
+    if world_size > 1:
+        # 获取系统临时目录路径
+        temp_dir = pathlib.Path(tempfile.gettempdir())
+
+        # 非主进程将本地 OOM 张量形状写入以 rank 命名的文件
+        if rank != 0:
+            with open(temp_dir / f"rank{rank}.dat", "w", encoding="utf-8") as f:
+                f.write(json.dumps(oom_shapes))
+
+        # 所有进程同步，确保写入操作完成再进行下一步
+        dist.barrier()
+
+        # 主进程读取所有其他进程写入的数据文件
+        if rank == 0:
+            for other_rank in range(1, world_size):
+                data_file = temp_dir / f"rank{other_rank}.dat"
+                with open(data_file, encoding="utf-8") as f:
+                    # 读取完整内容，并加入到列表中
+                    all_oom_shapes.append(json.load(f))
+
+                # 删除临时数据文件
+                data_file.unlink(missing_ok=True)
+
+    # 主进程保存模型、统计信息和 OOM 形状
     if rank == 0:
         # 保存最后一次训练时使内存爆炸的张量的形状
-        all_oom_shapes = list(itertools.chain(all_oom_shapes))
+        all_oom_shapes = [oom_shape for rank_oom_shapes in all_oom_shapes for oom_shape in rank_oom_shapes]
         if all_oom_shapes:
             with open("oom_shapes.txt", "w", encoding="utf-8") as f:
                 f.write("Shape (e.g: Batch Size x Sequence Length)\n")
                 f.write("\n".join(f"{batch_size} x {sequence_length}" for batch_size, sequence_length in all_oom_shapes))
 
         # 保存当前模型的检查点
-        save_checkpoint(model.module.state_dict() if world_size > 1 else model.state_dict(), optimizer.state_dict(), metrics, args.ckpt_path)
+        save_checkpoint((model.module if world_size > 1 else model).cpu().state_dict(), optimizer.state_dict(), metrics, args.ckpt_path)
 
         # 绘制训练过程中的损失曲线
         plot_training_process(metrics, "statistics.png")
 
     # 释放资源
     if world_size > 1:
+        import hashlib
+        print(f"rank {rank}:", hashlib.sha256(str(model.module.cpu().state_dict()).replace(f"cuda:{rank}", "cuda").encode()).hexdigest())
         dist.destroy_process_group()
 
 
@@ -626,7 +701,7 @@ def main():
     world_size = torch.cuda.device_count()
     if world_size > 1:
         os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = "12355"
+        os.environ["MASTER_PORT"] = str(random.randint(2 ** 15, 2 ** 16 - 1))
         mp.spawn(_mp_fn, (world_size, args), nprocs=world_size)
     else:
         _mp_fn(0, 1, args)

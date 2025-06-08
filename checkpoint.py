@@ -26,8 +26,6 @@ def save_checkpoint(model_state_dict: dict[str, Any], optimizer_state_dict: dict
         path: 保存检查点的目录路径
     """
     path.mkdir(parents=True, exist_ok=True)  # 确保目标目录存在，如果不存在则创建
-
-    model = model.cpu()  # 将模型移到CPU进行保存
     torch.save(model_state_dict, path / "model.pth")  # 保存模型权重
     torch.save(optimizer_state_dict, path / "optimizer.pth")  # 保存优化器权重
 
