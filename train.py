@@ -608,9 +608,7 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
             # 非主进程将本地损失写入以 rank 命名的文件
             if rank != 0:
                 with open(temp_dir / f"rank{rank}.dat", "w", encoding="utf-8") as f:
-                    f.write(json.dumps(train_loss))  # 序列化训练损失
-                    f.write("\n<sep>\n")  # 分隔符，用于区分两种损失
-                    f.write(json.dumps(val_loss))  # 序列化验证损失
+                    json.dump({"train_loss": train_loss, "val_loss": val_loss}, f)  # 序列化训练、验证损失
 
             # 所有进程同步，确保写入操作完成再进行下一步
             dist.barrier()
@@ -620,14 +618,9 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
                 for other_rank in range(1, world_size):
                     data_file = temp_dir / f"rank{other_rank}.dat"
                     with open(data_file, encoding="utf-8") as f:
-                        content = f.read()
-
-                        # 读取完整内容，并分割为训练和验证损失
-                        rank_tl, rank_vl = content.split("\n<sep>\n")
-
-                        # 加入到列表中
-                        all_train_loss.append(json.loads(rank_tl))
-                        all_val_loss.append(json.loads(rank_vl))
+                        content = json.load(f)
+                        all_train_loss.append(content["train_loss"])
+                        all_val_loss.append(content["val_loss"])
 
                     # 删除临时数据文件
                     data_file.unlink(missing_ok=True)
