@@ -687,8 +687,6 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
 
     # 释放资源
     if world_size > 1:
-        import hashlib
-        print(f"rank {rank}:", hashlib.sha256(str(model.module.cpu().state_dict()).replace(f"cuda:{rank}", "cuda").encode()).hexdigest())
         dist.destroy_process_group()
 
 
