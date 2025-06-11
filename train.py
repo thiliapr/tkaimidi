@@ -23,7 +23,7 @@ from tqdm import tqdm
 from torch import nn, optim, distributed as dist, multiprocessing as mp
 from torch.nn import functional as F
 from torch.amp import GradScaler, autocast
-from torch.utils.data import Dataset, DataLoader, Sampler, DistributedSampler
+from torch.utils.data import Dataset, DataLoader, Sampler
 from transformers import PreTrainedTokenizerFast
 from constants import DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_LAYERS, DEFAULT_DROPOUT, DEFAULT_WEIGHT_DECAY, DEFAULT_LEARNING_RATE, DEFAULT_MIN_SEQUENCE_LENGTH
 from model import MidiNet, MidiNetConfig
@@ -126,23 +126,21 @@ class MidiDataset(Dataset):
 
 class MidiDatasetSampler(Sampler[list[int]]):
     """
-    MidiDataset 的动态批次采样器。
-    根据每个样本的序列长度动态分组，确保每个批次中 token 的总量不超过设定限制，从而实现高效训练。
+    用于 MIDI 数据集的分批采样器，根据序列长度进行动态批处理。
+    
+    该采样器会:
+    1. 根据序列长度对样本进行排序
+    2. 动态创建批次，确保每个批次的token总数不超过max_batch_tokens
+    3. 支持分布式训练环境下的数据分配
+    4. 每个epoch都会重新打乱数据顺序
 
-    工作流程：
-        1. 接收数据集和最大 token 限制；
-        2. 返回一个自定义迭代器 MidiDatasetSamplerIter；
-        3. 该迭代器会根据样本长度排序并动态打包成批次；
-        4. 每个批次长度近似，避免 padding 浪费；
-        5. 批次打乱以增加训练多样性。
-
-    Args:
-        dataset: 输入的数据集，必须包含 music_sequences 属性；
-        max_batch_tokens: 每个批次中允许的最大 token 总数；
-        sampler: 可选的外部采样器，用于控制索引顺序（如 DistributedSampler）。
-
-    Returns:
-        返回由样本索引列表构成的批次，供 DataLoader 使用。
+    Attributes:
+        max_batch_tokens: 单个批次允许的最大token数量
+        rank: 当前进程的rank编号(分布式训练用)
+        world_size: 总进程数(分布式训练用)
+        seed: 随机种子
+        batches: 当前rank分配到的批次列表
+        total_tokens: 当前rank分配到的总token数
 
     Examples:
         >>> dataset = MidiDataset("data/")
@@ -151,104 +149,78 @@ class MidiDatasetSampler(Sampler[list[int]]):
         ...     print(batch)  # [19, 89, 64]
     """
 
-    def __init__(self, dataset: MidiDataset, max_batch_tokens: int, sampler: Optional[Sampler[int]] = None):
+    def __init__(self, dataset: MidiDataset, max_batch_tokens: int, rank: int = 0, world_size: int = 1, seed: int = 0):
         super().__init__()
-        self.dataset = dataset
         self.max_batch_tokens = max_batch_tokens
-        self.sampler = sampler
-        self.iter = None
-
-    def total_tokens(self) -> int:
-        "返回这次迭代的总token数（包括pad）"
-        if not self.iter:
-            iter(self)
-        return self.iter.total_tokens
-
-    def __iter__(self) -> "MidiDatasetSamplerIter":
-        self.iter = MidiDatasetSamplerIter(self.dataset, self.max_batch_tokens, self.sampler)
-        return self.iter
-
-    def __len__(self) -> int:
-        if not self.iter:
-            iter(self)
-        return len(self.iter)
-
-
-class MidiDatasetSamplerIter(Iterator[list[int]]):
-    """
-    MidiDataset 的批次迭代器。
-    按照样本序列长度对索引进行排序与分组，生成符合最大 token 限制的批次索引，并在每轮迭代时打乱批次顺序。
-
-    工作流程：
-        1. 获取输入索引（可自定义采样器）；
-        2. 根据序列长度升序排序，长度相同时引入扰动打乱；
-        3. 动态打包：每当当前批次无法容纳新样本时就结束该批；
-        4. 最后将所有批次打乱；
-        5. 支持 __len__ 返回真实批次数总 token 数。
-
-    Args:
-        dataset: 包含 music_sequences 属性的数据集；
-        max_batch_tokens: 每个批次允许的最大 token 总数；
-        sampler: 可选采样器，决定样本索引顺序。
-
-    Returns:
-        每次返回一个索引列表，表示一个批次的样本索引。
-    """
-
-    def __init__(self, dataset: MidiDataset, max_batch_tokens: int, sampler: Optional[Sampler[int]] = None):
-        self.dataset = dataset
-        self.max_batch_tokens = max_batch_tokens
-
-        # 获取全部采样索引（如果有自定义采样器则使用）
-        indices = list(sampler) if sampler else list(range(len(dataset)))
-
-        # 计算每个样本的长度
-        index_and_lengths = [(idx, len(dataset.music_sequences[idx])) for idx in indices]
-
-        # 按长度排序，长度相同引入扰动避免排序固定
-        sorted_pairs = sorted(index_and_lengths, key=lambda pair: (pair[1], random.random()))
-
-        batches: list[list[int]] = []
-        current_batch: list[int] = []
+        self.rank = rank
+        self.world_size = world_size
+        self.seed = seed
+        self.batches = []
         self.total_tokens = 0
 
+        # 预计算所有样本的索引和长度
+        self.index_and_lengths = [(idx, len(dataset.music_sequences[idx])) for idx in range(len(dataset))]
+        self.index_to_length = dict(self.index_and_lengths)
+
+    def set_epoch(self, epoch: int) -> None:
+        """
+        设置当前epoch并重新生成批次
+        
+        每个epoch开始时调用，用于:
+        1. 根据新epoch重新打乱数据顺序
+        2. 重新分配批次
+        3. 确保分布式环境下各rank数据对齐
+        """
+        generator = random.Random(self.seed + epoch)
+
+        # 按长度排序，加入随机因子避免固定排序
+        sorted_pairs = sorted(self.index_and_lengths, key=lambda pair: (pair[1], generator.random()))
+
+        batches_with_tokens: list[tuple[list[int], int]] = []
+        current_batch: list[int] = []
+
         for idx, seq_len in sorted_pairs:
-            # 过长样本单独为一个批次
-            if seq_len - 1 > max_batch_tokens:
-                # 这里（以及下面）减去 1 是因为 inputs 的维度始终比原序列少 1（input = seq[:-1], lables = seq[1:]）
-                self.total_tokens += seq_len - 1
-                batches.append([idx])
+            token_len = seq_len - 1  # 输入序列比原序列少1
+
+            # 处理超长序列
+            if token_len > self.max_batch_tokens:
+                batches_with_tokens.append(([idx], token_len))
                 continue
 
-            # 预测当前批次加上该样本后的 token 总数
-            estimated_tokens = (len(current_batch) + 1) * (seq_len - 1)
-            if estimated_tokens > max_batch_tokens:
-                # 所有样本已按序列长度升序排序，因此 current_batch[-1] 一定是该批次中最长的
-                self.total_tokens += len(current_batch) * (len(self.dataset.music_sequences[current_batch[-1]]) - 1)
-                batches.append(current_batch)
+            # 计算当前批次加入新样本后的token总数
+            estimated_tokens = (len(current_batch) + 1) * token_len
+            if estimated_tokens > self.max_batch_tokens:
+                # 当前批次中最长序列决定了该批次的token总数
+                longest_in_batch = self.index_to_length[current_batch[-1]] - 1
+                batch_tokens = longest_in_batch * len(current_batch)
+                batches_with_tokens.append((current_batch, batch_tokens))
                 current_batch = []
 
             current_batch.append(idx)
 
+        # 添加最后一个批次
         if current_batch:
-            self.total_tokens += (len(self.dataset.music_sequences[current_batch[-1]]) - 1) * len(current_batch)
-            batches.append(current_batch)
+            longest_in_batch = self.index_to_length[current_batch[-1]] - 1
+            batch_tokens = longest_in_batch * len(current_batch)
+            batches_with_tokens.append((current_batch, batch_tokens))
 
-        # 打乱批次顺序，增加训练扰动
-        random.shuffle(batches)
+        # 确保批次数是world_size的倍数(分布式训练需要)
+        if len(batches_with_tokens) % self.world_size:
+            needed = self.world_size - (len(batches_with_tokens) % self.world_size)
+            # 随机复制现有批次来补全
+            for _ in range(needed):
+                batch_idx = generator.randint(0, len(batches_with_tokens) - 1)
+                batches_with_tokens.insert(batch_idx, batches_with_tokens[batch_idx])
 
-        # 存储批次列表迭代器和长度
-        self._batch_iter = iter(batches)
-        self._batch_count = len(batches)
+        # 分配当前rank的批次
+        self.batches = batches_with_tokens[self.rank::self.world_size]
+        self.total_tokens = sum(tokens for _, tokens in self.batches)
 
-    def __iter__(self):
-        return self
-
-    def __next__(self) -> list[int]:
-        return next(self._batch_iter)
+    def __iter__(self) -> Iterator[list[int]]:
+        yield from (batch for batch, _ in self.batches)
 
     def __len__(self) -> int:
-        return self._batch_count
+        return len(self.batches)
 
 
 def sequence_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor]], pad_token: int):
@@ -320,7 +292,7 @@ def train(
 
     # 创建进度条，显示训练进度
     dataloader_iter = iter(dataloader)
-    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens(), disable=not show_progress)
+    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens, disable=not show_progress)
 
     # 初始化损失列表、触发OOM的输入形状列表
     losses = []
@@ -359,7 +331,6 @@ def train(
 
     # 关闭进度条
     progress_bar.close()
-    print(f"[Debug] [pbar={show_progress}] finished training.")
 
     # 返回训练损失和OOM输入形状
     return losses, oom_shapes
@@ -399,7 +370,7 @@ def validate(
 
     # 创建进度条，显示验证进度
     dataloader_iter = iter(dataloader)
-    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens(), disable=not show_progress)
+    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens, disable=not show_progress)
 
     # 初始化损失列表
     losses = [None] * len(dataloader)
@@ -502,6 +473,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-f", "--dim-feedforward", default=DEFAULT_DIM_FEEDFORWARD, type=int, help="前馈神经网络的隐藏层维度")
     parser.add_argument("-s", "--num-layers", default=DEFAULT_NUM_LAYERS, type=int, help="模型 Transformer 编码器中的层数")
     parser.add_argument("-o", "--dropout", default=DEFAULT_DROPOUT, type=float, help="Dropout 概率，用于防止过拟合")
+    parser.add_argument("-u", "--seed", default=8964, type=int, help="训练的种子，保证训练过程可复现")
 
     # 解析命令行参数并返回
     return parser.parse_args()
@@ -535,6 +507,18 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
     if world_size > 1:
         dist.init_process_group(backend="nccl", world_size=world_size, rank=rank)
 
+    # 播种，保证训练过程可复现
+    # 考虑 rank 以避免所有进程产生相同的随机数
+    random.seed(args.seed + rank)
+    np.random.seed(args.seed + rank)
+    torch.manual_seed(args.seed + rank)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed + rank)
+        torch.cuda.manual_seed_all(args.seed + rank)  # 多GPU情况
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
     # 设置当前进程的设备
     device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
 
@@ -546,14 +530,14 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
 
     # 加载训练数据集及分布式采样器
     train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length, show_progress=rank == 0)
-    train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
-    train_loader = DataLoader(train_dataset, batch_sampler=MidiDatasetSampler(train_dataset, args.train_max_batch_tokens, train_sampler), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
+    train_sampler = MidiDatasetSampler(train_dataset, args.train_max_batch_tokens, rank, world_size, args.seed)
+    train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 如果存在验证集，加载验证数据集
     if args.val_dataset:
         val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length, show_progress=rank == 0)
-        val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank)
-        val_loader = DataLoader(val_dataset, batch_sampler=MidiDatasetSampler(val_dataset, args.val_max_batch_tokens, val_sampler), collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
+        val_sampler = MidiDatasetSampler(val_dataset, args.val_max_batch_tokens, val_sampler, rank, world_size, args.seed)
+        val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 初始化模型结构
     model = MidiNet(MidiNetConfig(len(tokenizer), args.num_heads, args.dim_head, args.dim_feedforward, args.num_layers), dropout=args.dropout)
