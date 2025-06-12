@@ -552,6 +552,7 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
         val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 确保使用确定性算法
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"
     torch.use_deterministic_algorithms(True)
     set_seed(args.seed)
 
