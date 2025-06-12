@@ -69,7 +69,7 @@ class MidiDataset(Dataset):
         self.music_sequences = []  # 存储每个训练序列的信息(乐谱分词表示)
 
         # 处理 MIDI 文件
-        midi_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.mid")]
+        midi_files = sorted([f for dir_path in midi_dirs for f in dir_path.glob("**/*.mid")], key=lambda file: file.name)
         for filepath in tqdm(midi_files, desc="加载音乐数据集（原始 MIDI 文件）", delay=0.1, disable=not show_progress):
             # 读取并转化 MIDI 文件
             try:
@@ -92,7 +92,7 @@ class MidiDataset(Dataset):
             self.music_sequences.append(tokenizer.encode(data_to_str(sheet)))
 
         # 处理 JSON 文件（更快的格式）
-        json_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.json")]
+        json_files = sorted([f for dir_path in midi_dirs for f in dir_path.glob("**/*.json")], key=lambda file: file.name)
 
         for filepath in tqdm(json_files, desc="加载音乐数据集（优化的 JSON 文件）", delay=0.1, disable=not show_progress):
             # 读取文件
@@ -479,26 +479,50 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
+def set_seed(seed: int):
     """
-    分布式训练主函数（用于 torch.multiprocessing.spawn）
+    设置所有随机源的种子以确保实验可复现性。
 
-    初始化分布式训练环境、加载数据集和模型、执行训练与验证、同步和记录指标，
-    并最终保存模型检查点和训练统计信息。
-
-    工作流程：
-    1. 初始化分布式训练（如果 world_size > 1）
-    2. 加载模型、数据集、优化器、检查点等
-    3. 使用 DistributedDataParallel 进行模型并行训练
-    4. 在每轮训练后进行验证（如果有验证集）
-    5. 汇总各进程的损失指标，保存检查点和损失曲线
-    6. 汇总 OOM（内存溢出）信息
-    7. 销毁分布式训练环境
+    工作流程:
+    1. 设置Python内置random模块的种子
+    2. 设置NumPy的随机种子
+    3. 设置PyTorch的CPU和GPU随机种子
+    4. 配置CuDNN使用确定性算法并关闭benchmark模式
 
     Args:
-        rank: 当前进程的 rank（用于分布式）
-        world_size: 总进程数（GPU 数）
-        args: 命令行参数命名空间，包含模型结构、训练设置、路径等
+        seed: 要设置的随机种子值
+
+    Examples:
+        >>> set_seed(8964)
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)  # 多GPU情况
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
+def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
+    """
+    分布式训练主函数，用于 torch.multiprocessing.spawn 启动多进程训练。
+
+    工作流程：
+    1. 初始化分布式训练环境（如果world_size > 1）
+    2. 加载模型、数据集和优化器
+    3. 使用DistributedDataParallel包装模型
+    4. 执行训练和验证循环
+    5. 收集并汇总各进程的指标
+    6. 保存模型检查点和训练统计信息
+    7. 清理分布式训练环境
+
+    Args:
+        rank: 当前进程的排名（0为主进程）
+        world_size: 总进程数（通常等于GPU数量）
+        args: 包含所有训练配置的参数对象
 
     Examples:
         >>> torch.multiprocessing.spawn(_mp_fn, args=(world_size, args), nprocs=world_size)
@@ -506,18 +530,6 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
     # 初始化分布式训练组
     if world_size > 1:
         dist.init_process_group(backend="nccl", world_size=world_size, rank=rank)
-
-    # 播种，保证训练过程可复现
-    # 考虑 rank 以避免所有进程产生相同的随机数
-    random.seed(args.seed + rank)
-    np.random.seed(args.seed + rank)
-    torch.manual_seed(args.seed + rank)
-
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(args.seed + rank)
-        torch.cuda.manual_seed_all(args.seed + rank)  # 多GPU情况
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
 
     # 设置当前进程的设备
     device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
@@ -536,17 +548,19 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
     # 如果存在验证集，加载验证数据集
     if args.val_dataset:
         val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length, show_progress=rank == 0)
-        val_sampler = MidiDatasetSampler(val_dataset, args.val_max_batch_tokens, val_sampler, rank, world_size, args.seed)
+        val_sampler = MidiDatasetSampler(val_dataset, args.val_max_batch_tokens, rank, world_size, args.seed)
         val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
+
+    # 确保使用确定性算法
+    torch.use_deterministic_algorithms(True)
+    set_seed(args.seed)
 
     # 初始化模型结构
     model = MidiNet(MidiNetConfig(len(tokenizer), args.num_heads, args.dim_head, args.dim_feedforward, args.num_layers), dropout=args.dropout)
 
     # 加载模型权重
-    try:
+    if model_state_dict:
         model.load_state_dict(model_state_dict)
-    except RuntimeError:
-        metrics = {"train_loss": [], "val_loss": []}
 
     # 转移模型到设备
     model = model.to(device)
@@ -569,13 +583,17 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
 
     # 开始训练
     for epoch in range(args.num_epochs):
+        # 设置每轮不同的随机种子（确保数据shuffle不同但可复现）
+        current_epoch = len(metrics["train_loss"]) + epoch
+        set_seed(args.seed + rank + current_epoch)
+
         # 训练一轮模型
-        train_sampler.set_epoch(epoch)
+        train_sampler.set_epoch(current_epoch)
         train_loss, oom_shapes = train(model, train_loader, optimizer, len(tokenizer), tokenizer.pad_token_id, device, show_progress=rank == 0)
 
         # 如果指定了验证集，就进行验证，否则跳过验证并设置验证损失为 NaN
         if args.val_dataset:
-            val_sampler.set_epoch(epoch)
+            val_sampler.set_epoch(current_epoch)
             val_loss = validate(model, val_loader, len(tokenizer), tokenizer.pad_token_id, device, show_progress=rank == 0)
         else:
             val_loss = [float("nan")]
