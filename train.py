@@ -687,7 +687,7 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
         save_checkpoint((model.module if world_size > 1 else model).cpu().state_dict(), optimizer.state_dict(), metrics, args.ckpt_path)
 
         # 绘制训练过程中的损失曲线
-        plot_training_process(metrics, "statistics.png")
+        plot_training_process(metrics, args.ckpt_path / "statistics.png")
 
     # 释放资源
     if world_size > 1:
