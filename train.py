@@ -204,7 +204,7 @@ class MidiDatasetSampler(Sampler[list[int]]):
             batch_tokens = longest_in_batch * len(current_batch)
             batches_with_tokens.append((current_batch, batch_tokens))
 
-        # 确保批次数是world_size的倍数(分布式训练需要)
+        # 确保批次数是world_size的倍数
         if len(batches_with_tokens) % self.world_size:
             needed = self.world_size - (len(batches_with_tokens) % self.world_size)
             # 随机复制现有批次来补全
@@ -300,6 +300,7 @@ def train(
 
     # 遍历整个训练集
     for inputs, labels in dataloader_iter:
+        outputs = loss = None
         inputs, labels = inputs.to(device), labels.to(device)
         progress_n = inputs.size(0) * inputs.size(1)  # 进度条更新的步数
         optimizer.zero_grad()  # 清空梯度
@@ -320,8 +321,15 @@ def train(
             # 记录OOM时的输入形状
             oom_shapes.append(list(inputs.shape))
 
+            # 保持 DDP 同步
+            if outputs is None:
+                outputs = model(torch.zeros((1, 1), device=device)).view(-1, vocab_size)
+            if loss is None:
+                loss = F.cross_entropy(outputs, torch.zeros(outputs.size(0)), ignore_index=pad_token)
+            scaler.step(optimizer)
+
             # 消除引用，方便垃圾回收
-            inputs = labels = outputs = loss = None
+            inputs = labels = None
 
             # 清理缓存以释放内存
             empty_cache()
