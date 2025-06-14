@@ -477,7 +477,29 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
 
 
 def parse_args() -> argparse.Namespace:
-    "解析命令行参数。"
+    """
+    解析训练 MIDI 模型的命令行参数。
+
+    Args:
+        num_epochs (int): 训练总轮数（必填）。
+        ckpt_path (pathlib.Path): 检查点的加载和保存路径（必填）。
+        -t/--train-dataset (pathlib.Path, 多次): 训练集文件路径（必填，可多次指定）。
+        -v/--val-dataset (pathlib.Path, 多次): 验证集文件路径（可选，可多次指定）。
+        -m/--min-sequence-length (int): 最小序列长度，短于该长度的样本不会用于训练。
+        -e/--max-sequence-length (int): 最大序列长度，长于该长度的样本会被截断。
+        -b/--train-max-batch-tokens (int): 训练时每个批次序列长度之和的上限。
+        -q/--val-max-batch-tokens (int): 验证时每个批次序列长度之和的上限。
+        -l/--learning-rate (float): 学习率。
+        -w/--weight-decay (float): 权重衰减系数。
+        -n/--num-heads (int): 多头注意力的头数。
+        -d/--dim-head (int): 每个注意力头的维度。
+        -f/--dim-feedforward (int): 前馈网络隐藏层维度。
+        -s/--num-layers (int): Transformer 编码器层数。
+        -o/--dropout (float): Dropout 概率。
+        -u/--seed (int): 随机种子，保证可复现性。
+    Returns:
+        解析后的命令行参数对象。
+    """
     # 创建命令行参数解析器
     parser = argparse.ArgumentParser(description="训练 MIDI 模型并绘制训练过程中的损失、困惑度曲线。")
 
