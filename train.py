@@ -212,6 +212,9 @@ class MidiDatasetSampler(Sampler[list[int]]):
                 batch_idx = generator.randint(0, len(batches_with_tokens) - 1)
                 batches_with_tokens.insert(batch_idx, batches_with_tokens[batch_idx])
 
+        # 批次倒序，用于快速检测训练的问题
+        batches_with_tokens.reverse()
+
         # 分配当前rank的批次
         self.batches = batches_with_tokens[self.rank::self.world_size]
         self.total_tokens = sum(tokens for _, tokens in self.batches)
