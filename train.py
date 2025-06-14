@@ -372,10 +372,10 @@ def validate(
     show_progress: bool = True
 ) -> list[float]:
     """
-    对模型进行验证，返回平均损失和平均困惑度。
+    对模型进行验证，返回每个 batch 的损失。
 
-    此函数遍历验证集，对模型进行前向传播，计算每个样本的交叉熵损失。
-    返回所有样本的损失，以衡量模型在整个验证集上的性能表现。
+    此函数遍历验证集，对模型进行前向传播，计算每个 batch 的交叉熵损失。
+    返回所有 batch 的损失列表，以衡量模型在整个验证集上的性能表现。
 
     Args:
         model: 需要验证的 MidiNet 模型。
@@ -386,7 +386,7 @@ def validate(
         show_progress: 是否显示进度条。
 
     Returns:
-        验证损失。
+        验证损失列表。
     """
     # 清理缓存以释放内存
     empty_cache()
@@ -399,10 +399,10 @@ def validate(
     progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens, disable=not show_progress)
 
     # 初始化损失列表
-    losses = [None] * len(dataloader)
+    losses = []
 
     # 遍历整个验证集
-    for i, (inputs, labels) in enumerate(dataloader_iter):
+    for inputs, labels in dataloader_iter:
         # 将输入移动到计算设备
         inputs, labels = inputs.to(device), labels.to(device)
 
@@ -412,7 +412,8 @@ def validate(
             outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)
 
             # 计算并记录损失
-            losses[i] = F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token).item()
+            loss = F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token).item()
+            losses.append(loss)
 
         # 更新进度条
         progress_bar.update(inputs.size(0) * inputs.size(1))
