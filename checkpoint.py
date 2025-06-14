@@ -20,7 +20,7 @@ def save_checkpoint(model_state_dict: dict[str, Any], optimizer_state_dict: dict
     保存模型的检查点到指定路径，包括模型的权重以及训练的进度信息。
 
     Args:
-        optimizer_state_dict: 要保存的模型的状态字典
+        model_state_dict: 要保存的模型的状态字典
         optimizer_state_dict: 要保存的优化器的状态字典
         metrics: 指标
         path: 保存检查点的目录路径
@@ -47,7 +47,7 @@ def load_checkpoint(path: pathlib.Path) -> tuple[PreTrainedTokenizerFast, dict[s
     Examples:
         >>> tokenizer, sd = load_checkpoint(pathlib.Path("ckpt"))
         >>> config = extract_midi_net_config(sd)
-        >>> model = MidiNet(config, deivce=torch.device("cuda"))
+        >>> model = MidiNet(config, device=torch.device("cuda"))
         >>> model.load_state_dict(sd)
     """
     # 加载分词器
@@ -74,7 +74,7 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[PreTrainedTokenizerFast, 
         分词器、模型和优化器的状态，指标
     
     Examples:
-        >>> tokenizer, msd, osd, metrics = load_checkpoint(pathlib.Path("ckpt"))
+        >>> tokenizer, msd, osd, metrics = load_checkpoint_train(pathlib.Path("ckpt"))
         >>> config = extract_midi_net_config(msd)
         >>> model = MidiNet(config, deivce=torch.device("cuda"))
         >>> model.load_state_dict(msd)
