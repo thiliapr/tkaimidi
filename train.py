@@ -772,9 +772,9 @@ def main():
         os.environ["MASTER_ADDR"] = "localhost"
         # 随机选择一个动态/私有端口（49152–65535），以减少与常用端口冲突的概率
         os.environ["MASTER_PORT"] = str(random.randint(2 ** 15, 2 ** 16 - 1))
+        mp.spawn(_mp_fn, (world_size, args), nprocs=world_size)
     else:
         # 单进程（单 GPU 或 CPU）模式
-        _mp_fn(0, 1, args)
         _mp_fn(0, 1, args)
 
 
