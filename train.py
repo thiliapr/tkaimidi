@@ -322,7 +322,6 @@ def train(
             progress_bar.set_postfix(loss=loss.item())  # 更新进度条
         except torch.OutOfMemoryError:
             # 记录OOM时的输入形状
-            print("OOM:", inputs.shape)
             oom_shapes.append(list(inputs.shape))
 
             # 保持 DDP 同步
