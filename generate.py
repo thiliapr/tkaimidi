@@ -9,17 +9,16 @@
 import argparse
 import pathlib
 import random
-import mido
 import math
+from typing import Iterator, Generator, Optional
+import mido
 import numpy as np
 import torch
 import torch.nn.functional as F
 from transformers import PreTrainedTokenizerFast
-from typing import Iterator, Generator, Optional
-from checkpoint import extract_config
+from checkpoint import load_checkpoint, extract_config
 from model import MidiNet, MidiNetConfig
 from constants import KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, LOOKAHEAD_COUNT
-from checkpoint import load_checkpoint
 from utils import midi_to_notes, notes_to_sheet, sheet_to_notes, notes_to_track
 from tokenizer import data_to_str, str_to_data
 
@@ -142,7 +141,7 @@ def generate_midi(
     temperature: float = 1.,
     top_k: Optional[int] = None,
     repetition_penalty: float = 1,
-    pitch_volatility_threshold: float = 20.,
+    max_pitch_span_semitones: float = 20.,
     max_length: Optional[int] = None,
     device: torch.device = None
 ) -> Iterator[tuple[int, int]]:
@@ -160,7 +159,7 @@ def generate_midi(
         top_k: 只考虑概率最高的k个token
         repetition_penalty: 重复惩罚系数
         pitch_volatility_threshold: 音高波动阈值(半音标准差)，超过此值会触发抑制机制
-        max_length: 生成的最大音符数量
+        max_length: 生成的最大音符数量，若为 None，则会持续生成直到遇到结束标志
         device: 使用的计算设备(CPU/GPU)
 
     返回:
@@ -169,6 +168,10 @@ def generate_midi(
     # 初始化随机种子
     if seed is None:
         seed = random.randint(0, 2 ** 32)
+
+    # 设备判定与赋值
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 转换输入音符为乐谱格式
     sheet_music, _ = notes_to_sheet(prompt)
@@ -221,9 +224,9 @@ def generate_midi(
                 accumulated_interval += 1  # 增加时间间隔
 
         # 如果音高波动超过阈值则进行调整
-        if pitch_window.std() > pitch_volatility_threshold:
+        if pitch_window.std() > max_pitch_span_semitones:
             # 计算抑制比率(基于当前波动与阈值的差值)
-            suppression_ratio = (pitch_window.std() - pitch_volatility_threshold) * 0.1
+            suppression_ratio = (pitch_window.std() - max_pitch_span_semitones) * 0.1
 
             # 根据最近音高趋势决定抑制方向
             if pitch_window[-LOOKAHEAD_COUNT:].mean() > pitch_window.mean():
@@ -317,10 +320,10 @@ def main():
     parser.add_argument("output_path", type=pathlib.Path, help="MIDI 文件保存路径。生成的 MIDI 文件将会保存到这里。")
     parser.add_argument("-m", "--midi-path", type=pathlib.Path, help="指定的 MIDI 文件，将作为生成的音乐的前面部分。如果未指定，将使用内置的音乐来生成。")
     parser.add_argument("-t", "--temperature", type=float, default=1.0, help="采样温度参数，值越高生成结果越多样，值越低结果越保守")
-    parser.add_argument("-k", "--top-k", type=float, default=None, help="仅对概率前`top_k`个token采样，减小随机性")
+    parser.add_argument("-k", "--top-k", type=int, help="仅对概率前`top_k`个token采样，减小随机性")
     parser.add_argument("-r", "--repetition-penalty", type=float, default=1, help="重复惩罚，大于 1 则减少重复")
     parser.add_argument("-s", "--seed", type=int, help="随机种子，不指定表示随机生成")
-    parser.add_argument("-p", "--max-pitch-span-semitones", type=int, default=64, help="触发音高调整的阈值（半音数），当生成的音高跨度大于阈值时，包含音调上升或下降事件的 token 将被降低概率。")
+    parser.add_argument("-p", "--max-pitch-span-semitones", type=int, default=64, help="触发音高调整的阈值（半音数），当生成的音高跨度大于阈值时，包含音调上升或下降事件的 token 将被降低概率。默认为 %(default)s")
     parser.add_argument("-l", "--max-length", type=int, help="限制最多生成的音符数量。如果不指定，将会持续生成直到遇到结束标志。")
     args = parser.parse_args()
 

@@ -9,10 +9,10 @@
 
 import math
 import copy
+from typing import NamedTuple, Optional
 import torch
 from torch import nn
 from torch.nn import functional as F
-from typing import NamedTuple, Optional
 
 
 class MidiNetConfig(NamedTuple):
@@ -188,8 +188,17 @@ class MultiqueryAttention(nn.Module):
             # 创建因果掩码 [seq_len, seq_len]
             causal_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device).triu(diagonal=1)
 
-            # 生成注意力掩码 (同时考虑因果和padding)
-            attn_mask = causal_mask.unsqueeze(0) | padding_mask.view(batch_size, 1, 1, seq_len) | padding_mask.view(batch_size, 1, seq_len, 1)
+            # 确保 padding_mask 形状为 [batch_size, seq_len]
+            # 下面的广播逻辑：
+            # - causal_mask.unsqueeze(0): [1, seq_len, seq_len]
+            # - padding_mask.unsqueeze(1): [batch_size, 1, seq_len] (mask for keys)
+            # - padding_mask.unsqueeze(2): [batch_size, seq_len, 1] (mask for queries)
+            # 逻辑或后得到 [batch_size, seq_len, seq_len]
+            attn_mask = (
+                causal_mask.unsqueeze(0)
+                | padding_mask.unsqueeze(1)
+                | padding_mask.unsqueeze(2)
+            )
 
             # 将布尔掩码转换为浮点掩码
             attn_mask = torch.where(attn_mask, -torch.inf, 0.)
@@ -251,10 +260,10 @@ class MidiNetLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         # 初始化权重
-        for param in self.feedforward.parameters():
-            if isinstance(param, nn.Linear):
-                torch.nn.init.xavier_uniform_(param.weight)
-                torch.nn.init.zeros_(param.bias)
+        for module in self.feedforward:
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                torch.nn.init.zeros_(module.bias)
 
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
@@ -318,13 +327,12 @@ class MidiNet(nn.Module):
         # 添加 Dropout 防止过拟合
         self.dropout = nn.Dropout(dropout)
 
-        # 嵌入层与输出层共享权重，提升效率与性能
-        self.output_layer.weight = self.embedding.weight
-
         # 初始化权重
         torch.nn.init.uniform_(self.embedding.weight, -0.1, 0.1)
-        torch.nn.init.xavier_uniform_(self.output_layer.weight)
         torch.nn.init.zeros_(self.output_layer.bias)
+
+        # 嵌入层与输出层共享权重，提升效率与性能
+        self.output_layer.weight = self.embedding.weight
 
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.BoolTensor] = None):
         # 将 token 转为向量，并乘以 sqrt(dim_model) 进行缩放
