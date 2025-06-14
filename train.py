@@ -322,13 +322,13 @@ def train(
             progress_bar.set_postfix(loss=loss.item())  # 更新进度条
         except torch.OutOfMemoryError:
             # 记录OOM时的输入形状
+            print("OOM:", inputs.shape)
             oom_shapes.append(list(inputs.shape))
 
             # 保持 DDP 同步
             optimizer.zero_grad()
             with autocast(device.type if device else "cpu", dtype=torch.float16):
-                if outputs is None:
-                    outputs = model(torch.zeros((1, 1), device=device)).view(-1, vocab_size)
+                outputs = model(torch.zeros((1, 1), device=device)).view(-1, vocab_size)
                 loss = F.cross_entropy(outputs, torch.zeros(outputs.size(0), device=device), ignore_index=pad_token)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
