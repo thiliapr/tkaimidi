@@ -32,4 +32,4 @@ DEFAULT_NUM_LAYERS = 12  # Transformer 层数
 DEFAULT_LEARNING_RATE = 5e-5  # 学习率
 DEFAULT_WEIGHT_DECAY = 1e-2  # 权重衰减（L2正则化）系数
 DEFAULT_DROPOUT = 0.1  # Dropout 概率
-DEFAULT_MIN_SEQUENCE_LENGTH = 64  # 最小序列长度。小于该长度的序列不会被训练
+DEFAULT_MIN_SEQUENCE_LENGTH = 64  # 最小序列长度。小于该长度的序列不会被训练。选择 64 作为下限是为了确保每个训练样本包含足够的上下文信息，有助于模型学习音乐结构；过短的序列可能导致模型难以捕捉长期依赖，影响生成质量。
