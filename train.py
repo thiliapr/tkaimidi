@@ -311,6 +311,9 @@ def train(
     losses = []
     oom_shapes = []  # shape: [batch_size, seq_len]
 
+    # 提前确定 device_type，避免多次判断
+    device_type = device.type if device is not None else "cpu"
+
     # 遍历整个训练集
     for inputs, labels in dataloader_iter:
         outputs = loss = None
@@ -320,7 +323,7 @@ def train(
 
         try:
             # 使用半精度节省显存
-            with autocast(device.type if device else "cpu", dtype=torch.float16):
+            with autocast(device_type, dtype=torch.float16):
                 outputs = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
                 loss = F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token)  # 计算损失
 
@@ -332,11 +335,11 @@ def train(
             progress_bar.set_postfix(loss=loss.item())  # 更新进度条
         except torch.OutOfMemoryError:
             # 记录OOM时的输入形状
-            oom_shapes.append(list(inputs.shape))
+            oom_shapes.append(tuple(inputs.shape))
 
             # 保持 DDP 同步
             optimizer.zero_grad()
-            with autocast(device.type if device else "cpu", dtype=torch.float16):
+            with autocast(device_type, dtype=torch.float16):
                 outputs = model(torch.zeros((1, 1), dtype=int, device=device)).view(-1, vocab_size)
                 loss = F.cross_entropy(outputs, torch.zeros(outputs.size(0), dtype=int, device=device), ignore_index=pad_token)
             scaler.scale(loss).backward()
