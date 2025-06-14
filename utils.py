@@ -8,12 +8,12 @@
 # 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
 import math
-import mido
 from typing import Iterator, Optional
+import mido
 from constants import NATURAL_SCALE, TIME_PRECISION, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, TIME_INTERVAL, LOOKAHEAD_COUNT
 
 
-def notes_to_track(notes: list[int]) -> mido.MidiTrack:
+def notes_to_track(notes: list[tuple[int, int]]) -> mido.MidiTrack:
     """
     将音符和时间信息转换为 MIDI 轨道。
 
@@ -35,8 +35,8 @@ def notes_to_track(notes: list[int]) -> mido.MidiTrack:
         events.append(("note_on", pitch, cumulative_time))
         events.append(("note_off", pitch, cumulative_time + TIME_PRECISION))
 
-    # 按事件发生时间排序（确保事件顺序正确）
-    events.sort(key=lambda x: x[2])
+    # 按事件发生时间排序，若时间相同则 note_on 优先于 note_off
+    events.sort(key=lambda x: (x[2], x[0] == "note_off"))
 
     # 构建 MIDI 轨道
     track = [mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(128))]
@@ -67,7 +67,9 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     从给定的MIDI文件中提取音符信息并返回一个包含音符及其相对时间间隔的列表。
 
     本函数首先合并所有轨道，并按时间顺序整理所有MIDI消息。它会跳过打击乐通道（MIDI通道10以及其他被指定为打击乐的通道），
-    只处理其他通道的力度不为0的`note_on`事件。接着，函数对音符的相对时间间隔除以时间精度并四舍五入，
+    只处理其他通道的力度不为0的`note_on`事件。绝对时间的计算方式为：每条消息的`time`字段（单位为ticks）
+    会根据MIDI文件的ticks_per_beat属性归一化到480 ticks每拍（即`current_time += msg.time * 480 // midi_file.ticks_per_beat`），
+    这样可以保证不同MIDI文件的时间单位一致。接着，函数对音符的相对时间间隔除以时间精度并四舍五入，
     然后将相对时间除以它们的公因数来压缩时间，最后返回包含音符及其时间间隔的列表。
 
     Args:
@@ -132,17 +134,17 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     compressed_intervals = [interval // gcd for interval in relative_intervals]
 
     # 去除重复的音符（相同音符与零时间间隔的重复）
-    final_notes = []
+    deduped_notes = []
     previous_note = None  # 上一个音符，用于避免重复
 
     for note, interval in zip(pitches, compressed_intervals):
         if interval == 0 and note == previous_note:
             continue  # 跳过重复的零间隔音符
 
-        final_notes.append((note, interval))  # 添加音符和时间间隔
+        deduped_notes.append((note, interval))  # 添加音符和时间间隔
         previous_note = note  # 更新上一个音符
 
-    return final_notes
+    return deduped_notes
 
 
 def notes_to_sheet(notes: list[tuple[int, int]], max_length: Optional[int] = None) -> tuple[list[tuple[str, int]], list[int]]:
@@ -258,6 +260,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], max_length: Optional[int] = Non
         if pitch < 0 or pitch > 11:
             octave_jump = pitch // 12
             sheet.extend(OCTAVE_JUMP_UP if octave_jump > 0 else OCTAVE_JUMP_DOWN for _ in range(abs(octave_jump)))
+            # 归一化 pitch 到 [0, 11] 范围
             pitch %= 12
 
         # 记录音符
