@@ -326,9 +326,10 @@ def train(
 
             # 保持 DDP 同步
             optimizer.zero_grad()
-            if outputs is None:
-                outputs = model(torch.zeros((1, 1), device=device)).view(-1, vocab_size)
-            loss = F.cross_entropy(outputs, torch.zeros(outputs.size(0), device=device), ignore_index=pad_token)
+            with autocast(device.type if device else "cpu", dtype=torch.float16):
+                if outputs is None:
+                    outputs = model(torch.zeros((1, 1), device=device)).view(-1, vocab_size)
+                loss = F.cross_entropy(outputs, torch.zeros(outputs.size(0), device=device), ignore_index=pad_token)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
