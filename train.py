@@ -143,7 +143,7 @@ class MidiDatasetSampler(Sampler[list[int]]):
         total_tokens: 当前rank分配到的总token数
 
     Examples:
-        >>> dataset = MidiDataset("data/")
+        >>> dataset = MidiDataset([pathlib.Path("data/")], tokenizer, min_sequence_length=64, max_sequence_length=8964)
         >>> sampler = MidiDatasetSampler(dataset, max_batch_tokens=4096)
         >>> for batch in sampler:
         ...     print(batch)  # [19, 89, 64]
@@ -226,8 +226,18 @@ class MidiDatasetSampler(Sampler[list[int]]):
         return len(self.batches)
 
 
-def sequence_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor]], pad_token: int):
-    "将多个样本合成统一长度的batch。"
+def sequence_collate_fn(batch, pad_token=0):
+    """
+    将一个批次的变长输入和标签序列整理为统一长度的张量（自动填充pad_token）。
+
+    参数:
+        batch: 每个元素是一个元组，包含输入张量和标签张量。
+        pad_token: 用于填充的token值。
+
+    返回:
+        填充后的输入序列和标签序列张量。
+    """
+    # 将多个样本合成统一长度的batch。
     inputs, labels = zip(*batch)
     inputs = nn.utils.rnn.pad_sequence(inputs, batch_first=True, padding_value=pad_token)
     labels = nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=pad_token)
@@ -700,17 +710,26 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
 
 
 def main():
-    "主函数，负责调配多进程训练"
+    """
+    主函数，负责调配多进程训练。
+
+    支持三种运行模式:
+    1. 多 GPU：自动检测多块 GPU，使用分布式数据并行（DDP）加速训练。
+    2. 单 GPU：仅检测到一块 GPU 时，使用单进程在该 GPU 上训练。
+    3. CPU：无可用 GPU 时，自动切换为 CPU 训练模式。
+    """
     # 解析命令行参数
     args = parse_args()
 
     # 如果有多 GPU，使用 DDP 加速训练
-    world_size = torch.cuda.device_count()
+    world_size = max(torch.cuda.device_count(), 1)
     if world_size > 1:
         os.environ["MASTER_ADDR"] = "localhost"
+        # 随机选择一个动态/私有端口（49152–65535），以减少与常用端口冲突的概率
         os.environ["MASTER_PORT"] = str(random.randint(2 ** 15, 2 ** 16 - 1))
-        mp.spawn(_mp_fn, (world_size, args), nprocs=world_size)
     else:
+        # 单进程（单 GPU 或 CPU）模式
+        _mp_fn(0, 1, args)
         _mp_fn(0, 1, args)
 
 
