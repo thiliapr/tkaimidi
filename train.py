@@ -431,9 +431,23 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
 
     Args:
         metrics: 指标，包含
-          - train_loss(dict[str, Any]): 每个epoch的训练损失数量、平均值、标准差
+          - train_loss(list[dict[str, Any]]): 每个epoch的训练损失数量、平均值、标准差
           - val_loss(dict[str, Any]): 每个epoch的验证损失平均值、标准差
         img_path: 图形保存的文件路径，可以是字符串或Path对象。
+
+    Example:
+        ```
+        metrics = {
+            "train_loss": [
+                {"mean": 1.2, "std_dev": 0.1, "count": 100},
+                {"mean": 1.0, "std_dev": 0.08, "count": 100},
+            ],
+            "val_loss": [
+                {"mean": 1.1, "std_dev": 0.09},
+                {"mean": 0.95, "std_dev": 0.07},
+            ]
+        }
+        ```
     """
     # 创建图形和坐标轴
     _, ax = plt.subplots(figsize=(10, 6))
@@ -446,15 +460,20 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
         val_iteration_points.append(current_iteration)
 
     # 计算训练损失曲线的x坐标（偏移半个epoch）
+    # 这里将每个训练损失点放在其对应 epoch 区间的中间位置（即当前验证点左移半个 epoch），
+    # 这样可以更直观地反映该 epoch 内的训练损失均值与验证损失的时间关系。
     train_x = [val_iteration_points[i] - epoch["count"] / 2 for i, epoch in enumerate(metrics["train_loss"])]
 
     # 绘制训练损失曲线和标准差区间
     ax.plot(train_x, [epoch["mean"] for epoch in metrics["train_loss"]], label="Train Loss", color="red", linestyle="-", marker=".")
-    ax.fill_between(train_x, *zip(*[(epoch["mean"] + epoch["std_dev"], epoch["mean"] - epoch["std_dev"]) for epoch in metrics["train_loss"]]), color="red", alpha=0.2)
+    train_upper = [epoch["mean"] + epoch["std_dev"] for epoch in metrics["train_loss"]]
+    train_lower = [epoch["mean"] - epoch["std_dev"] for epoch in metrics["train_loss"]]
+    ax.fill_between(train_x, train_upper, train_lower, color="red", alpha=0.2)
 
-    # 绘制验证损失曲线和标准差区间
     ax.plot(val_iteration_points, [epoch["mean"] for epoch in metrics["val_loss"]], label="Validation Loss", color="blue", linestyle="-", marker=".")
-    ax.fill_between(val_iteration_points, *zip(*[(epoch["mean"] + epoch["std_dev"], epoch["mean"] - epoch["std_dev"]) for epoch in metrics["val_loss"]]), color="blue", alpha=0.2)
+    val_upper = [epoch["mean"] + epoch["std_dev"] for epoch in metrics["val_loss"]]
+    val_lower = [epoch["mean"] - epoch["std_dev"] for epoch in metrics["val_loss"]]
+    ax.fill_between(val_iteration_points, val_upper, val_lower, color="blue", alpha=0.2)
 
     # 设置X轴为整数刻度
     ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
@@ -468,11 +487,10 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
     ax.legend(loc="upper right")
     ax.grid(True, linestyle="--", alpha=0.5)
 
-    # 保存并展示图形
+    # 保存图形
     plt.tight_layout()
     pathlib.Path(img_path).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(img_path, dpi=300, bbox_inches="tight")
-    plt.show()
     plt.close()
 
 
@@ -497,6 +515,7 @@ def parse_args() -> argparse.Namespace:
         -s/--num-layers (int): Transformer 编码器层数。
         -o/--dropout (float): Dropout 概率。
         -u/--seed (int): 随机种子，保证可复现性。
+
     Returns:
         解析后的命令行参数对象。
     """
