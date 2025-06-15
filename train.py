@@ -134,7 +134,7 @@ class MidiDataset(Dataset):
                 continue
 
             # 截断超长序列
-            if len(data.get("data", [])) > max_sequence_length:
+            if len(data["data"]) > max_sequence_length:
                 # 找到最大不超过 max_sequence_length 的分割点
                 valid_positions = [i for i, pos in enumerate(data["positions"]) if pos < max_sequence_length]
                 if valid_positions:
@@ -617,9 +617,7 @@ def main(args: argparse.Namespace):
         val_sampler = MidiDatasetSampler(val_dataset, args.val_max_batch_tokens, args.seed)
         val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
-    # 确保使用确定性算法
-    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"
-    torch.use_deterministic_algorithms(True)
+    # 设置随机种子，确保可复现性
     set_seed(args.seed)
 
     # 初始化模型结构
