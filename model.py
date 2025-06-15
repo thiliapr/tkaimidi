@@ -155,6 +155,10 @@ class MultiqueryAttention(nn.Module):
         # 输出维度: Queries (dim_model) + Keys (dim_head) + Values (dim_head)
         self.qkv_proj = nn.Linear(dim_model, dim_model + dim_head * 2, device=device)
 
+        # 使用 Xavier 均匀分布初始化查询、键值投影权重
+        nn.init.xavier_uniform_(self.qkv_proj.weight)
+        nn.init.zeros_(self.qkv_proj.bias)
+
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor = None) -> torch.Tensor:
         batch_size, seq_len, _ = x.shape
 
@@ -263,7 +267,7 @@ class MidiNetLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         # 初始化权重
-        for module in self.feedforward:
+        for module in self.feedforward.modules():
             if isinstance(module, nn.Linear):
                 torch.nn.init.xavier_uniform_(module.weight)
                 torch.nn.init.zeros_(module.bias)
