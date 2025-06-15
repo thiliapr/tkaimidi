@@ -80,52 +80,6 @@ class MidiDataset(Dataset):
         self.music_sequences = []  # 存储所有训练样本的分词序列
         num_workers = cpu_count()  # 并行处理的进程数
 
-        def process_midi_files(files: list[pathlib.Path], progress_bar: tqdm) -> list[list[int]]:
-            "并行处理 MIDI 文件，将其转为分词序列。"
-            result = []
-            for file_path in files:
-                try:
-                    midi_file = mido.MidiFile(file_path, clip=True)
-                except (ValueError, EOFError, OSError):
-                    # 跳过损坏或无法读取的 MIDI 文件
-                    continue
-
-                notes = midi_to_notes(midi_file)
-                sheet, positions = notes_to_sheet(notes, max_length=max_sequence_length)
-                if len(positions) < min_sequence_length:
-                    continue
-
-                # 编码为分词序列
-                result.append(tokenizer.encode(data_to_str(sheet)))
-                progress_bar.update()
-            return result
-
-        def process_json_files(files: list[pathlib.Path], progress_bar: tqdm) -> list[list[int]]:
-            "并行处理 JSON 文件，直接读取分词序列。"
-            result = []
-            for file_path in files:
-                try:
-                    with open(file_path, encoding="utf-8") as f:
-                        data = json.load(f)
-                except Exception:
-                    continue
-
-                # 截断超长序列
-                if len(data.get("data", [])) > max_sequence_length:
-                    # 找到最大不超过 max_sequence_length 的分割点
-                    valid_positions = [i for i, pos in enumerate(data["positions"]) if pos < max_sequence_length]
-                    if valid_positions:
-                        notes_end = max(valid_positions)
-                        data["num_notes"] = notes_end
-                        data["data"] = data["data"][:data["positions"][notes_end]]
-
-                if data["num_notes"] < min_sequence_length:
-                    continue
-
-                result.append(tokenizer.encode(data["data"]))
-                progress_bar.update()
-            return result
-
         # 收集所有 MIDI 文件路径
         midi_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.mid")]
         random.Random(seed).shuffle(midi_files)
@@ -134,7 +88,7 @@ class MidiDataset(Dataset):
 
         # 并行处理 MIDI 文件
         midi_chunks = [midi_files[i::num_workers] for i in range(num_workers)]
-        midi_results = parallel_map(process_midi_files, [(chunk, midi_progress) for chunk in midi_chunks], num_workers=num_workers)
+        midi_results = parallel_map(self.process_midi_files, [(chunk, midi_progress, max_sequence_length, min_sequence_length, tokenizer) for chunk in midi_chunks], num_workers=num_workers)
 
         # 扁平化结果
         self.music_sequences.extend([seq for sublist in midi_results for seq in sublist])
@@ -148,11 +102,59 @@ class MidiDataset(Dataset):
 
         # 并行处理 JSON 文件
         json_chunks = [json_files[i::num_workers] for i in range(num_workers)]
-        json_results = parallel_map(process_json_files, [(chunk, json_progress) for chunk in json_chunks], num_workers=num_workers)
+        json_results = parallel_map(self.process_json_files, [(chunk, json_progress, max_sequence_length, min_sequence_length, tokenizer) for chunk in json_chunks], num_workers=num_workers)
 
         # 扁平化结果
         self.music_sequences.extend([seq for sublist in json_results for seq in sublist])
         json_progress.close()
+
+    @staticmethod
+    def process_midi_files(files: list[pathlib.Path], progress_bar: tqdm, max_sequence_length: int, min_sequence_length: int, tokenizer: PreTrainedTokenizerFast) -> list[list[int]]:
+        "并行处理 MIDI 文件，将其转为分词序列。"
+        result = []
+        for file_path in files:
+            try:
+                midi_file = mido.MidiFile(file_path, clip=True)
+            except (ValueError, EOFError, OSError):
+                # 跳过损坏或无法读取的 MIDI 文件
+                continue
+
+            notes = midi_to_notes(midi_file)
+            sheet, positions = notes_to_sheet(notes, max_length=max_sequence_length)
+            if len(positions) < min_sequence_length:
+                continue
+
+            # 编码为分词序列
+            result.append(tokenizer.encode(data_to_str(sheet)))
+            progress_bar.update()
+        return result
+
+    @staticmethod
+    def process_json_files(files: list[pathlib.Path], progress_bar: tqdm, max_sequence_length: int, min_sequence_length: int, tokenizer: PreTrainedTokenizerFast) -> list[list[int]]:
+        "并行处理 JSON 文件，直接读取分词序列。"
+        result = []
+        for file_path in files:
+            try:
+                with open(file_path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except json.JSONDecodeError:
+                continue
+
+            # 截断超长序列
+            if len(data.get("data", [])) > max_sequence_length:
+                # 找到最大不超过 max_sequence_length 的分割点
+                valid_positions = [i for i, pos in enumerate(data["positions"]) if pos < max_sequence_length]
+                if valid_positions:
+                    notes_end = max(valid_positions)
+                    data["num_notes"] = notes_end
+                    data["data"] = data["data"][:data["positions"][notes_end]]
+
+            if data["num_notes"] < min_sequence_length:
+                continue
+
+            result.append(tokenizer.encode(data["data"]))
+            progress_bar.update()
+        return result
 
     def __len__(self) -> int:
         return len(self.music_sequences)
