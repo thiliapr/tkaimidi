@@ -170,6 +170,7 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+.vscode
 data/
 ckpt/
 test.py

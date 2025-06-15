@@ -91,7 +91,7 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[PreTrainedTokenizerFast, 
 
     # 尝试加载指标文件
     metrics_path = path / "metrics.json"
-    metrics = {"val_ppl": [], "train_ppl": [], "val_loss": [], "train_loss": []}
+    metrics = {"val_loss": [], "train_loss": []}
     if metrics_path.exists():
         with open(metrics_path, "r", encoding="utf-8") as f:
             metrics |= json.load(f)  # 读取指标

@@ -12,7 +12,7 @@ import random
 import argparse
 import json
 import os
-from multiprocessing import RLock, cpu_count
+from multiprocessing import cpu_count
 from typing import Optional, Iterator
 import mido
 import torch
