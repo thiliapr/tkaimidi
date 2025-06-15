@@ -12,7 +12,7 @@ import random
 import argparse
 import json
 import os
-from multiprocessing import cpu_count
+from multiprocessing import RLock, cpu_count
 from typing import Optional, Iterator
 import mido
 import torch
@@ -27,7 +27,7 @@ from transformers import PreTrainedTokenizerFast
 from constants import DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_LAYERS, DEFAULT_DROPOUT, DEFAULT_WEIGHT_DECAY, DEFAULT_LEARNING_RATE, DEFAULT_MIN_SEQUENCE_LENGTH
 from model import MidiNet, MidiNetConfig
 from checkpoint import load_checkpoint_train, save_checkpoint
-from utils import midi_to_notes, notes_to_sheet, empty_cache
+from utils import midi_to_notes, notes_to_sheet, empty_cache, parallel_map
 from tokenizer import data_to_str
 
 # 解除线程数量限制
@@ -37,20 +37,25 @@ torch.set_num_threads(cpu_count())
 
 class MidiDataset(Dataset):
     """
-    MIDI 数据集类，用于加载和处理 MIDI 文件，将其转化为模型可以使用的格式。
+    MIDI 数据集类，用于加载、处理 MIDI/JSON 文件并转换为模型训练所需的分词序列。
 
-    功能说明:
-    1. 从指定目录读取所有 MIDI 和 JSON 文件
-    2. 将 MIDI 文件转换为音符序列
-    3. 将音符序列分割为指定长度的训练样本
-    4. 提供数据集大小和索引访问功能
+    工作流程:
+        1. 遍历指定目录下所有 MIDI 和 JSON 文件。
+        2. 对 MIDI 文件，读取后转为音符序列，再转为乐谱分词序列。
+        3. 对 JSON 文件，直接读取分词序列。
+        4. 跳过过短的序列，截断过长的序列。
+        5. 支持多进程并行处理文件，加速数据加载。
+        6. 所有序列存储于 self.music_sequences，支持索引访问和长度查询。
+
+    Attributes:
+        music_sequences: 存储所有训练样本的分词序列列表。
 
     Args:
-        midi_dirs: 包含 MIDI/JSON 文件的目录列表
-        tokenizer: 用于音乐数据编码的分词器
-        min_sequence_length: 训练序列的最小长度(按音符表示时的长度算，过短序列会被丢弃)
-        max_sequence_length: 序列最大长度(按乐谱表示时的长度算，超长序列会被截断)
-        show_progress: 是否显示加载进度条
+        midi_dirs: 包含 MIDI/JSON 文件的目录列表。
+        tokenizer: 用于音乐数据编码的分词器。
+        min_sequence_length: 训练序列的最小长度，短于该长度的样本会被丢弃。
+        max_sequence_length: 训练序列的最大长度，长于该长度的样本会被截断。
+        seed: 随机种子，用于数据加载时的随机性控制。
 
     Examples:
         >>> dataset = MidiDataset(
@@ -59,67 +64,101 @@ class MidiDataset(Dataset):
         ...     min_sequence_length=64,
         ...     max_sequence_length=8964
         ... )
-        >>> len(dataset)  # 获取训练样本数量
+        >>> len(dataset)
         198964
-        >>> dataset[0]  # 获取第一个训练样本
+        >>> dataset[0]
     """
 
-    def __init__(self, midi_dirs: list[pathlib.Path], tokenizer: PreTrainedTokenizerFast, min_sequence_length: int, max_sequence_length: int, show_progress: bool = True):
-        self.music_sequences = []  # 存储每个训练序列的信息(乐谱分词表示)
+    def __init__(
+        self,
+        midi_dirs: list[pathlib.Path],
+        tokenizer: PreTrainedTokenizerFast,
+        min_sequence_length: int,
+        max_sequence_length: int,
+        seed: int = 8964
+    ):
+        self.music_sequences = []  # 存储所有训练样本的分词序列
+        num_workers = cpu_count()  # 并行处理的进程数
 
-        # 处理 MIDI 文件
-        midi_files = sorted([f for dir_path in midi_dirs for f in dir_path.glob("**/*.mid")], key=lambda file: file.name)
-        for filepath in tqdm(midi_files, desc="加载音乐数据集（原始 MIDI 文件）", delay=0.1, disable=not show_progress):
-            # 读取并转化 MIDI 文件
-            try:
-                midi_file = mido.MidiFile(filepath, clip=True)
-            except (ValueError, EOFError, OSError):
-                # 跳过有错误的 MIDI 文件
-                continue
+        def process_midi_files(files: list[pathlib.Path], progress_bar: tqdm) -> list[list[int]]:
+            "并行处理 MIDI 文件，将其转为分词序列。"
+            result = []
+            for file_path in files:
+                try:
+                    midi_file = mido.MidiFile(file_path, clip=True)
+                except (ValueError, EOFError, OSError):
+                    # 跳过损坏或无法读取的 MIDI 文件
+                    continue
 
-            # 提取音符
-            notes = midi_to_notes(midi_file)
+                notes = midi_to_notes(midi_file)
+                sheet, positions = notes_to_sheet(notes, max_length=max_sequence_length)
+                if len(positions) < min_sequence_length:
+                    continue
 
-            # 转化为电子乐谱形式
-            sheet, positions = notes_to_sheet(notes, max_length=max_sequence_length)
+                # 编码为分词序列
+                result.append(tokenizer.encode(data_to_str(sheet)))
+                progress_bar.update()
+            return result
 
-            # 跳过小于指定长度的 MIDI 文件
-            if len(positions) < min_sequence_length:
-                continue
+        def process_json_files(files: list[pathlib.Path], progress_bar: tqdm) -> list[list[int]]:
+            "并行处理 JSON 文件，直接读取分词序列。"
+            result = []
+            for file_path in files:
+                try:
+                    with open(file_path, encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    continue
 
-            # 保存序列的内容
-            self.music_sequences.append(tokenizer.encode(data_to_str(sheet)))
+                # 截断超长序列
+                if len(data.get("data", [])) > max_sequence_length:
+                    # 找到最大不超过 max_sequence_length 的分割点
+                    valid_positions = [i for i, pos in enumerate(data["positions"]) if pos < max_sequence_length]
+                    if valid_positions:
+                        notes_end = max(valid_positions)
+                        data["num_notes"] = notes_end
+                        data["data"] = data["data"][:data["positions"][notes_end]]
 
-        # 处理 JSON 文件（更快的格式）
-        json_files = sorted([f for dir_path in midi_dirs for f in dir_path.glob("**/*.json")], key=lambda file: file.name)
+                if data["num_notes"] < min_sequence_length:
+                    continue
 
-        for filepath in tqdm(json_files, desc="加载音乐数据集（优化的 JSON 文件）", delay=0.1, disable=not show_progress):
-            # 读取文件
-            with open(filepath, encoding="utf-8") as f:
-                data = json.load(f)
+                result.append(tokenizer.encode(data["data"]))
+                progress_bar.update()
+            return result
 
-            # 截断超长序列
-            if len(data["data"]) > max_sequence_length:
-                notes_end, sheet_end = max(
-                    (i, position)
-                    for i, position in enumerate(data["positions"])
-                    if position < max_sequence_length
-                )
-                data["num_notes"] = notes_end
-                data["data"] = data["data"][:sheet_end]
+        # 收集所有 MIDI 文件路径
+        midi_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.mid")]
+        random.Random(seed).shuffle(midi_files)
+        midi_progress = tqdm(desc="加载音乐数据集（MIDI 文件）", total=len(midi_files), delay=0.1)
+        midi_progress.set_lock(RLock())  # 设置进度条锁，确保多进程安全
 
-            # 跳过超短序列
-            if data["num_notes"] < min_sequence_length:
-                continue
+        # 并行处理 MIDI 文件
+        midi_chunks = [midi_files[i::num_workers] for i in range(num_workers)]
+        midi_results = parallel_map(process_midi_files, [(chunk, midi_progress) for chunk in midi_chunks], num_workers=num_workers)
 
-            # 将当前 MIDI 文件的音符数据加入到 music_sequences 列表中
-            self.music_sequences.append(tokenizer.encode(data["data"]))
+        # 扁平化结果
+        self.music_sequences.extend([seq for sublist in midi_results for seq in sublist])
+        midi_progress.close()
 
-    def __len__(self):
+        # 收集所有 JSON 文件路径
+        json_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.json")]
+        random.Random(seed).shuffle(json_files)
+        json_progress = tqdm(desc="加载音乐数据集（JSON 文件）", total=len(json_files), delay=0.1)
+        json_progress.set_lock(RLock())  # 设置进度条锁，确保多进程安全
+
+        # 并行处理 JSON 文件
+        json_chunks = [json_files[i::num_workers] for i in range(num_workers)]
+        json_results = parallel_map(process_json_files, [(chunk, json_progress) for chunk in json_chunks], num_workers=num_workers)
+
+        # 扁平化结果
+        self.music_sequences.extend([seq for sublist in json_results for seq in sublist])
+        json_progress.close()
+
+    def __len__(self) -> int:
         return len(self.music_sequences)
 
-    def __getitem__(self, index: int):
-        sequence = torch.tensor(self.music_sequences[index], dtype=int)
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        sequence = torch.tensor(self.music_sequences[index], dtype=torch.long)
         return sequence[:-1], sequence[1:]
 
 
