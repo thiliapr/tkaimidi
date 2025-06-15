@@ -83,33 +83,27 @@ class MidiDataset(Dataset):
         # 收集所有 MIDI 文件路径
         midi_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.mid")]
         random.Random(seed).shuffle(midi_files)
-        midi_progress = tqdm(desc="加载音乐数据集（MIDI 文件）", total=len(midi_files), delay=0.1)
-        midi_progress.set_lock(RLock())  # 设置进度条锁，确保多进程安全
 
         # 并行处理 MIDI 文件
         midi_chunks = [midi_files[i::num_workers] for i in range(num_workers)]
-        midi_results = parallel_map(self.process_midi_files, [(chunk, midi_progress, max_sequence_length, min_sequence_length, tokenizer) for chunk in midi_chunks], num_workers=num_workers)
+        midi_results = parallel_map(self.process_midi_files, [(chunk, max_sequence_length, min_sequence_length, tokenizer) for chunk in midi_chunks], num_workers=num_workers)
 
         # 扁平化结果
         self.music_sequences.extend([seq for sublist in midi_results for seq in sublist])
-        midi_progress.close()
 
         # 收集所有 JSON 文件路径
         json_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.json")]
         random.Random(seed).shuffle(json_files)
-        json_progress = tqdm(desc="加载音乐数据集（JSON 文件）", total=len(json_files), delay=0.1)
-        json_progress.set_lock(RLock())  # 设置进度条锁，确保多进程安全
 
         # 并行处理 JSON 文件
         json_chunks = [json_files[i::num_workers] for i in range(num_workers)]
-        json_results = parallel_map(self.process_json_files, [(chunk, json_progress, max_sequence_length, min_sequence_length, tokenizer) for chunk in json_chunks], num_workers=num_workers)
+        json_results = parallel_map(self.process_json_files, [(chunk, max_sequence_length, min_sequence_length, tokenizer) for chunk in json_chunks], num_workers=num_workers)
 
         # 扁平化结果
         self.music_sequences.extend([seq for sublist in json_results for seq in sublist])
-        json_progress.close()
 
     @staticmethod
-    def process_midi_files(files: list[pathlib.Path], progress_bar: tqdm, max_sequence_length: int, min_sequence_length: int, tokenizer: PreTrainedTokenizerFast) -> list[list[int]]:
+    def process_midi_files(files: list[pathlib.Path], max_sequence_length: int, min_sequence_length: int, tokenizer: PreTrainedTokenizerFast) -> list[list[int]]:
         "并行处理 MIDI 文件，将其转为分词序列。"
         result = []
         for file_path in files:
@@ -126,11 +120,10 @@ class MidiDataset(Dataset):
 
             # 编码为分词序列
             result.append(tokenizer.encode(data_to_str(sheet)))
-            progress_bar.update()
         return result
 
     @staticmethod
-    def process_json_files(files: list[pathlib.Path], progress_bar: tqdm, max_sequence_length: int, min_sequence_length: int, tokenizer: PreTrainedTokenizerFast) -> list[list[int]]:
+    def process_json_files(files: list[pathlib.Path], max_sequence_length: int, min_sequence_length: int, tokenizer: PreTrainedTokenizerFast) -> list[list[int]]:
         "并行处理 JSON 文件，直接读取分词序列。"
         result = []
         for file_path in files:
@@ -153,7 +146,6 @@ class MidiDataset(Dataset):
                 continue
 
             result.append(tokenizer.encode(data["data"]))
-            progress_bar.update()
         return result
 
     def __len__(self) -> int:
