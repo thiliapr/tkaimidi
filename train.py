@@ -673,7 +673,7 @@ def main(args: argparse.Namespace):
 
     # 保存最后一次训练时使内存爆炸的张量的形状
     if oom_shapes:
-        with open("oom_shapes.txt", "w", encoding="utf-8") as f:
+        with open(args.ckpt_path / "oom_shapes.txt", "w", encoding="utf-8") as f:
             f.write("Shape (e.g: Batch Size x Sequence Length)\n")
             f.write("\n".join(f"{batch_size} x {sequence_length}" for batch_size, sequence_length in oom_shapes))
 
