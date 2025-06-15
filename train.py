@@ -536,8 +536,8 @@ def parse_args() -> argparse.Namespace:
     # 添加可选参数
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-m", "--min-sequence-length", default=DEFAULT_MIN_SEQUENCE_LENGTH, type=int, help="最小序列长度，小于该长度的样本不会被训练")
-    parser.add_argument("-e", "--max-sequence-length", default=16384, type=int, help="最大序列长度，大于该长度的样本将被截断，默认为 %(default)s")
-    parser.add_argument("-b", "--train-max-batch-tokens", default=16384, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
+    parser.add_argument("-e", "--max-sequence-length", default=4096, type=int, help="最大序列长度，大于该长度的样本将被截断，默认为 %(default)s")
+    parser.add_argument("-b", "--train-max-batch-tokens", default=4096, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-q", "--val-max-batch-tokens", default=32678, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-l", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率，默认为 %(default)s")
     parser.add_argument("-w", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数，默认为 %(default)s")
