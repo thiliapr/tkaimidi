@@ -12,7 +12,6 @@ import random
 import argparse
 import json
 import os
-import tempfile
 from multiprocessing import cpu_count
 from typing import Optional, Iterator
 import mido
@@ -20,7 +19,7 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
-from torch import nn, optim, distributed as dist, multiprocessing as mp
+from torch import nn, optim
 from torch.nn import functional as F
 from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, DataLoader, Sampler
@@ -127,20 +126,17 @@ class MidiDataset(Dataset):
 class MidiDatasetSampler(Sampler[list[int]]):
     """
     用于 MIDI 数据集的分批采样器，根据序列长度进行动态批处理。
-    
+
     该采样器会:
     1. 根据序列长度对样本进行排序
     2. 动态创建批次，确保每个批次的token总数不超过max_batch_tokens
-    3. 支持分布式训练环境下的数据分配
-    4. 每个epoch都会重新打乱数据顺序
+    3. 每个epoch都会重新打乱数据顺序
 
     Attributes:
         max_batch_tokens: 单个批次允许的最大token数量
-        rank: 当前进程的rank编号(分布式训练用)
-        world_size: 总进程数(分布式训练用)
         seed: 随机种子
-        batches: 当前rank分配到的批次列表
-        total_tokens: 当前rank分配到的总token数
+        batches: 当前分配到的批次列表
+        total_tokens: 当前分配到的总token数
 
     Examples:
         >>> dataset = MidiDataset([pathlib.Path("data/")], tokenizer, min_sequence_length=64, max_sequence_length=8964)
@@ -149,11 +145,9 @@ class MidiDatasetSampler(Sampler[list[int]]):
         ...     print(batch)  # [19, 89, 64]
     """
 
-    def __init__(self, dataset: MidiDataset, max_batch_tokens: int, rank: int = 0, world_size: int = 1, seed: int = 0):
+    def __init__(self, dataset: MidiDataset, max_batch_tokens: int, seed: int = 0):
         super().__init__()
         self.max_batch_tokens = max_batch_tokens
-        self.rank = rank
-        self.world_size = world_size
         self.seed = seed
         self.batches = []
         self.total_tokens = 0
@@ -165,11 +159,10 @@ class MidiDatasetSampler(Sampler[list[int]]):
     def set_epoch(self, epoch: int) -> None:
         """
         设置当前epoch并重新生成批次
-        
+
         每个epoch开始时调用，用于:
         1. 根据新epoch重新打乱数据顺序
         2. 重新分配批次
-        3. 确保分布式环境下各rank数据对齐
         """
         generator = random.Random(self.seed + epoch)
 
@@ -204,29 +197,21 @@ class MidiDatasetSampler(Sampler[list[int]]):
             batch_tokens = longest_in_batch * len(current_batch)
             batches_with_tokens.append((current_batch, batch_tokens))
 
-        # 确保批次数是world_size的倍数
-        if len(batches_with_tokens) % self.world_size:
-            needed = self.world_size - (len(batches_with_tokens) % self.world_size)
-            # 随机复制现有批次来补全
-            for _ in range(needed):
-                batch_idx = generator.randint(0, len(batches_with_tokens) - 1)
-                batches_with_tokens.insert(batch_idx, batches_with_tokens[batch_idx])
-
         # 批次倒序，用于快速检测训练的问题
         batches_with_tokens.reverse()
 
-        # 分配当前rank的批次
-        self.batches = batches_with_tokens[self.rank::self.world_size]
-        self.total_tokens = sum(tokens for _, tokens in self.batches)
+        # 分配批次
+        self.batches = [batch for batch, _ in batches_with_tokens]
+        self.total_tokens = sum(tokens for _, tokens in batches_with_tokens)
 
     def __iter__(self) -> Iterator[list[int]]:
-        yield from (batch for batch, _ in self.batches)
+        yield from self.batches
 
     def __len__(self) -> int:
         return len(self.batches)
 
 
-def sequence_collate_fn(batch, pad_token=0):
+def sequence_collate_fn(batch, pad_token: int = 0):
     """
     将一个批次的变长输入和标签序列整理为统一长度的张量（自动填充pad_token）。
 
@@ -251,7 +236,6 @@ def train(
     vocab_size: int,
     pad_token: int = 0,
     device: Optional[torch.device] = None,
-    show_progress: bool = True
 ) -> tuple[list[float], list[tuple[int, int]]]:
     """
     训练模型的函数。
@@ -274,7 +258,6 @@ def train(
         vocab_size: 词汇表的大小，用于调整输出层的维度。
         pad_token: 填充token的标记，用于忽略计算损失。
         device: 指定训练的设备。
-        show_progress: 是否显示进度条。
 
     Notes:
         - 默认使用混合精度训练（FP16 +梯度缩放）。
@@ -305,7 +288,7 @@ def train(
 
     # 创建进度条，显示训练进度
     dataloader_iter = iter(dataloader)
-    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens, disable=not show_progress)
+    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens)
 
     # 初始化损失列表、触发OOM的输入形状列表
     losses = []
@@ -316,7 +299,6 @@ def train(
 
     # 遍历整个训练集
     for inputs, labels in dataloader_iter:
-        outputs = loss = None
         inputs, labels = inputs.to(device), labels.to(device)
         progress_n = inputs.size(0) * inputs.size(1)  # 进度条更新的步数
         optimizer.zero_grad()  # 清空梯度
@@ -337,17 +319,8 @@ def train(
             # 记录OOM时的输入形状
             oom_shapes.append(tuple(inputs.shape))
 
-            # 保持 DDP 同步
-            optimizer.zero_grad()
-            with autocast(device_type, dtype=torch.float16):
-                outputs = model(torch.zeros((1, 1), dtype=int, device=device)).view(-1, vocab_size)
-                loss = F.cross_entropy(outputs, torch.zeros(outputs.size(0), dtype=int, device=device), ignore_index=pad_token)
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-
             # 消除引用，方便垃圾回收
-            inputs = labels = None
+            inputs = labels = outputs = loss = None
 
             # 清理缓存以释放内存
             empty_cache()
@@ -368,8 +341,7 @@ def validate(
     dataloader: DataLoader,
     vocab_size: int,
     pad_token: int = 0,
-    device: Optional[torch.device] = None,
-    show_progress: bool = True
+    device: Optional[torch.device] = None
 ) -> list[float]:
     """
     对模型进行验证，返回每个 batch 的损失。
@@ -396,7 +368,7 @@ def validate(
 
     # 创建进度条，显示验证进度
     dataloader_iter = iter(dataloader)
-    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens, disable=not show_progress)
+    progress_bar = tqdm(total=dataloader.batch_sampler.total_tokens)
 
     # 初始化损失列表
     losses = []
@@ -440,12 +412,12 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
         ```
         metrics = {
             "train_loss": [
-                {"mean": 1.2, "std_dev": 0.1, "count": 100},
-                {"mean": 1.0, "std_dev": 0.08, "count": 100},
+                {"mean": 1.2, "std": 0.1, "count": 100},
+                {"mean": 1.0, "std": 0.08, "count": 100},
             ],
             "val_loss": [
-                {"mean": 1.1, "std_dev": 0.09},
-                {"mean": 0.95, "std_dev": 0.07},
+                {"mean": 1.1, "std": 0.09},
+                {"mean": 0.95, "std": 0.07},
             ]
         }
         ```
@@ -467,13 +439,13 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
 
     # 绘制训练损失曲线和标准差区间
     ax.plot(train_x, [epoch["mean"] for epoch in metrics["train_loss"]], label="Train Loss", color="red", linestyle="-", marker=".")
-    train_upper = [epoch["mean"] + epoch["std_dev"] for epoch in metrics["train_loss"]]
-    train_lower = [epoch["mean"] - epoch["std_dev"] for epoch in metrics["train_loss"]]
+    train_upper = [epoch["mean"] + epoch["std"] for epoch in metrics["train_loss"]]
+    train_lower = [epoch["mean"] - epoch["std"] for epoch in metrics["train_loss"]]
     ax.fill_between(train_x, train_upper, train_lower, color="red", alpha=0.2)
 
     ax.plot(val_iteration_points, [epoch["mean"] for epoch in metrics["val_loss"]], label="Validation Loss", color="blue", linestyle="-", marker=".")
-    val_upper = [epoch["mean"] + epoch["std_dev"] for epoch in metrics["val_loss"]]
-    val_lower = [epoch["mean"] - epoch["std_dev"] for epoch in metrics["val_loss"]]
+    val_upper = [epoch["mean"] + epoch["std"] for epoch in metrics["val_loss"]]
+    val_lower = [epoch["mean"] - epoch["std"] for epoch in metrics["val_loss"]]
     ax.fill_between(val_iteration_points, val_upper, val_lower, color="blue", alpha=0.2)
 
     # 设置X轴为整数刻度
@@ -574,33 +546,26 @@ def set_seed(seed: int):
         torch.backends.cudnn.benchmark = False
 
 
-def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
+def main(args: argparse.Namespace):
     """
-    分布式训练主函数，用于 torch.multiprocessing.spawn 启动多进程训练。
-
-    工作流程：
-    1. 初始化分布式训练环境（如果world_size > 1）
-    2. 加载模型、数据集和优化器
-    3. 使用DistributedDataParallel包装模型
-    4. 执行训练和验证循环
-    5. 收集并汇总各进程的指标
-    6. 保存模型检查点和训练统计信息
-    7. 清理分布式训练环境
+    主训练入口函数。
 
     Args:
-        rank: 当前进程的排名（0为主进程）
-        world_size: 总进程数（通常等于GPU数量）
-        args: 包含所有训练配置的参数对象
+        args: 包含训练所需参数的命名空间对象，包括数据集路径、模型参数、训练超参数等。
 
-    Examples:
-        >>> torch.multiprocessing.spawn(_mp_fn, args=(world_size, args), nprocs=world_size)
+    功能:
+        1. 设置设备（GPU/CPU）和随机种子，确保训练的可复现性。
+        2. 加载训练检查点，包括分词器、模型权重、优化器状态和历史指标。
+        3. 构建训练和验证数据集及其采样器和数据加载器。
+        4. 初始化模型结构，并加载权重到指定设备。
+        5. 配置优化器及其参数（学习率、权重衰减等）。
+        6. 进行多轮训练，每轮包括训练和（可选的）验证，记录损失和相关指标。
+        7. 记录并保存训练过程中出现 OOM（内存溢出）时的张量形状信息。
+        8. 保存最终模型检查点和训练指标。
+        9. 绘制并保存训练过程中的损失曲线图。
     """
-    # 初始化分布式训练组
-    if world_size > 1:
-        dist.init_process_group(backend="nccl", world_size=world_size, rank=rank)
-
     # 设置当前进程的设备
-    device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 清理缓存以释放内存
     empty_cache()
@@ -609,14 +574,14 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
     tokenizer, model_state_dict, optimizer_state_dict, metrics = load_checkpoint_train(args.ckpt_path)
 
     # 加载训练数据集及分布式采样器
-    train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length, show_progress=rank == 0)
-    train_sampler = MidiDatasetSampler(train_dataset, args.train_max_batch_tokens, rank, world_size, args.seed)
+    train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
+    train_sampler = MidiDatasetSampler(train_dataset, args.train_max_batch_tokens, args.seed)
     train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 如果存在验证集，加载验证数据集
     if args.val_dataset:
-        val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length, show_progress=rank == 0)
-        val_sampler = MidiDatasetSampler(val_dataset, args.val_max_batch_tokens, rank, world_size, args.seed)
+        val_dataset = MidiDataset(args.val_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
+        val_sampler = MidiDatasetSampler(val_dataset, args.val_max_batch_tokens, args.seed)
         val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
 
     # 确保使用确定性算法
@@ -634,9 +599,9 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
     # 转移模型到设备
     model = model.to(device)
 
-    # 用 DDP 包装模型
-    if world_size > 1:
-        model = nn.parallel.DistributedDataParallel(model, device_ids=[rank])
+    # 多 GPU 时使用 DataParallel 包装模型
+    if torch.cuda.device_count() > 1:
+        model = nn.DataParallel(model)
 
     # 创建优化器
     optimizer = optim.AdamW(model.parameters())
@@ -654,129 +619,38 @@ def _mp_fn(rank: int, world_size: int, args: argparse.Namespace):
     for epoch in range(args.num_epochs):
         # 设置每轮不同的随机种子（确保数据shuffle不同但可复现）
         current_epoch = len(metrics["train_loss"]) + epoch
-        set_seed(args.seed + rank + current_epoch)
+        set_seed(args.seed + current_epoch)
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train_loss, oom_shapes = train(model, train_loader, optimizer, len(tokenizer), tokenizer.pad_token_id, device, show_progress=rank == 0)
+        train_loss, oom_shapes = train(model, train_loader, optimizer, len(tokenizer), tokenizer.pad_token_id, device)
 
         # 如果指定了验证集，就进行验证，否则跳过验证并设置验证损失为 NaN
         if args.val_dataset:
             val_sampler.set_epoch(current_epoch)
-            val_loss = validate(model, val_loader, len(tokenizer), tokenizer.pad_token_id, device, show_progress=rank == 0)
+            val_loss = validate(model, val_loader, len(tokenizer), tokenizer.pad_token_id, device)
         else:
             val_loss = [float("nan")]
 
-        # 主进程放入自己的损失
-        if rank == 0:
-            all_train_loss = [train_loss]
-            all_val_loss = [val_loss]
-
-        # 多进程时汇集所有进程的损失
-        if world_size > 1:
-            # 获取系统临时目录路径
-            temp_dir = pathlib.Path(tempfile.gettempdir())
-
-            # 非主进程将本地损失写入以 rank 命名的文件
-            if rank != 0:
-                with open(temp_dir / f"rank{rank}.dat", "w", encoding="utf-8") as f:
-                    json.dump({"train_loss": train_loss, "val_loss": val_loss}, f)  # 序列化训练、验证损失
-
-            # 所有进程同步，确保写入操作完成再进行下一步
-            dist.barrier()
-
-            # 主进程读取所有其他进程写入的数据文件
-            if rank == 0:
-                for other_rank in range(1, world_size):
-                    data_file = temp_dir / f"rank{other_rank}.dat"
-                    with open(data_file, encoding="utf-8") as f:
-                        content = json.load(f)
-                        all_train_loss.append(content["train_loss"])
-                        all_val_loss.append(content["val_loss"])
-
-                    # 删除临时数据文件
-                    data_file.unlink(missing_ok=True)
-
-            # 所有进程同步，确保主进程读取完成再进行下一步
-            dist.barrier()
-
         # 计算并添加损失平均值和标准差到指标
-        if rank == 0:
-            all_train_loss = np.array([loss for rank_loss in all_train_loss for loss in rank_loss])
-            all_val_loss = np.array([loss for rank_loss in all_val_loss for loss in rank_loss])
-            metrics["train_loss"].append({"mean": all_train_loss.mean(), "std_dev": all_train_loss.std(), "count": len(all_train_loss)})
-            metrics["val_loss"].append({"mean": all_val_loss.mean(), "std_dev": all_val_loss.std()})
+        train_loss = np.array(train_loss)
+        val_loss = np.array(val_loss)
+        metrics["train_loss"].append({"mean": train_loss.mean(), "std": train_loss.std(), "count": len(train_loss)})
+        metrics["val_loss"].append({"mean": val_loss.mean(), "std": val_loss.std()})
 
-    # 收集所有进程中的 OOM 张量形状
-    if rank == 0:
-        all_oom_shapes = [oom_shapes]
+    # 保存最后一次训练时使内存爆炸的张量的形状
+    if oom_shapes:
+        with open("oom_shapes.txt", "w", encoding="utf-8") as f:
+            f.write("Shape (e.g: Batch Size x Sequence Length)\n")
+            f.write("\n".join(f"{batch_size} x {sequence_length}" for batch_size, sequence_length in oom_shapes))
 
-    if world_size > 1:
-        # 获取系统临时目录路径
-        temp_dir = pathlib.Path(tempfile.gettempdir())
+    # 保存当前模型的检查点
+    save_checkpoint((model.module if torch.cuda.device_count() > 1 else model).cpu().state_dict(), optimizer.state_dict(), metrics, args.ckpt_path)
+    print(f"训练完成，模型已保存到 {args.ckpt_path}。")
 
-        # 非主进程将本地 OOM 张量形状写入以 rank 命名的文件
-        if rank != 0:
-            with open(temp_dir / f"rank{rank}.dat", "w", encoding="utf-8") as f:
-                f.write(json.dumps(oom_shapes))
-
-        # 所有进程同步，确保写入操作完成再进行下一步
-        dist.barrier()
-
-        # 主进程读取所有其他进程写入的数据文件
-        if rank == 0:
-            for other_rank in range(1, world_size):
-                data_file = temp_dir / f"rank{other_rank}.dat"
-                with open(data_file, encoding="utf-8") as f:
-                    # 读取完整内容，并加入到列表中
-                    all_oom_shapes.append(json.load(f))
-
-                # 删除临时数据文件
-                data_file.unlink(missing_ok=True)
-
-    # 主进程保存模型、统计信息和 OOM 形状
-    if rank == 0:
-        # 保存最后一次训练时使内存爆炸的张量的形状
-        all_oom_shapes = [oom_shape for rank_oom_shapes in all_oom_shapes for oom_shape in rank_oom_shapes]
-        if all_oom_shapes:
-            with open("oom_shapes.txt", "w", encoding="utf-8") as f:
-                f.write("Shape (e.g: Batch Size x Sequence Length)\n")
-                f.write("\n".join(f"{batch_size} x {sequence_length}" for batch_size, sequence_length in all_oom_shapes))
-
-        # 保存当前模型的检查点
-        save_checkpoint((model.module if world_size > 1 else model).cpu().state_dict(), optimizer.state_dict(), metrics, args.ckpt_path)
-
-        # 绘制训练过程中的损失曲线
-        plot_training_process(metrics, args.ckpt_path / "statistics.png")
-
-    # 释放资源
-    if world_size > 1:
-        dist.destroy_process_group()
-
-
-def main():
-    """
-    主函数，负责调配多进程训练。
-
-    支持三种运行模式:
-    1. 多 GPU：自动检测多块 GPU，使用分布式数据并行（DDP）加速训练。
-    2. 单 GPU：仅检测到一块 GPU 时，使用单进程在该 GPU 上训练。
-    3. CPU：无可用 GPU 时，自动切换为 CPU 训练模式。
-    """
-    # 解析命令行参数
-    args = parse_args()
-
-    # 如果有多 GPU，使用 DDP 加速训练
-    world_size = max(torch.cuda.device_count(), 1)
-    if world_size > 1:
-        os.environ["MASTER_ADDR"] = "localhost"
-        # 随机选择一个动态/私有端口（49152–65535），以减少与常用端口冲突的概率
-        os.environ["MASTER_PORT"] = str(random.randint(2 ** 15, 2 ** 16 - 1))
-        mp.spawn(_mp_fn, (world_size, args), nprocs=world_size)
-    else:
-        # 单进程（单 GPU 或 CPU）模式
-        _mp_fn(0, 1, args)
+    # 绘制训练过程中的损失曲线
+    plot_training_process(metrics, args.ckpt_path / "statistics.png")
 
 
 if __name__ == "__main__":
-    main()
+    main(parse_args())
