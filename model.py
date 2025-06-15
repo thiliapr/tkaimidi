@@ -207,8 +207,8 @@ class MultiqueryAttention(nn.Module):
                 | padding_mask.unsqueeze(2)
             )
 
-            # 扩展到多头维度 [batch_size, 1, seq_len, seq_len] -> [batch_size, num_heads, seq_len, seq_len]
-            attn_mask = attn_mask.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
+            # 扩展到多头维度 [batch_size, 1, seq_len, seq_len]
+            attn_mask = attn_mask.unsqueeze(1)
 
             # 将布尔掩码转换为浮点掩码
             attn_mask = torch.where(attn_mask, -torch.inf, 0.)
