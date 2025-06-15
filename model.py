@@ -189,7 +189,7 @@ class MultiqueryAttention(nn.Module):
             causal_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device).triu(diagonal=1)
 
             # 确保 padding_mask 形状为 [batch_size, seq_len]
-            # 下面的广播逻辑：
+            # 下面的广播逻辑:
             # - causal_mask.unsqueeze(0): [1, seq_len, seq_len]
             # - padding_mask.unsqueeze(1): [batch_size, 1, seq_len] (mask for keys)
             # - padding_mask.unsqueeze(2): [batch_size, seq_len, 1] (mask for queries)
@@ -199,6 +199,9 @@ class MultiqueryAttention(nn.Module):
                 | padding_mask.unsqueeze(1)
                 | padding_mask.unsqueeze(2)
             )
+
+            # 扩展到多头维度 [batch_size, 1, seq_len, seq_len] -> [batch_size, num_heads, seq_len, seq_len]
+            attn_mask = attn_mask.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
 
             # 将布尔掩码转换为浮点掩码
             attn_mask = torch.where(attn_mask, -torch.inf, 0.)
