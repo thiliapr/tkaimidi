@@ -154,10 +154,13 @@ class MultiqueryAttention(nn.Module):
         # 查询、键值投影矩阵 (合并计算效率更高)
         # 输出维度: Queries (dim_model) + Keys (dim_head) + Values (dim_head)
         self.qkv_proj = nn.Linear(dim_model, dim_model + dim_head * 2, device=device)
+        self.out_proj = nn.Linear(dim_model, dim_model, device=device)
 
         # 使用 Xavier 均匀分布初始化查询、键值投影权重
         nn.init.xavier_uniform_(self.qkv_proj.weight)
         nn.init.zeros_(self.qkv_proj.bias)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
 
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor = None) -> torch.Tensor:
         batch_size, seq_len, _ = x.shape
@@ -219,7 +222,7 @@ class MultiqueryAttention(nn.Module):
         )
 
         # 合并多头输出 (batch, seq_len, dim_model)
-        return attn_output.transpose(1, 2).reshape(batch_size, seq_len, -1)
+        return self.out_proj(attn_output.transpose(1, 2).reshape(batch_size, seq_len, -1))
 
 
 class MidiNetLayer(nn.Module):
