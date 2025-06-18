@@ -17,7 +17,7 @@ import torch
 import torch.nn.functional as F
 from transformers import PreTrainedTokenizerFast
 from checkpoint import load_checkpoint, extract_config
-from model import MidiNet, MidiNetConfig
+from model import MidiNet
 from constants import KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, LOOKAHEAD_COUNT
 from utils import midi_to_notes, notes_to_sheet, sheet_to_notes, notes_to_track
 from tokenizer import data_to_str, str_to_data
@@ -109,7 +109,7 @@ def generate_sheet(
         probs = torch.nan_to_num(probs, nan=-torch.inf)
 
         # 如果存在需要调整概率的事件，则降低其相关token的概率
-        if events_to_dampen:
+        if events_to_dampen is not None:
             for event, frequency_reduction in events_to_dampen:
                 for token, token_id in tokenizer.vocab.items():
                     if event in token and token != tokenizer.eos_token:
@@ -143,7 +143,7 @@ def generate_midi(
     repetition_penalty: float = 1,
     max_pitch_span_semitones: float = 20.,
     max_length: Optional[int] = None,
-    device: torch.device = None
+    device: Optional[torch.device] = None
 ) -> Iterator[tuple[int, int]]:
     """
     MIDI音乐流式生成器
@@ -339,13 +339,13 @@ def main():
             print(f"加载指定的 MIDI 文件时出错: {e}\n将选择内置的音乐作为代替。")
 
     # 推导模型参数
-    vocab_size, num_heads, dim_head, dim_feedforward, num_layers = extract_config(state_dict)
+    config = extract_config(state_dict)
 
     # 打印模型参数
-    print(f"模型参数:\n- 词汇表大小: {vocab_size}\n- 注意力头数: {num_heads}\n- 注意力头的维度: {dim_head}\n- 前馈层维度: {dim_feedforward}\n- 注意力头的数量: {num_heads}\n- 层数: {num_layers}\n")
+    print(f"模型参数:\n- 词汇表大小: {config.dim_head * config.num_heads}\n- 注意力头数: {config.num_heads}\n- 注意力头的维度: {config.dim_head}\n- 前馈层维度: {config.dim_feedforward}\n- 注意力头的数量: {config.num_heads}\n- 层数: {config.num_layers}\n")
 
     # 初始化模型并加载状态
-    model = MidiNet(MidiNetConfig(vocab_size, num_heads, dim_head, dim_feedforward, num_layers))
+    model = MidiNet(config)
     model.load_state_dict(state_dict)
 
     # 获取设备
