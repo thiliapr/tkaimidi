@@ -342,7 +342,7 @@ def main():
     config = extract_config(state_dict)
 
     # 打印模型参数
-    print(f"模型参数:\n- 词汇表大小: {config.dim_head * config.num_heads}\n- 注意力头数: {config.num_heads}\n- 注意力头的维度: {config.dim_head}\n- 前馈层维度: {config.dim_feedforward}\n- 注意力头的数量: {config.num_heads}\n- 层数: {config.num_layers}\n")
+    print(f"模型参数:\n- 词汇表大小: {config.dim_head * config.num_heads}\n- 注意力头数: {config.num_heads}\n- 注意力头的维度: {config.dim_head}\n- 前馈层维度: {config.dim_feedforward}\n- 层数: {config.num_layers}\n")
 
     # 初始化模型并加载状态
     model = MidiNet(config)
