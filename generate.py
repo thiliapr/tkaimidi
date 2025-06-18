@@ -172,8 +172,12 @@ def generate_midi(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 转换输入音符为乐谱格式
-    sheet_music, _ = notes_to_sheet(prompt)
-    prompt_text = data_to_str(sheet_music)
+    if prompt:
+        sheet_music, _ = notes_to_sheet(prompt)
+        prompt_text = data_to_str(sheet_music)
+    else:
+        sheet_music = []
+        prompt_text = ""
 
     # 初始化窗口，用于追踪生成的音高
     pitch_window = np.array([], dtype=int)
