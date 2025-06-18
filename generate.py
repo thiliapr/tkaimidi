@@ -87,7 +87,7 @@ def generate_sheet(
     # 自回归生成循环
     while True:
         # 增加输入张量的批次维度，再进行推理
-        logits = model(input_tensor.unsqueeze(0), torch.zeros(1, *input_tensor.size()))[0, -1, :]
+        logits = model(input_tensor.unsqueeze(0))[0, -1, :]
 
         # 屏蔽特殊标记(BOS/PAD/UNK)
         logits[tokenizer.bos_token_id] = -torch.inf
