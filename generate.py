@@ -138,7 +138,7 @@ def generate_midi(
     seed: Optional[int] = None,
     temperature: float = 1.,
     top_k: Optional[int] = None,
-    repetition_penalty: float = 1,
+    repetition_penalty: float = 1.2,
     max_pitch_span_semitones: float = 20.,
     max_length: Optional[int] = None,
     device: Optional[torch.device] = None
@@ -323,7 +323,7 @@ def main():
     parser.add_argument("-m", "--midi-path", type=pathlib.Path, help="指定的 MIDI 文件，将作为生成的音乐的前面部分。如果未指定，将使用内置的音乐来生成。")
     parser.add_argument("-t", "--temperature", type=float, default=1.0, help="采样温度参数，值越高生成结果越多样，值越低结果越保守")
     parser.add_argument("-k", "--top-k", type=int, help="仅对概率前`top_k`个token采样，减小随机性")
-    parser.add_argument("-r", "--repetition-penalty", type=float, default=1, help="重复惩罚，大于 1 则减少重复")
+    parser.add_argument("-r", "--repetition-penalty", type=float, default=1.2, help="重复惩罚，大于 1 则减少重复")
     parser.add_argument("-s", "--seed", type=int, help="随机种子，不指定表示随机生成")
     parser.add_argument("-p", "--max-pitch-span-semitones", type=int, default=64, help="触发音高调整的阈值（半音数），当生成的音高跨度大于阈值时，包含音调上升或下降事件的 token 将被降低概率。默认为 %(default)s")
     parser.add_argument("-l", "--max-length", type=int, help="限制最多生成的音符数量。如果不指定，将会持续生成直到遇到结束标志。")
