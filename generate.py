@@ -320,7 +320,7 @@ def main():
     parser = argparse.ArgumentParser(description="以指定 MIDI 为前面部分并生成音乐和保存。")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点的路径")
     parser.add_argument("output_path", type=pathlib.Path, help="MIDI 文件保存路径。生成的 MIDI 文件将会保存到这里。")
-    parser.add_argument("-m", "--midi-path", type=pathlib.Path, help="指定的 MIDI 文件，将作为生成的音乐的前面部分。如果未指定，将使用内置的音乐来生成。")
+    parser.add_argument("-m", "--midi-path", type=pathlib.Path, help="指定的 MIDI 文件，将作为生成的音乐的前面部分。如果未指定，将从头开始生成。")
     parser.add_argument("-t", "--temperature", type=float, default=1.0, help="采样温度参数，值越高生成结果越多样，值越低结果越保守")
     parser.add_argument("-k", "--top-k", type=int, help="仅对概率前`top_k`个token采样，减小随机性")
     parser.add_argument("-r", "--repetition-penalty", type=float, default=1.2, help="重复惩罚，大于 1 则减少重复")
