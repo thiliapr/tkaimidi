@@ -53,8 +53,8 @@ class MidiDataset(Dataset):
     Args:
         midi_dirs: 包含 MIDI/JSON 文件的目录列表。
         tokenizer: 用于音乐数据编码的分词器。
-        min_sequence_length: 训练序列的最小长度，短于该长度的样本会被丢弃。
-        max_sequence_length: 训练序列的最大长度，长于该长度的样本会被截断。
+        min_sequence_length: 训练序列的最小长度，短于该长度的样本会被丢弃。（分词后的序列长度，包括开始和结束标志）
+        max_sequence_length: 训练序列的最大长度，长于该长度的样本会被截断。（分词后的序列长度，包括开始和结束标志）
         seed: 随机种子，用于数据加载时的随机性控制。
 
     Examples:
@@ -114,12 +114,17 @@ class MidiDataset(Dataset):
                 continue
 
             notes = midi_to_notes(midi_file)
-            sheet, positions = notes_to_sheet(notes, max_length=max_sequence_length)
-            if len(positions) < min_sequence_length:
+            sheet, _ = notes_to_sheet(notes, max_length=max_sequence_length)
+
+            # 截断超长序列
+            seq = tokenizer.encode(data_to_str(sheet), max_length=max_sequence_length, truncation=True)
+
+            # 如果分词序列长度小于最小长度，则跳过
+            if len(seq) < min_sequence_length:
                 continue
 
             # 编码为分词序列
-            result.append(tokenizer.encode(data_to_str(sheet)))
+            result.append(seq)
         return result
 
     @staticmethod
@@ -142,10 +147,14 @@ class MidiDataset(Dataset):
                     data["num_notes"] = notes_end
                     data["data"] = data["data"][:data["positions"][notes_end]]
 
-            if data["num_notes"] < min_sequence_length:
+            # 截断超长序列
+            seq = tokenizer.encode(data["data"], max_length=max_sequence_length, truncation=True)
+
+            # 如果分词序列长度小于最小长度，则跳过
+            if len(seq) < min_sequence_length:
                 continue
 
-            result.append(tokenizer.encode(data["data"]))
+            result.append(seq)
         return result
 
     def __len__(self) -> int:
@@ -501,30 +510,7 @@ def plot_training_process(metrics: dict[str, list], img_path: pathlib.Path | str
 
 
 def parse_args() -> argparse.Namespace:
-    """
-    解析训练 MIDI 模型的命令行参数。
-
-    Args:
-        num_epochs (int): 训练总轮数（必填）。
-        ckpt_path (pathlib.Path): 检查点的加载和保存路径（必填）。
-        -t/--train-dataset (pathlib.Path, 多次): 训练集文件路径（必填，可多次指定）。
-        -v/--val-dataset (pathlib.Path, 多次): 验证集文件路径（可选，可多次指定）。
-        -m/--min-sequence-length (int): 最小序列长度，短于该长度的样本不会用于训练。
-        -e/--max-sequence-length (int): 最大序列长度，长于该长度的样本会被截断。
-        -b/--train-max-batch-tokens (int): 训练时每个批次序列长度之和的上限。
-        -q/--val-max-batch-tokens (int): 验证时每个批次序列长度之和的上限。
-        -l/--learning-rate (float): 学习率。
-        -w/--weight-decay (float): 权重衰减系数。
-        -n/--num-heads (int): 多头注意力的头数。
-        -d/--dim-head (int): 每个注意力头的维度。
-        -f/--dim-feedforward (int): 前馈网络隐藏层维度。
-        -s/--num-layers (int): Transformer 编码器层数。
-        -o/--dropout (float): Dropout 概率。
-        -u/--seed (int): 随机种子，保证可复现性。
-
-    Returns:
-        解析后的命令行参数对象。
-    """
+    "解析训练 MIDI 模型的命令行参数。"
     # 创建命令行参数解析器
     parser = argparse.ArgumentParser(description="训练 MIDI 模型并绘制训练过程中的损失、困惑度曲线。")
 
@@ -535,8 +521,8 @@ def parse_args() -> argparse.Namespace:
 
     # 添加可选参数
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
-    parser.add_argument("-m", "--min-sequence-length", default=DEFAULT_MIN_SEQUENCE_LENGTH, type=int, help="最小序列长度，小于该长度的样本不会被训练")
-    parser.add_argument("-e", "--max-sequence-length", default=8192, type=int, help="最大序列长度，大于该长度的样本将被截断，默认为 %(default)s")
+    parser.add_argument("-m", "--min-sequence-length", default=DEFAULT_MIN_SEQUENCE_LENGTH, type=int, help="训练时，分词序列的最小长度，短于该长度的样本会被丢弃，默认为 %(default)s")
+    parser.add_argument("-e", "--max-sequence-length", default=8192, type=int, help="训练时，分词序列的最大长度，长于该长度的样本会被截断，默认为 %(default)s")
     parser.add_argument("-b", "--train-max-batch-tokens", default=8192, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-q", "--val-max-batch-tokens", default=16384, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-l", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率，默认为 %(default)s")
