@@ -26,7 +26,7 @@ LOOKAHEAD_COUNT = 64
 DEFAULT_DIM_HEAD = 64  # 注意力头的维度
 DEFAULT_NUM_HEADS = 16  # 注意力头的数量
 DEFAULT_DIM_FEEDFORWARD = DEFAULT_DIM_HEAD * DEFAULT_NUM_HEADS * 4  # 前馈层的维度。根据经验，dim_feedforward = dim_head * num_heads * 4
-DEFAULT_NUM_LAYERS = 6  # Transformer 层数
+DEFAULT_NUM_LAYERS = 12  # Transformer 层数
 
 # 训练参数
 DEFAULT_LEARNING_RATE = 5e-5  # 学习率

@@ -522,7 +522,7 @@ def parse_args() -> argparse.Namespace:
     # 添加可选参数
     parser.add_argument("-v", "--val-dataset", action="append", type=pathlib.Path, help="验证集文件路径（可多次指定以使用多个数据集）")
     parser.add_argument("-m", "--min-sequence-length", default=DEFAULT_MIN_SEQUENCE_LENGTH, type=int, help="训练时，分词序列的最小长度，短于该长度的样本会被丢弃，默认为 %(default)s")
-    parser.add_argument("-e", "--max-sequence-length", default=8192, type=int, help="训练时，分词序列的最大长度，长于该长度的样本会被截断，默认为 %(default)s")
+    parser.add_argument("-e", "--max-sequence-length", default=2048, type=int, help="训练时，分词序列的最大长度，长于该长度的样本会被截断，默认为 %(default)s")
     parser.add_argument("-b", "--train-max-batch-tokens", default=8192, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-q", "--val-max-batch-tokens", default=16384, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-l", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率，默认为 %(default)s")
