@@ -33,46 +33,6 @@ class MidiNetConfig(NamedTuple):
     num_layers: int
 
 
-class ResidualScaledLayer(nn.Module):
-    """
-    实现了一个残差连接和缩放的层。该层在输入张量上应用一个线性变换，并将结果与输入相加，形成残差连接。
-    通过可学习的缩放因子 `scale` 对结果进行缩放，以增强模型的稳定性和学习能力。
-
-    工作流程如下：
-        1. 输入张量 `x` 会通过一个线性变换。
-        2. 通过一个可学习的参数 `scale` 对变换结果进行缩放。
-        3. 将缩放后的结果与原始输入相加，形成残差连接。
-
-    Args:
-        layer: 要应用的线性变换层，通常是一个 `nn.Module` 实例。
-        device: 模型参数所在的设备。
-
-    Inputs:
-        x: 输入张量，形状为 (batch_size, seq_len, dim_model)。
-        *args, **kwargs: 传递给 `layer` 的其他参数。
-
-    Outputs:
-        返回形状与输入相同的张量，经过残差连接和缩放处理。    
-
-    Examples:
-        >>> layer = nn.Linear(512, 512)
-        >>> residual_scaled_layer = ResidualScaledLayer(layer)
-        >>> x = torch.randn(32, 128, 512)  # batch_size=32, seq_len=128, dim_model=512
-        >>> output = residual_scaled_layer(x)  # 返回形状为 (32, 128, 512) 的张量
-    """
-
-    def __init__(self, layer: nn.Module, device: Optional[torch.device] = None):
-        super().__init__()
-        self.layer = layer
-
-        # 可学习的缩放因子，初始化为1
-        # 这样可以在训练开始时保持输入的原始值
-        self.scale = nn.Parameter(torch.ones(1, device=device))
-
-    def forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        return x + self.scale * self.layer(x, *args, **kwargs)
-
-
 class PositionalEncoding(nn.Module):
     """
     实现了一个位置编码模块，用于为输入序列添加位置信息。该模块使用正弦和余弦函数生成位置编码，
@@ -289,18 +249,22 @@ class MidiNetLayer(nn.Module):
 
         # 多查询注意力: 归一化 -> 多查询注意力
         # 使用 ScaleNorm 进行归一化，MultiqueryAttention 实现多查询注意力机制
-        self.attention = ResidualScaledLayer(nn.Sequential(
-            ScaleNorm(dim_model, device=device),
-            MultiqueryAttention(dim_head, num_heads, dropout=dropout, device=device)
-        ), device=device)
+        self.attention = MultiqueryAttention(dim_head, num_heads, dropout=dropout, device=device)
 
         # 前馈网络部分: 归一化 -> 线性 -> GELU 激活 -> 线性
-        self.feedforward = ResidualScaledLayer(nn.Sequential(
-            ScaleNorm(dim_model, device=device),
+        self.feedforward = nn.Sequential(
             nn.Linear(dim_model, dim_feedforward, device=device),
             nn.GELU(approximate="tanh"),
             nn.Linear(dim_feedforward, dim_model, device=device)
-        ), device=device)
+        )
+
+        # ScaleNorm 用于对注意力输出进行归一化，增强模型稳定性
+        self.attention_norm = ScaleNorm(dim_model, device=device)
+        self.feedforward_norm = ScaleNorm(dim_model, device=device)
+
+        # 注意力和前馈网络的缩放因子
+        self.attention_scale = nn.Parameter(torch.ones(1, device=device) * (dim_model ** 0.5))
+        self.feedforward_scale = nn.Parameter(torch.ones(1, device=device) * (dim_model ** 0.5))
 
         # 添加 Dropout 防止过拟合
         self.dropout = nn.Dropout(dropout)
@@ -312,12 +276,11 @@ class MidiNetLayer(nn.Module):
                 torch.nn.init.zeros_(module.bias)
 
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # 执行自注意力计算，添加残差连接，并通过 Dropout 防止过拟合
-        x = self.dropout(self.attention(x, padding_mask=padding_mask))
+        # 对输入张量进行多查询注意力和前馈网络处理
+        x = x + self.dropout(self.attention(self.attention_norm(x), padding_mask=padding_mask) * self.attention_scale)
+        x = x + self.dropout(self.feedforward(self.feedforward_norm(x)) * self.feedforward_scale)
 
-        # 执行前馈网络计算，添加残差连接，并通过 Dropout 防止过拟合
-        x = self.dropout(self.feedforward(x))
-
+        # 返回最终输出张量
         return x
 
 
@@ -351,7 +314,7 @@ class MidiNet(nn.Module):
         self.embedding = nn.Embedding(config.vocab_size, self.dim_model, device=device)
 
         # 位置编码
-        self.positional_encoding = ResidualScaledLayer(PositionalEncoding(self.dim_model), device=device)
+        self.positional_encoding = PositionalEncoding(self.dim_model)
 
         # 堆叠多个 MidiNetLayer 层
         layer = MidiNetLayer(config.num_heads, config.dim_head, config.dim_feedforward, dropout=dropout, device=device)
@@ -370,10 +333,13 @@ class MidiNet(nn.Module):
 
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.BoolTensor] = None):
         # 将 token 转为向量，并乘以 sqrt(dim_model) 进行缩放
-        x = self.dropout(self.embedding(x) * math.sqrt(self.dim_model))
+        x = self.embedding(x) * math.sqrt(self.dim_model)
 
         # 添加位置编码
-        x = self.positional_encoding(x)
+        x = x + self.positional_encoding(x)
+
+        # 应用 Dropout
+        x = self.dropout(x)
 
         # 逐层应用 Transformer 结构
         for layer in self.layers:
