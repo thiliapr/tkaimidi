@@ -11,8 +11,7 @@ import argparse
 import os
 import pathlib
 import json
-from re import I
-from typing import Iterable, Iterator, Optional, Any, Union
+from typing import Iterable, Iterator, Any, Union
 import mido
 from tqdm import tqdm
 from tokenizers import Tokenizer, models, trainers
@@ -218,14 +217,13 @@ def get_samples(dirs: list[pathlib.Path], max_sequence_length: int) -> list[tupl
     return result
 
 
-def validate(samples: Iterator[tuple[int, str]], tokenizer: PreTrainedTokenizerFast, length: Optional[int] = None) -> dict[str, Union[int, float]]:
+def validate(samples: Iterator[tuple[int, str]], tokenizer: PreTrainedTokenizerFast) -> dict[str, Union[int, float]]:
     """
     评估分词器的效果
 
     Args:
         samples: 样本列表，每个样本包含音符数量和字符串表示
         tokenizer: 要评估的分词器
-        length: 样本列表长度。由于`samples`可能没有`__len__`，所以如有需要请在这里指定
 
     Returns:
         字典，包含:
@@ -238,12 +236,8 @@ def validate(samples: Iterator[tuple[int, str]], tokenizer: PreTrainedTokenizerF
     total_seq_length = 0
     words_used_set = set()
 
-    # 获取样本数量
-    if hasattr(samples, "__len__") and len(samples):
-        length = len(samples)
-
-    # 逐个评估
-    for i, (num_notes, data) in tqdm(enumerate(samples), total=length, desc="评估效果"):
+    # 遍历样本进行评估
+    for num_notes, data in tqdm(samples, desc="评估效果"):
         total_notes += num_notes
         encoded = tokenizer.encode(data)
         total_seq_length += len(encoded)
@@ -330,7 +324,7 @@ def main():
     if args.valid_samples:
         print("\n验证集评估:")
         valid_samples = get_samples(args.valid_samples, max_sequence_length=args.max_sequence_length)
-        valid_metrics = validate(valid_samples, tokenizer, length=samples_length)
+        valid_metrics = validate(valid_samples, tokenizer)
         print_validation_results(valid_metrics)
 
 
