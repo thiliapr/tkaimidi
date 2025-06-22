@@ -81,7 +81,7 @@ class MidiDataset(Dataset):
         num_workers = cpu_count()  # 并行处理的进程数
 
         # 收集所有 MIDI 文件路径
-        midi_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.mid")]
+        midi_files = [f for dir_path in midi_dirs for f in dir_path.rglob("*.*") if f.is_file() and f.suffix.lower() in {".mid", ".midi", }]
         random.Random(seed).shuffle(midi_files)
 
         # 并行处理 MIDI 文件
@@ -92,7 +92,7 @@ class MidiDataset(Dataset):
         self.music_sequences.extend([seq for sublist in midi_results for seq in sublist])
 
         # 收集所有 JSON 文件路径
-        json_files = [f for dir_path in midi_dirs for f in dir_path.glob("**/*.json")]
+        json_files = [f for dir_path in midi_dirs for f in dir_path.rglob("*.json") if f.is_file() and f.suffix.lower() == ".json"]
         random.Random(seed).shuffle(json_files)
 
         # 并行处理 JSON 文件
@@ -137,15 +137,6 @@ class MidiDataset(Dataset):
                     data = json.load(f)
             except json.JSONDecodeError:
                 continue
-
-            # 截断超长序列
-            if len(data["data"]) > max_sequence_length:
-                # 找到最大不超过 max_sequence_length 的分割点
-                valid_positions = [i for i, pos in enumerate(data["positions"]) if pos < max_sequence_length]
-                if valid_positions:
-                    notes_end = max(valid_positions)
-                    data["num_notes"] = notes_end
-                    data["data"] = data["data"][:data["positions"][notes_end]]
 
             # 截断超长序列
             seq = tokenizer.encode(data["data"], max_length=max_sequence_length, truncation=True)

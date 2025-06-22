@@ -8,8 +8,10 @@
 # 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
 import argparse
+import os
 import pathlib
 import json
+from re import I
 from typing import Iterable, Iterator, Optional, Any, Union
 import mido
 from tqdm import tqdm
@@ -17,7 +19,7 @@ from tokenizers import Tokenizer, models, trainers
 from tokenizers.processors import TemplateProcessing
 from transformers import PreTrainedTokenizerFast
 from constants import BASE_CHAR_CODE
-from utils import midi_to_notes, notes_to_sheet, empty_cache
+from utils import midi_to_notes, notes_to_sheet, empty_cache, parallel_map
 
 
 def data_to_str(data: Iterable[int]):
@@ -95,40 +97,26 @@ def train_sheet_tokenizer(model_data_samples: Iterable[str], vocab_size: int, mi
     return wrapped_tokenizer
 
 
-def get_samples(midi_dirs: Iterable[pathlib.Path] = (), max_sequence_length: int = 2 ** 16, show_progress: bool = True) -> Iterator[Union[int, tuple[int, str]]]:
+def get_samples_midi(midi_files: list[pathlib.Path], max_sequence_length: int) -> list[tuple[int, str]]:
     """
-    从 MIDI 文件中提取样本，转换为模型输入所需的音符序列。
-
-    该函数会遍历给定的 MIDI 文件夹列表，提取 MIDI 文件中的音符信息，并将其转换为
-    字符串格式以供模型使用。同时，它也可以从已转换的 JSON 文件中加载样本。
+    从 MIDI 文件中提取音符数据，并转换为字符串表示
 
     Args:
-        midi_dirs: MIDI 文件夹列表，包含原始 MIDI 文件和已转换为 JSON 格式文件。
-        max_sequence_length: 最长序列长度。超过该长度的序列会被截断。
-        show_progress: 是否显示处理进度条。
-
-    Yields:
-        1. 总文件数量
-        2. 各文件的元组(音符数量, 序列字符串)
+        midi_files: MIDI 文件的路径列表
+        max_sequence_length: 最大序列长度，超过此长度的序列将被截断
+    
+    Returns:
+        包含音符数量和字符串表示的元组列表
     """
+    # 用于存储结果的列表
+    result = []
+
     # 遍历 MIDI 文件夹
-    midi_files = [filepath for midi_dir in midi_dirs for filepath in midi_dir.glob("**/*.mid")]
-    json_files = [filepath for midi_dir in midi_dirs for filepath in midi_dir.glob("**/*.json")]
-
-    # 返回样本数量
-    yield len(midi_files) + len(json_files)
-
-    # 根据参数显示进度
-    if show_progress:
-        midi_files = tqdm(midi_files, desc="加载原始 MIDI 样本", delay=0.1)
-        json_files = tqdm(json_files, desc="加载原始 MIDI 样本", delay=0.1)
-
-    # 加载原始 MIDI 文件
     for filepath in midi_files:
         # 转换处理流程: MIDI 文件 → 音符 → 乐谱表示 → 字符表示
         try:
             midi_file = mido.MidiFile(filepath, clip=True)
-        except Exception:
+        except (ValueError, EOFError, OSError):
             # 跳过有错误的 MIDI 文件
             continue
 
@@ -138,25 +126,96 @@ def get_samples(midi_dirs: Iterable[pathlib.Path] = (), max_sequence_length: int
             continue
 
         # 转化为电子乐谱形式
-        sheet, positions = notes_to_sheet(notes, max_length=max_sequence_length)
-        yield len(notes), data_to_str(sheet)
+        sheet, _ = notes_to_sheet(notes, max_length=max_sequence_length)
+        result.append((len(notes), data_to_str(sheet)))
 
-    # 加载转换后的 JSON 文件
+    return result
+
+
+def get_samples_json(json_files: list[pathlib.Path], max_sequence_length: int) -> list[tuple[int, str]]:
+    """
+    从 JSON 文件中提取音符数据，并转换为字符串表示
+
+    Args:
+        json_files: JSON 文件的路径列表
+        max_sequence_length: 最大序列长度，超过此长度的序列将被截断
+    
+    Returns:
+        包含音符数量和字符串表示的元组列表
+    """
+    result = []
+
     for filepath in json_files:
+        # 读取 JSON 文件
         with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
 
         # 截断超长序列
         if len(data["data"]) > max_sequence_length:
+            # 找到最大不超过 max_sequence_length 的分割点
+            # data["positions"] 是一个整数列表，表示每个音符在字符串中的位置
+            # 我们需要找到最后一个位置小于 max_sequence_length 的音符
             notes_end, sheet_end = max(
                 (i, position)
                 for i, position in enumerate(data["positions"])
                 if position < max_sequence_length
             )
+
+            # 更新数据
             data["num_notes"] = notes_end
             data["data"] = data["data"][:sheet_end]
 
-        yield data["num_notes"], data["data"]
+        result.append((data["num_notes"], data["data"]))
+
+    return result
+
+
+def get_samples(dirs: list[pathlib.Path], max_sequence_length: int) -> list[tuple[int, str]]:
+    """
+    从指定目录中提取 MIDI 和 JSON 文件的音符数据，并转换为字符串表示
+    该函数会并行处理目录中的 MIDI 和 JSON 文件，提取音符数据，并将其转换为字符串表示。
+
+    Args:
+        dirs: 包含 MIDI 和 JSON 文件的目录列表
+        max_sequence_length: 最大序列长度，超过此长度的序列将被截断
+
+    Returns:
+        包含音符数量和字符串表示的元组列表
+    """
+    # 收集所有 MIDI 文件路径
+    midi_files = [
+        f
+        for midi_dir in dirs
+        for f in midi_dir.rglob("*.*")
+        if f.suffix.lower() in {".mid", ".midi"}
+    ]
+
+    # 收集所有 JSON 文件路径
+    json_files = [
+        f
+        for json_dir in dirs
+        for f in json_dir.rglob("*.*")
+        if f.suffix.lower() == ".json"
+    ]
+
+    num_workers = os.cpu_count()  # 并行处理的进程数
+
+    # 并行处理 MIDI 文件，提取样本
+    midi_result = parallel_map(
+        get_samples_midi,
+        [(midi_files[i::num_workers], max_sequence_length) for i in range(num_workers)],
+        num_workers=num_workers
+    )
+    # 并行处理 JSON 文件，提取样本
+    json_result = parallel_map(
+        get_samples_json,
+        [(json_files[i::num_workers], max_sequence_length) for i in range(num_workers)],
+        num_workers=num_workers
+    )
+
+    # 合并所有结果为一个列表
+    result = [sample for sublist in midi_result + json_result for sample in sublist]
+    return result
 
 
 def validate(samples: Iterator[tuple[int, str]], tokenizer: PreTrainedTokenizerFast, length: Optional[int] = None) -> dict[str, Union[int, float]]:
@@ -214,12 +273,12 @@ def main():
     # 设置命令行参数解析
     parser = argparse.ArgumentParser(description="音乐数据分词器训练脚本")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="分词器保存路径，将创建tokenizer子目录")
-    parser.add_argument("-t", "--train-samples", type=pathlib.Path, action="append", required=True, help="训练集目录路径，包含MIDI样本文件（以`.mid`或`.json`结尾）")
-    parser.add_argument("-v", "--valid-samples", type=pathlib.Path, action="append", help="验证集目录路径，包含MIDI样本文件（以`.mid`或`.json`结尾）")
-    parser.add_argument("-s", "--vocab-size", type=int, default=10000, help="分词器词汇表大小")
-    parser.add_argument("-f", "--min-frequency", type=int, default=24, help="token最小出现频率阈值")
-    parser.add_argument("-m", "--max-sequence-length", type=int, default=2 ** 17, help="最长允许多长的序列参与训练和测试（单位: 字符）")
-    parser.add_argument("-y", "--force", action="store_true", help="即使检查点已经存在分词器也要训练")
+    parser.add_argument("-t", "--train-samples", type=pathlib.Path, action="append", required=True, help="训练集目录路径，包含MIDI样本文件")
+    parser.add_argument("-v", "--valid-samples", type=pathlib.Path, action="append", help="验证集目录路径，包含MIDI样本文件")
+    parser.add_argument("-s", "--vocab-size", type=int, default=10000, help="分词器词汇表大小，默认为 %(default)s")
+    parser.add_argument("-f", "--min-frequency", type=int, default=24, help="token最小出现频率阈值，默认为 %(default)s")
+    parser.add_argument("-m", "--max-sequence-length", type=int, default=2 ** 17, help="最长允许多长的序列参与训练和测试（单位: 字符），默认为 %(default)s")
+    parser.add_argument("-y", "--force", action="store_true", help="即使检查点已经存在分词器也要训练新的分词器")
 
     # 解析参数
     args = parser.parse_args()
@@ -234,7 +293,7 @@ def main():
     args.ckpt_path.mkdir(parents=True, exist_ok=True)
 
     # 处理所有MIDI样本文件
-    train_samples: list[tuple[int, str]] = list(get_samples(args.train_samples, max_sequence_length=args.max_sequence_length))[1:]
+    train_samples: list[tuple[int, str]] = get_samples(args.train_samples, max_sequence_length=args.max_sequence_length)
 
     # 清除缓存
     empty_cache()
@@ -270,8 +329,7 @@ def main():
     # 如果有验证集，评估验证集效果
     if args.valid_samples:
         print("\n验证集评估:")
-        valid_samples = get_samples(args.valid_samples, max_sequence_length=args.max_sequence_length, show_progress=False)
-        samples_length = next(valid_samples)
+        valid_samples = get_samples(args.valid_samples, max_sequence_length=args.max_sequence_length)
         valid_metrics = validate(valid_samples, tokenizer, length=samples_length)
         print_validation_results(valid_metrics)
 

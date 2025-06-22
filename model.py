@@ -341,9 +341,6 @@ class MidiNet(nn.Module):
         torch.nn.init.uniform_(self.embedding.weight, -0.1, 0.1)
         torch.nn.init.zeros_(self.output_layer.bias)
 
-        # 嵌入层与输出层共享权重，提升效率与性能
-        self.output_layer.weight = self.embedding.weight
-
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.BoolTensor] = None):
         # 将 token 转为向量，并乘以 sqrt(dim_model) 进行缩放
         x = self.dropout(self.embedding(x) * math.sqrt(self.dim_model))

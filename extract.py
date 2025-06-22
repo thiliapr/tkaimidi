@@ -102,7 +102,7 @@ def main():
     print(f"使用 {n_jobs} 个进程并行处理")
 
     # 遍历输入目录中的所有 MIDI 文件
-    midi_files = list(args.input_dir.glob("**/*.mid"))
+    midi_files = list(file for file in args.input_dir.rglob("*.*") if file.suffix.lower() in {".mid", ".midi"})
     print(f"发现 {len(midi_files)} 个 MIDI 文件")
 
     # 随机打乱文件顺序以实现负载均衡
