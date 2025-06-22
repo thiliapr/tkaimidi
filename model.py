@@ -33,26 +33,61 @@ class MidiNetConfig(NamedTuple):
     num_layers: int
 
 
-class PositionalEncoding(nn.Module):
+class ResidualScaledLayer(nn.Module):
     """
-    实现基于正弦和余弦函数的位置编码，用于为输入序列中的每个位置提供唯一的表示。
+    实现了一个残差连接和缩放的层。该层在输入张量上应用一个线性变换，并将结果与输入相加，形成残差连接。
+    通过可学习的缩放因子 `scale` 对结果进行缩放，以增强模型的稳定性和学习能力。
 
-    工作流程:
-    1. 初始化时，根据模型维度 `dim_model` 计算出频率的倒数 `inv_freq`，用于构造正弦/余弦函数
-    2. 在前向传播中，根据输入的序列长度生成位置索引
-    3. 使用外积计算每个位置和频率的乘积
-    4. 分别对这些乘积应用正弦和余弦函数，并与输入张量进行相加，增强位置信息
+    工作流程如下：
+        1. 输入张量 `x` 会通过一个线性变换。
+        2. 通过一个可学习的参数 `scale` 对变换结果进行缩放。
+        3. 将缩放后的结果与原始输入相加，形成残差连接。
 
     Args:
-        dim_model: 模型的隐藏维度，必须为偶数。
+        layer: 要应用的线性变换层，通常是一个 `nn.Module` 实例。
+        device: 模型参数所在的设备。
 
-    Returns:
-        一个形状为 (batch_size, seq_len, dim_model) 的位置编码张量，与输入 `x` 的数据类型相同。
+    Inputs:
+        x: 输入张量，形状为 (batch_size, seq_len, dim_model)。
+        *args, **kwargs: 传递给 `layer` 的其他参数。
+
+    Outputs:
+        返回形状与输入相同的张量，经过残差连接和缩放处理。    
+
+    Examples:
+        >>> layer = nn.Linear(512, 512)
+        >>> residual_scaled_layer = ResidualScaledLayer(layer)
+        >>> x = torch.randn(32, 128, 512)  # batch_size=32, seq_len=128, dim_model=512
+        >>> output = residual_scaled_layer(x)  # 返回形状为 (32, 128, 512) 的张量
+    """
+
+    def __init__(self, layer: nn.Module, device: Optional[torch.device] = None):
+        super().__init__()
+        self.layer = layer
+
+        # 可学习的缩放因子，初始化为1
+        # 这样可以在训练开始时保持输入的原始值
+        self.scale = nn.Parameter(torch.ones(1, device=device))
+
+    def forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        return x + self.scale * self.layer(x, *args, **kwargs)
+
+
+class PositionalEncoding(nn.Module):
+    """
+    实现了一个位置编码模块，用于为输入序列添加位置信息。该模块使用正弦和余弦函数生成位置编码，
+    使得模型能够感知序列中各个位置的相对和绝对位置。
+
+    Inputs:
+        x: 输入张量，形状为 (batch_size, seq_len, dim_model
+
+    Outputs:
+        返回形状为 (batch_size, seq_len, dim_model) 的位置编码张量。
 
     Examples:
         >>> pe = PositionalEncoding(512)
         >>> x = torch.randn(32, 128, 512)  # batch_size=32, seq_len=128, dim_model=512
-        >>> x = pe(x)  # 返回形状为 (32, 128, 512) 的经过位置编码的张量
+        >>> x = x + pe(x)  # 返回形状为 (32, 128, 512) 的经过位置编码的张量
     """
 
     def __init__(self, dim_model: int):
@@ -77,7 +112,7 @@ class PositionalEncoding(nn.Module):
         positional_embedding = torch.cat([sinusoid_input.sin(), sinusoid_input.cos()], dim=-1)
 
         # 增加 batch 维度，并确保返回类型与输入相同
-        return x + positional_embedding.unsqueeze(0).type_as(x)
+        return positional_embedding.unsqueeze(0).type_as(x)
 
 
 class ScaleNorm(nn.Module):
@@ -105,21 +140,12 @@ class ScaleNorm(nn.Module):
 
     def __init__(self, dim: int, eps: float = 1e-5, device: Optional[torch.device] = None):
         super().__init__()
-        self.g = nn.Parameter(torch.ones(1, device=device) * (dim ** 0.5))  # 可学习的缩放因子，初始化为dim的平方根
+        self.scale = nn.Parameter(torch.ones(1, device=device) * (dim ** 0.5))  # 可学习的缩放因子，初始化为dim的平方根
         self.eps = eps  # 避免除零错误的小常数
 
     def forward(self, x):
-        """
-        前向传播计算。通过L2范数对输入张量 `x` 进行缩放归一化。
-
-        Args:
-            x: 输入的张量，形状可以为任意维度。
-
-        Returns:
-            返回经过缩放归一化后的张量，形状与输入相同。
-        """
         norm = torch.linalg.norm(x, dim=-1, keepdim=True).clamp(min=self.eps)  # 计算L2范数并防止为零
-        return self.g * x / norm  # 对输入张量进行缩放归一化
+        return self.scale * x / norm  # 对输入张量进行缩放归一化
 
 
 class MultiqueryAttention(nn.Module):
@@ -154,6 +180,8 @@ class MultiqueryAttention(nn.Module):
         # 查询、键值投影矩阵 (合并计算效率更高)
         # 输出维度: Queries (dim_model) + Keys (dim_head) + Values (dim_head)
         self.qkv_proj = nn.Linear(dim_model, dim_model + dim_head * 2, device=device)
+
+        # 输出投影矩阵，将多头输出合并回原始维度
         self.out_proj = nn.Linear(dim_model, dim_model, device=device)
 
         # 使用 Xavier 均匀分布初始化查询、键值投影权重
@@ -227,18 +255,25 @@ class MultiqueryAttention(nn.Module):
 
 class MidiNetLayer(nn.Module):
     """
-    MidiNetLayer 是一个神经网络层，结合了注意力机制和前馈网络，常用于序列数据建模。该层包含以下组件：
-    - 使用 FlashAttention 进行高效的自注意力计算。
-    - 线性前馈网络（带有 GELU 激活函数）。
-    - 使用 ScaleNorm 替代传统的 LayerNorm 进行归一化，以提升计算效率。
-    - Dropout 层，避免过拟合。
-
+    MidiNet 的单层 Transformer 结构。
+    包含多查询注意力和前馈网络部分，使用残差连接和缩放归一化。
+    工作流程如下:
+        1. 输入张量通过多查询注意力模块，计算注意力输出。
+        2. 将注意力输出与输入张量相加，形成残差连接。
+        3. 通过前馈网络部分，进一步处理注意力输出。
+        4. 将前馈网络输出与注意力输出相加，形成最终输出。
+    
     Args:
         num_heads: 注意力头的数量。
         dim_head: 每个注意力头的维度。
         dim_feedforward: 前馈网络的隐藏层维度。
-        dropout: Dropout 概率，用于防止过拟合。
-        device: 模型的设备。
+        dropout: Dropout 概率。
+        device: 模型参数所在的设备。
+    
+    Examples:
+        >>> layer = MidiNetLayer(num_heads=8, dim_head=64, dim_feedforward=2048)
+        >>> x = torch.randn(32, 100, 512)  # batch_size=32, seq_len=100, dim_model=512
+        >>> output = layer(x)  # 返回形状为 (32, 100, 512) 的张量
     """
 
     def __init__(
@@ -252,19 +287,20 @@ class MidiNetLayer(nn.Module):
         super().__init__()
         dim_model = dim_head * num_heads  # 模型总维度
 
-        # 多查询注意力
-        self.attention = MultiqueryAttention(dim_head, num_heads, dropout=dropout, device=device)
+        # 多查询注意力: 归一化 -> 多查询注意力
+        # 使用 ScaleNorm 进行归一化，MultiqueryAttention 实现多查询注意力机制
+        self.attention = ResidualScaledLayer(nn.Sequential(
+            ScaleNorm(dim_model, device=device),
+            MultiqueryAttention(dim_head, num_heads, dropout=dropout, device=device)
+        ), device=device)
 
-        # 前馈网络部分: 线性 -> GELU 激活 -> 线性
-        self.feedforward = nn.Sequential(
+        # 前馈网络部分: 归一化 -> 线性 -> GELU 激活 -> 线性
+        self.feedforward = ResidualScaledLayer(nn.Sequential(
+            ScaleNorm(dim_model, device=device),
             nn.Linear(dim_model, dim_feedforward, device=device),
             nn.GELU(approximate="tanh"),
             nn.Linear(dim_feedforward, dim_model, device=device)
-        )
-
-        # 使用 ScaleNorm 归一化，替代 LayerNorm 以提升效率和性能
-        self.norm1 = ScaleNorm(dim_model, device=device)
-        self.norm2 = ScaleNorm(dim_model, device=device)
+        ), device=device)
 
         # 添加 Dropout 防止过拟合
         self.dropout = nn.Dropout(dropout)
@@ -276,21 +312,11 @@ class MidiNetLayer(nn.Module):
                 torch.nn.init.zeros_(module.bias)
 
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        执行前向传播操作，输入通过注意力模块和前馈网络后输出。
-
-        Args:
-            x: 输入张量，形状为 (batch_size, seq_len, dim_model)。
-            padding_mask: 可选的 padding 掩码，用于注意力机制中忽略填充部分。
-
-        Returns:
-            输出张量，形状与输入相同。
-        """
         # 执行自注意力计算，添加残差连接，并通过 Dropout 防止过拟合
-        x = self.dropout(x + self.attention(self.norm1(x), padding_mask=padding_mask))
+        x = self.dropout(self.attention(x, padding_mask=padding_mask))
 
         # 执行前馈网络计算，添加残差连接，并通过 Dropout 防止过拟合
-        x = self.dropout(x + self.feedforward(self.norm2(x)))
+        x = self.dropout(self.feedforward(x))
 
         return x
 
@@ -325,7 +351,7 @@ class MidiNet(nn.Module):
         self.embedding = nn.Embedding(config.vocab_size, self.dim_model, device=device)
 
         # 位置编码
-        self.positional_encoding = PositionalEncoding(self.dim_model)
+        self.positional_encoding = ResidualScaledLayer(PositionalEncoding(self.dim_model), device=device)
 
         # 堆叠多个 MidiNetLayer 层
         layer = MidiNetLayer(config.num_heads, config.dim_head, config.dim_feedforward, dropout=dropout, device=device)
@@ -338,7 +364,8 @@ class MidiNet(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         # 初始化权重
-        torch.nn.init.uniform_(self.embedding.weight, -0.1, 0.1)
+        torch.nn.init.xavier_uniform_(self.embedding.weight)
+        torch.nn.init.xavier_uniform_(self.output_layer.weight)
         torch.nn.init.zeros_(self.output_layer.bias)
 
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.BoolTensor] = None):
