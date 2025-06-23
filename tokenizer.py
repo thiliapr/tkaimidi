@@ -7,8 +7,10 @@
 # 发布 tkaimidi 是希望它能有用，但是并无保障；甚至连可销售和符合某个特定的目的都不保证。请参看 GNU Affero 通用公共许可证，了解详情。
 # 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
-import argparse
 import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # 禁用tokenizers的并行处理，避免冲突
+
+import argparse
 import pathlib
 import json
 from typing import Iterable, Iterator, Any, Union
