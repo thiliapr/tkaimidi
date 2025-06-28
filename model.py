@@ -263,8 +263,8 @@ class MidiNetLayer(nn.Module):
         self.feedforward_norm = ScaleNorm(dim_model, device=device)
 
         # 注意力和前馈网络的缩放因子
-        self.attention_scale = nn.Parameter(torch.ones(1, device=device) * (dim_model ** 0.5))
-        self.feedforward_scale = nn.Parameter(torch.ones(1, device=device) * (dim_model ** 0.5))
+        self.attention_scale = nn.Parameter(torch.ones(1, device=device))
+        self.feedforward_scale = nn.Parameter(torch.ones(1, device=device))
 
         # 添加 Dropout 防止过拟合
         self.dropout = nn.Dropout(dropout)
