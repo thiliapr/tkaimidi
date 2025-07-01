@@ -149,7 +149,7 @@ def get_samples_json(json_files: list[pathlib.Path], max_sequence_length: int) -
     for filepath in json_files:
         # 读取 JSON 文件
         with open(filepath, encoding="utf-8") as f:
-            data = orjson.load(f.read())
+            data = orjson.loads(f.read())
 
         # 截断超长序列
         if len(data["data"]) > max_sequence_length:
