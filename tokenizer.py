@@ -8,6 +8,7 @@
 # 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
 import os
+import random
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # 禁用tokenizers的并行处理，避免冲突
 
 import argparse
@@ -271,6 +272,9 @@ def main():
     parser.add_argument("ckpt_path", type=pathlib.Path, help="分词器保存路径，将创建tokenizer子目录")
     parser.add_argument("-t", "--train-samples", type=pathlib.Path, action="append", required=True, help="训练集目录路径，包含MIDI样本文件")
     parser.add_argument("-v", "--valid-samples", type=pathlib.Path, action="append", help="验证集目录路径，包含MIDI样本文件")
+    parser.add_argument("-c", "--train-samples-count", type=int, default=2 ** 15, help="训练集样本数量，默认为 %(default)s")
+    parser.add_argument("-n", "--valid-samples-count", type=int, default=2 ** 15, help="验证集样本数量，默认为 %(default)s")
+    parser.add_argument("-u", "--seed", type=int, default=8964, help="随机种子，默认为 %(default)s")
     parser.add_argument("-s", "--vocab-size", type=int, default=10000, help="分词器词汇表大小，默认为 %(default)s")
     parser.add_argument("-f", "--min-frequency", type=int, default=24, help="token最小出现频率阈值，默认为 %(default)s")
     parser.add_argument("-m", "--max-sequence-length", type=int, default=2 ** 17, help="最长允许多长的序列参与训练和测试（单位: 字符），默认为 %(default)s")
@@ -290,6 +294,11 @@ def main():
 
     # 处理所有MIDI样本文件
     train_samples: list[tuple[int, str]] = get_samples(args.train_samples, max_sequence_length=args.max_sequence_length)
+    
+    # 如果训练样本数量超过指定数量，则随机抽样
+    if len(train_samples) > args.train_samples_count:
+        print(f"训练样本数量超过 {args.train_samples_count}，随机抽样...")
+        train_samples = random.Random(args.seed).sample(train_samples, args.train_samples_count)
 
     # 清除缓存
     empty_cache()
@@ -326,6 +335,10 @@ def main():
     if args.valid_samples:
         print("\n验证集评估:")
         valid_samples = get_samples(args.valid_samples, max_sequence_length=args.max_sequence_length)
+        if len(valid_samples) > args.valid_samples_count:
+            print(f"验证集样本数量超过 {args.valid_samples_count}，随机抽样...")
+            valid_samples = random.Random(args.seed).sample(valid_samples, args.valid_samples_count)
+
         valid_metrics = validate(valid_samples, tokenizer)
         print_validation_results(valid_metrics)
 
