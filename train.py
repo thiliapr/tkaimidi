@@ -10,7 +10,7 @@
 import pathlib
 import random
 import argparse
-import json
+import orjson
 import os
 from multiprocessing import cpu_count
 from typing import Optional, Iterator
@@ -134,8 +134,8 @@ class MidiDataset(Dataset):
         for file_path in files:
             try:
                 with open(file_path, encoding="utf-8") as f:
-                    data = json.load(f)
-            except json.JSONDecodeError:
+                    data = orjson.loads(f.read())
+            except orjson.JSONDecodeError:
                 continue
 
             # 截断超长序列

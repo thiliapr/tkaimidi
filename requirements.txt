@@ -4,3 +4,4 @@ tqdm
 matplotlib
 tokenizers
 transformers
+orjson

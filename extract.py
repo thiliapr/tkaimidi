@@ -6,7 +6,7 @@
 # 发布 tkaimidi 是希望它能有用，但是并无保障；甚至连可销售和符合某个特定的目的都不保证。请参看 GNU Affero 通用公共许可证，了解详情。
 # 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
-import json
+import orjson
 import random
 import multiprocessing
 import argparse
@@ -68,13 +68,13 @@ def process_midi_to_json(
         output_path = output_dir / relative_path.parent / (filepath.stem + ".json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 保存为紧凑的 JSON 格式
+        # 写入 JSON 文件
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump({
+            f.write(orjson.dumps({
                 "num_notes": len(notes),
                 "positions": positions,
                 "data": data_to_str(sheet)
-            }, f, separators=(",", ":"))
+            }))
 
 
 def main():

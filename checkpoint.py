@@ -7,7 +7,7 @@
 # 发布 tkaimidi 是希望它能有用，但是并无保障；甚至连可销售和符合某个特定的目的都不保证。请参看 GNU Affero 通用公共许可证，了解详情。
 # 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
-import json
+import orjson
 import pathlib
 from typing import Any
 import torch
@@ -31,7 +31,7 @@ def save_checkpoint(model_state_dict: dict[str, Any], optimizer_state_dict: dict
 
     # 保存训练信息
     with open(path / "metrics.json", "w") as f:
-        json.dump(metrics, f)  # 写入JSON文件
+        f.write(orjson.dumps(metrics))  # 写入JSON文件
 
 
 def load_checkpoint(path: pathlib.Path) -> tuple[PreTrainedTokenizerFast, dict[str, Any]]:
@@ -94,7 +94,7 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[PreTrainedTokenizerFast, 
     metrics = {"val_loss": [], "train_loss": []}
     if metrics_path.exists():
         with open(metrics_path, "r", encoding="utf-8") as f:
-            metrics |= json.load(f)  # 读取指标
+            metrics |= orjson.loads(f.read())  # 读取指标
 
     return tokenizer, model_state, optimizer_state, metrics
 

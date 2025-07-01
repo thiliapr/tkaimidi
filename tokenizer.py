@@ -12,7 +12,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"  # 禁用tokenizers的并行处�
 
 import argparse
 import pathlib
-import json
+import orjson
 from typing import Iterable, Iterator, Any, Union
 import mido
 from tqdm import tqdm
@@ -149,7 +149,7 @@ def get_samples_json(json_files: list[pathlib.Path], max_sequence_length: int) -
     for filepath in json_files:
         # 读取 JSON 文件
         with open(filepath, encoding="utf-8") as f:
-            data = json.load(f)
+            data = orjson.load(f.read())
 
         # 截断超长序列
         if len(data["data"]) > max_sequence_length:
