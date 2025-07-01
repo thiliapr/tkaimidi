@@ -90,8 +90,8 @@ def main():
     parser = argparse.ArgumentParser(description="从 MIDI 文件夹中提取训练信息")
     parser.add_argument("input_dir", type=pathlib.Path, help="要提取的 MIDI 文件夹。")
     parser.add_argument("output_dir", type=pathlib.Path, help="MIDI 信息输出文件夹。")
-    parser.add_argument("-m", "--min-sequence-length", default=128, type=int, help="最小序列长度，小于该长度的样本不会被转换（单位: 音符）")
-    parser.add_argument("-e", "--max-sequence-length", default=2 ** 17, type=int, help="最大序列长度，大于该长度的样本将被截断（单位: 字符）")
+    parser.add_argument("-m", "--min-sequence-length", default=128, type=int, help="最小序列长度，小于该长度的样本不会被转换（单位: 音符），默认值为 %(default)s")
+    parser.add_argument("-e", "--max-sequence-length", default=2 ** 14, type=int, help="最大序列长度，大于该长度的样本将被截断（单位: 字符），默认值为 %(default)s")
     parser.add_argument("-j", "--jobs", type=int, help="并行工作进程数（默认: 使用所有CPU核心）")
     args = parser.parse_args()
 
