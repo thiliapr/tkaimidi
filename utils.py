@@ -17,6 +17,9 @@ from constants import NATURAL_SCALE, TIME_PRECISION, KEY_UP, KEY_DOWN, OCTAVE_JU
 def notes_to_track(notes: list[tuple[int, int]]) -> mido.MidiTrack:
     """
     将音符和时间信息转换为 MIDI 轨道。
+    该函数接受一个包含音符和相对时间间隔的列表，并生成一个 MIDI 轨道，其中包含音符开启和关闭事件。
+    音符间隔格式为 (音高, 时间间隔)，时间间隔单位为 TIME_PRECISION。
+    所有音符的持续时间都是 TIME_PRECISION。
 
     Args:
         notes: 音符间隔格式的列表
@@ -72,6 +75,21 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     会根据MIDI文件的ticks_per_beat属性归一化到480 ticks每拍（即`current_time += msg.time * 480 // midi_file.ticks_per_beat`），
     这样可以保证不同MIDI文件的时间单位一致。接着，函数对音符的相对时间间隔除以时间精度并四舍五入，
     然后将相对时间除以它们的公因数来压缩时间，最后返回包含音符及其时间间隔的列表。
+    根据经验，音符的持续时间对听感影响不大，因此在此函数中不考虑音符的持续时间。
+
+    原理解释:
+        假设有一个MIDI文件包含以下音符事件:
+        - note 60 at time 0
+        - note 67 at time 0  # 这是和弦
+        - note 64 at time 480
+        这表示音符60和67在同一时间开始，音符64在480 ticks后开始。
+
+        计算时间间隔:
+        - note 60: 0 - 0 = 0
+        - note 67: 0 - 0 = 0
+        - note 64: 480 - 0 = 480
+
+        经过四舍五入和压缩后，返回的列表将是: [(60, 0), (67, 0), (64, 1)]
 
     Args:
         midi_file: 要提取的MIDI文件对象
@@ -254,6 +272,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], max_length: Optional[int] = Non
             sheet.extend(TIME_INTERVAL for _ in range(intervals[i]))
 
         # 记录乐谱中音符开始的位置
+        # 由于八度跳跃是修正音符的八度位置的，所以八度跳跃也应该算进音符里，所以要从八度跳跃开始的位置开始记录
         positions.append(len(sheet))
 
         # 将当前音高调整到[0, 11]范围内，并记录八度跳跃
