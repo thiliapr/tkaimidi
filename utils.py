@@ -272,7 +272,7 @@ def notes_to_sheet(notes: list[tuple[int, int]], max_length: Optional[int] = Non
             sheet.extend(TIME_INTERVAL for _ in range(intervals[i]))
 
         # 记录乐谱中音符开始的位置
-        # 由于八度跳跃是修正音符的八度位置的，所以八度跳跃也应该算进音符里，所以要从八度跳跃开始的位置开始记录
+        # 由于八度跳跃是修正音符的八度位置的，音符包括八度跳跃，所以需要在音符的八度跳跃前记录位置
         positions.append(len(sheet))
 
         # 将当前音高调整到[0, 11]范围内，并记录八度跳跃
