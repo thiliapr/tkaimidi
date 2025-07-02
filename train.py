@@ -643,8 +643,8 @@ def main(args: argparse.Namespace):
         # 计算并添加损失平均值和标准差到指标
         train_loss = np.array(train_loss)
         val_loss = np.array(val_loss)
-        metrics["train_loss"].append({"mean": train_loss.mean(), "std": train_loss.std(), "count": len(train_loss)})
-        metrics["val_loss"].append({"mean": val_loss.mean(), "std": val_loss.std()})
+        metrics["train_loss"].append({"mean": train_loss.mean().item(), "std": train_loss.std().item(), "count": len(train_loss)})
+        metrics["val_loss"].append({"mean": val_loss.mean().item(), "std": val_loss.std().item()})
 
     # 保存最后一次训练时使内存爆炸的张量的形状
     if oom_shapes:
