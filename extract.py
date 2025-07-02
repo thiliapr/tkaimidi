@@ -69,7 +69,7 @@ def process_midi_to_json(
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # 写入 JSON 文件
-        with open(output_path, "w", encoding="utf-8") as f:
+        with open(output_path, "wb") as f:
             f.write(orjson.dumps({
                 "num_notes": len(notes),
                 "positions": positions,

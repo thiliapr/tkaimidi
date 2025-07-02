@@ -30,7 +30,7 @@ def save_checkpoint(model_state_dict: dict[str, Any], optimizer_state_dict: dict
     torch.save(optimizer_state_dict, path / "optimizer.pth")  # 保存优化器权重
 
     # 保存训练信息
-    with open(path / "metrics.json", "w") as f:
+    with open(path / "metrics.json", "wb") as f:
         f.write(orjson.dumps(metrics))  # 写入JSON文件
 
 
