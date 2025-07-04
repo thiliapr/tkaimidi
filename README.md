@@ -16,13 +16,12 @@ pip install -r requirements.txt
 ```bash
 # 这里演示的是大致流程，实际可能需要调整，不过一般照着这个来就行了
 # 下载并解压数据集
-mkdir train_data/music-midi train_data/lakh-midi-clean valid_data
-curl -Lo music-midi.zip https://www.kaggle.com/api/v1/datasets/download/yigk4out/music-midi
-curl -Lo lakh-midi-clean.zip https://www.kaggle.com/api/v1/datasets/download/imsparsh/lakh-midi-clean
-curl -Lo classical-music-midi.zip https://www.kaggle.com/api/v1/datasets/download/soumikrakshit/classical-music-midi
-unzip music-midi.zip -d train_data/music-midi
-unzip lakh-midi-clean.zip -d train_data/lakh-midi-clean
-unzip classical-music-midi.zip -d valid_data
+mkdir train_data valid_data
+curl -Lo takara-midi.zip https://www.kaggle.com/api/v1/datasets/download/yigk4out/takara-midi
+curl -Lo lmd_full.tar.gz http://hog.ee.columbia.edu/craffel/lmd/lmd_full.tar.gz
+unzip takara-midi.zip -d valid_data/
+cd train_data
+tar -xf ../lmd_full.tar.gz
 
 # 提取数据，如果训练多次或重新训练分词器，这样就不用多次加载原始数据，节省时间
 python3 extract.py train_data train_optimized_data
