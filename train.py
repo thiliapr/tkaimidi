@@ -1,11 +1,9 @@
 "MIDI 音乐生成模型训练模块"
 
-# Copyright (C)  thiliapr 2024-2025
-# Email: thiliapr@tutanota.com
-# 本文件是 tkaimidi 的一部分。
-# tkaimidi 是自由软件：你可以再分发之和/或依照由自由软件基金会发布的 GNU Affero 通用公共许可证修改之，无论是版本 3 许可证，还是（按你的决定）任何以后版都可以。
-# 发布 tkaimidi 是希望它能有用，但是并无保障；甚至连可销售和符合某个特定的目的都不保证。请参看 GNU Affero 通用公共许可证，了解详情。
-# 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
+# 本文件是 tkaimidi 的一部分
+# SPDX-FileCopyrightText: 2024-2025 thiliapr <thiliapr@tutanota.com>
+# SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 import pathlib
 import random
@@ -24,10 +22,10 @@ from torch.nn import functional as F
 from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, DataLoader, Sampler
 from transformers import PreTrainedTokenizerFast
-from constants import DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_LAYERS, DEFAULT_DROPOUT, DEFAULT_WEIGHT_DECAY, DEFAULT_LEARNING_RATE, DEFAULT_MIN_SEQUENCE_LENGTH
-from model import MidiNet, MidiNetConfig
-from checkpoint import load_checkpoint_train, save_checkpoint
-from utils import midi_to_notes, notes_to_sheet, empty_cache, parallel_map
+from utils.constants import DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_LAYERS, DEFAULT_DROPOUT, DEFAULT_WEIGHT_DECAY, DEFAULT_LEARNING_RATE, DEFAULT_MIN_SEQUENCE_LENGTH
+from utils.model import MidiNet, MidiNetConfig
+from utils.checkpoint import load_checkpoint_train, save_checkpoint
+from utils.midi import midi_to_notes, notes_to_sheet, empty_cache, parallel_map
 from tokenizer import data_to_str
 
 # 解除线程数量限制

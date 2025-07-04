@@ -1,19 +1,18 @@
 "从 MIDI 文件夹中提取训练信息，以方便训练分词器和模型。"
-# Copyright (C)  thiliapr 2025
-# Email: thiliapr@tutanota.com
-# 本文件是 tkaimidi 的一部分。
-# tkaimidi 是自由软件：你可以再分发之和/或依照由自由软件基金会发布的 GNU Affero 通用公共许可证修改之，无论是版本 3 许可证，还是（按你的决定）任何以后版都可以。
-# 发布 tkaimidi 是希望它能有用，但是并无保障；甚至连可销售和符合某个特定的目的都不保证。请参看 GNU Affero 通用公共许可证，了解详情。
-# 你应该随程序获得一份 GNU Affero 通用公共许可证的复本。如果没有，请看 <https://www.gnu.org/licenses/>。
 
-import orjson
+# 本文件是 tkaimidi 的一部分
+# SPDX-FileCopyrightText: 2025 thiliapr <thiliapr@tutanota.com>
+# SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 import random
 import multiprocessing
 import argparse
 import pathlib
 import mido
+import orjson
 from tqdm import tqdm
-from utils import midi_to_notes, notes_to_sheet
+from utils.midi import midi_to_notes, notes_to_sheet
 from tokenizer import data_to_str
 
 
@@ -48,7 +47,7 @@ def process_midi_to_json(
         try:
             # 读取 MIDI 文件，clip=True 自动处理异常事件
             midi_file = mido.MidiFile(filepath, clip=True)
-        except Exception:
+        except (ValueError, EOFError, OSError):
             continue
 
         # 提取音符序列并跳过小于指定长度的 MIDI 文件
