@@ -10,7 +10,7 @@ from typing import Any
 import torch
 import orjson
 from transformers import PreTrainedTokenizerFast
-from model import MidiNetConfig
+from utils.model import MidiNetConfig
 
 
 def save_checkpoint(model_state_dict: dict[str, Any], optimizer_state_dict: dict[str, Any], metrics: dict[str, list], path: pathlib.Path):
