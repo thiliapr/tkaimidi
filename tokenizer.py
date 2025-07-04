@@ -6,9 +6,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import os
-import random
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # 禁用tokenizers的并行处理，避免冲突
 
+import random
 import argparse
 import pathlib
 import orjson

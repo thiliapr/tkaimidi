@@ -8,12 +8,12 @@
 import pathlib
 import random
 import argparse
-import orjson
 import os
 from multiprocessing import cpu_count
 from typing import Optional, Iterator
 import mido
 import torch
+import orjson
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
@@ -25,7 +25,8 @@ from transformers import PreTrainedTokenizerFast
 from utils.constants import DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_LAYERS, DEFAULT_DROPOUT, DEFAULT_WEIGHT_DECAY, DEFAULT_LEARNING_RATE, DEFAULT_MIN_SEQUENCE_LENGTH
 from utils.model import MidiNet, MidiNetConfig
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.midi import midi_to_notes, notes_to_sheet, empty_cache, parallel_map
+from utils.midi import midi_to_notes, notes_to_sheet
+from utils.toolkit import empty_cache, parallel_map
 from tokenizer import data_to_str
 
 # 解除线程数量限制
