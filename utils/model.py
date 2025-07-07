@@ -34,48 +34,6 @@ class MidiNetConfig(NamedTuple):
     num_layers: int
 
 
-class PositionalEncoding(nn.Module):
-    """
-    实现了一个位置编码模块，用于为输入序列添加位置信息。该模块使用正弦和余弦函数生成位置编码，
-    使得模型能够感知序列中各个位置的相对和绝对位置。
-
-    Inputs:
-        x: 输入张量，形状为 (batch_size, seq_len, dim_model
-
-    Outputs:
-        返回形状为 (batch_size, seq_len, dim_model) 的位置编码张量。
-
-    Examples:
-        >>> pe = PositionalEncoding(512)
-        >>> x = torch.randn(32, 128, 512)  # batch_size=32, seq_len=128, dim_model=512
-        >>> x = x + pe(x)  # 返回形状为 (32, 128, 512) 的经过位置编码的张量
-    """
-
-    def __init__(self, dim_model: int):
-        super().__init__()
-
-        # 只对偶数维度（从0开始每隔两位）计算
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim_model, 2).float() / dim_model))
-
-        # 注册为buffer，意味着它不是参数，不会被训练，且不随模型保存
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
-
-    def forward(self, x: torch.Tensor):
-        seq_len = x.size(1)
-
-        # 创建位置索引张量（长度为序列长度），并转换为与 inv_freq 相同的数据类型
-        positions = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
-
-        # 计算外积: positions[i] * inv_freq[j]
-        sinusoid_input = torch.einsum("i,j->ij", positions, self.inv_freq)
-
-        # 最后一维合并为 dim_model 维度
-        positional_embedding = torch.cat([sinusoid_input.sin(), sinusoid_input.cos()], dim=-1)
-
-        # 增加 batch 维度，并确保返回类型与输入相同
-        return positional_embedding.unsqueeze(0).type_as(x)
-
-
 class ScaleNorm(nn.Module):
     """
     实现了一个缩放归一化的模块。该模块根据输入的张量 `x` 计算其L2范数，并用可学习的缩放因子 `g` 对其进行缩放归一化。用于增强模型的稳定性和学习能力。
@@ -118,6 +76,7 @@ class MultiqueryAttention(nn.Module):
     1. 键/值投影合并为单头（`dim_head`维），查询保持多头（`num_heads * dim_head`维）
     2. 计算时通过广播机制将键/值复制到与查询相同的头数
     3. 使用PyTorch原生`scaled_dot_product_attention`实现高效注意力计算
+    4. 支持 RoPE（旋转位置编码）对 Q/K 应用
 
     Args:
         dim_head: 每个注意力头的维度
@@ -145,11 +104,67 @@ class MultiqueryAttention(nn.Module):
         # 输出投影矩阵，将多头输出合并回原始维度
         self.out_proj = nn.Linear(dim_model, dim_model, device=device)
 
+        # RoPE 旋转频率
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim_head, 2).float() / dim_head))
+        self.register_buffer("rope_inv_freq", inv_freq, persistent=False)
+
         # 使用 Xavier 均匀分布初始化查询、键值投影权重
         nn.init.xavier_uniform_(self.qkv_proj.weight)
         nn.init.zeros_(self.qkv_proj.bias)
         nn.init.xavier_uniform_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
+
+    def apply_rope(self, x: torch.Tensor, seq_len: int):
+        """
+        对输入张量 x 应用旋转位置编码（Rotary Positional Embedding, RoPE）。
+
+        Args:
+            x: 输入张量，形状为 [batch, heads, seq_len, dim_head]，表示多头注意力中的特征表示。
+            seq_len: 序列长度，通常等于 x 的第三维长度。
+
+        Returns:
+            应用 RoPE 后的张量，形状与输入 x 相同。
+
+        详细说明:
+            - 仅对最后一维（dim_head）进行旋转位置编码处理。
+            - 首先根据 inv_freq（RoPE 的频率参数）生成正弦和余弦位置编码 emb，形状为 [seq_len, dim_head]。
+            - emb 通过 unsqueeze 扩展为 [1, 1, seq_len, dim_head]，以便与输入 x 广播相乘。
+            - 将 x 的最后一维拆分为偶数索引（x1）和奇数索引（x2），分别与 emb 的前后半部分进行组合，实现旋转编码。
+            - 最终返回与输入形状一致的编码后张量。
+
+        注意事项:
+            - self.rope_inv_freq 应为 [dim_head // 2] 形状的频率张量。
+            - self.dim_head 应为最后一维的特征维度，且为偶数。
+        """
+        # x: [batch, heads, seq_len, dim_head]
+        # 只对最后一维（特征维度 dim_head）做 RoPE 旋转位置编码
+        device = x.device
+        inv_freq = self.rope_inv_freq  # [dim_head // 2]，每个偶数维度的旋转频率
+
+        # 生成位置索引 t: [seq_len]
+        t = torch.arange(seq_len, device=device, dtype=inv_freq.dtype)
+
+        # 计算每个位置和每个频率的乘积，得到 [seq_len, dim_head//2]
+        freqs = torch.einsum("i,j->ij", t, inv_freq)
+
+        # 拼接正弦和余弦编码，得到 [seq_len, dim_head]
+        emb = torch.cat((freqs.sin(), freqs.cos()), dim=-1)
+
+        # 扩展 emb 形状为 [1, 1, seq_len, dim_head]，方便与 x 广播相乘
+        emb = emb.unsqueeze(0).unsqueeze(0)
+
+        # 拆分 x 的最后一维为偶数索引（x1）和奇数索引（x2），形状均为 [..., dim_head//2]
+        x1, x2 = x[..., ::2], x[..., 1::2]
+        x_rope = torch.empty_like(x)
+
+        # 偶数位置：x1 * cos - x2 * sin
+        x_rope[..., ::2] = x1 * emb[..., :self.dim_head//2] - x2 * emb[..., self.dim_head//2:]
+
+        # 奇数位置：x1 * sin + x2 * cos
+        x_rope[..., 1::2] = x1 * emb[..., self.dim_head//2:] + x2 * emb[..., :self.dim_head//2]
+
+        # 返回应用 RoPE 后的张量，形状与输入一致
+        return x_rope
 
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor = None) -> torch.Tensor:
         batch_size, seq_len, _ = x.shape
@@ -172,34 +187,23 @@ class MultiqueryAttention(nn.Module):
         keys = keys.transpose(1, 2)
         values = values.transpose(1, 2)
 
+        # 应用 RoPE 到 Q/K
+        queries = self.apply_rope(queries, seq_len)
+        keys = self.apply_rope(keys, seq_len)
+
         # 处理注意力掩码
         if padding_mask is None:
-            # 使用内置的注意力掩码
             attn_mask = None
             use_builtin_causal = True
         else:
-            # 不使用内置的因果注意力（因为不能同时使用`attn_mask`和`is_causal`，需要自定义掩码）
             use_builtin_causal = False
-
-            # 创建因果掩码 [seq_len, seq_len]
             causal_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device).triu(diagonal=1)
-
-            # 确保 padding_mask 形状为 [batch_size, seq_len]
-            # 下面的广播逻辑:
-            # - causal_mask.unsqueeze(0): [1, seq_len, seq_len]
-            # - padding_mask.unsqueeze(1): [batch_size, 1, seq_len] (mask for keys)
-            # - padding_mask.unsqueeze(2): [batch_size, seq_len, 1] (mask for queries)
-            # 逻辑或后得到 [batch_size, seq_len, seq_len]
             attn_mask = (
                 causal_mask.unsqueeze(0)
                 | padding_mask.unsqueeze(1)
                 | padding_mask.unsqueeze(2)
             )
-
-            # 扩展到多头维度 [batch_size, 1, seq_len, seq_len]
             attn_mask = attn_mask.unsqueeze(1)
-
-            # 将布尔掩码转换为浮点掩码
             attn_mask = torch.where(attn_mask, -torch.inf, 0.)
 
         # 计算缩放点积注意力
@@ -295,6 +299,7 @@ class MidiNet(nn.Module):
     - 使用共享权重的嵌入层和输出层，减少参数数量并提高模型效果。
     - 多层堆叠的 Transformer 样式结构，支持捕捉复杂的时间依赖关系。
     - 使用可选的 Dropout 机制进行正则化。
+    - RoPE（旋转位置编码）可选应用于注意力计算，增强模型对序列位置的感知。
 
     Args:
         config: 模型的配置。
@@ -314,9 +319,6 @@ class MidiNet(nn.Module):
         # 将 token 映射为向量
         self.embedding = nn.Embedding(config.vocab_size, self.dim_model, device=device)
 
-        # 位置编码
-        self.positional_encoding = PositionalEncoding(self.dim_model)
-
         # 堆叠多个 MidiNetLayer 层
         layer = MidiNetLayer(config.num_heads, config.dim_head, config.dim_feedforward, dropout=dropout, device=device)
         self.layers = nn.ModuleList(copy.deepcopy(layer) for _ in range(config.num_layers))
@@ -335,9 +337,6 @@ class MidiNet(nn.Module):
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.BoolTensor] = None):
         # 将 token 转为向量，并乘以 sqrt(dim_model) 进行缩放
         x = self.embedding(x) * math.sqrt(self.dim_model)
-
-        # 添加位置编码
-        x = x + self.positional_encoding(x)
 
         # 应用 Dropout
         x = self.dropout(x)
