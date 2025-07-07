@@ -9,7 +9,7 @@ import pathlib
 from typing import Any
 import torch
 import orjson
-from transformers import PreTrainedTokenizerFast
+from transformers import AutoTokenizer
 from utils.model import MidiNetConfig
 
 
@@ -32,7 +32,7 @@ def save_checkpoint(model_state_dict: dict[str, Any], optimizer_state_dict: dict
         f.write(orjson.dumps(metrics))  # 写入JSON文件
 
 
-def load_checkpoint(path: pathlib.Path) -> tuple[PreTrainedTokenizerFast, dict[str, Any]]:
+def load_checkpoint(path: pathlib.Path) -> tuple[AutoTokenizer, dict[str, Any]]:
     """
     从指定路径加载模型的检查点（用于推理）。
 
@@ -49,7 +49,7 @@ def load_checkpoint(path: pathlib.Path) -> tuple[PreTrainedTokenizerFast, dict[s
         >>> model.load_state_dict(sd)
     """
     # 加载分词器
-    tokenizer = PreTrainedTokenizerFast.from_pretrained(path / "tokenizer")
+    tokenizer = AutoTokenizer.from_pretrained(path / "tokenizer")
 
     # 检查并加载模型权重
     model_state = {}
@@ -60,7 +60,7 @@ def load_checkpoint(path: pathlib.Path) -> tuple[PreTrainedTokenizerFast, dict[s
     return tokenizer, model_state
 
 
-def load_checkpoint_train(path: pathlib.Path) -> tuple[PreTrainedTokenizerFast, dict[str, Any], dict[str, Any], dict[str, Any]]:
+def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, dict[str, Any], dict[str, Any], dict[str, Any]]:
     """
     从指定路径加载模型的检查点（用于恢复训练状态）。
 

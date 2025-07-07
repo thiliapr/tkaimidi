@@ -21,7 +21,7 @@ from torch import nn, optim
 from torch.nn import functional as F
 from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, DataLoader, Sampler
-from transformers import PreTrainedTokenizerFast
+from transformers import AutoTokenizer
 from utils.constants import DEFAULT_DIM_HEAD, DEFAULT_NUM_HEADS, DEFAULT_DIM_FEEDFORWARD, DEFAULT_NUM_LAYERS, DEFAULT_DROPOUT, DEFAULT_WEIGHT_DECAY, DEFAULT_LEARNING_RATE, DEFAULT_MIN_SEQUENCE_LENGTH
 from utils.model import MidiNet, MidiNetConfig
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
@@ -71,7 +71,7 @@ class MidiDataset(Dataset):
     def __init__(
         self,
         midi_dirs: list[pathlib.Path],
-        tokenizer: PreTrainedTokenizerFast,
+        tokenizer: AutoTokenizer,
         min_sequence_length: int,
         max_sequence_length: int,
         seed: int = 8964
@@ -102,7 +102,7 @@ class MidiDataset(Dataset):
         self.music_sequences.extend([seq for sublist in json_results for seq in sublist])
 
     @staticmethod
-    def process_midi_files(files: list[pathlib.Path], max_sequence_length: int, min_sequence_length: int, tokenizer: PreTrainedTokenizerFast) -> list[list[int]]:
+    def process_midi_files(files: list[pathlib.Path], max_sequence_length: int, min_sequence_length: int, tokenizer: AutoTokenizer) -> list[list[int]]:
         "并行处理 MIDI 文件，将其转为分词序列。"
         result = []
         for file_path in files:
@@ -127,7 +127,7 @@ class MidiDataset(Dataset):
         return result
 
     @staticmethod
-    def process_json_files(files: list[pathlib.Path], max_sequence_length: int, min_sequence_length: int, tokenizer: PreTrainedTokenizerFast) -> list[list[int]]:
+    def process_json_files(files: list[pathlib.Path], max_sequence_length: int, min_sequence_length: int, tokenizer: AutoTokenizer) -> list[list[int]]:
         "并行处理 JSON 文件，直接读取分词序列。"
         result = []
         for file_path in files:
@@ -300,7 +300,7 @@ def train(
         - oom_shapes: 触发CUDA OOM（内存不足）的输入形状列表，格式: [(batch_size, seq_len), ...]
 
     Examples:
-        >>> tokenizer = PreTrainedTokenizerFast.from_pretrained("ckpt/tokenizer")
+        >>> tokenizer = AutoTokenizer.from_pretrained("ckpt/tokenizer")
         >>> model = MidiNet(MidiNetConfig(len(tokenizer), 8, 64, 2048, 12))
         >>> optimizer = optim.AdamW(model.parameters(), lr=1e-2, weight_decay=1e-2)
         >>> train(model, dataloader, optimizer, len(tokenizer), tokenizer.pad_token_id)

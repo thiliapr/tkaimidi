@@ -14,7 +14,7 @@ import mido
 import numpy as np
 import torch
 import torch.nn.functional as F
-from transformers import PreTrainedTokenizerFast
+from transformers import AutoTokenizer
 from utils.checkpoint import load_checkpoint, extract_config
 from utils.model import MidiNet
 from utils.constants import KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, LOOKAHEAD_COUNT
@@ -26,7 +26,7 @@ from tokenizer import data_to_str, str_to_data
 def generate_sheet(
     prompt: str,
     model: MidiNet,
-    tokenizer: PreTrainedTokenizerFast,
+    tokenizer: AutoTokenizer,
     seed: int,
     temperature: float,
     top_k: Optional[int],
@@ -133,7 +133,7 @@ def generate_sheet(
 def generate_midi(
     prompt: list[tuple[int, int]],
     model: MidiNet,
-    tokenizer: PreTrainedTokenizerFast,
+    tokenizer: AutoTokenizer,
     seed: Optional[int] = None,
     temperature: float = 1.,
     top_k: Optional[int] = None,
