@@ -229,7 +229,7 @@ class MidiDatasetSampler(Sampler[list[int]]):
             batch_tokens = longest_in_batch * len(current_batch)
             batches_with_tokens.append((current_batch, batch_tokens))
 
-        # 批次倒序，用于快速检测训练的问题
+        # 将批次列表反转，使得较大的批次优先用于训练，有助于及早发现和修复 OOM（内存溢出）等问题
         batches_with_tokens.reverse()
 
         # 分配批次
