@@ -7,7 +7,7 @@
 
 tkaimidi 是自由软件，遵循`Affero GNU 通用公共许可证第 3 版或任何后续版本`。你可以自由地使用、修改和分发该软件，但不提供任何明示或暗示的担保。有关详细信息，请参见 [Affero GNU 通用公共许可证](https://www.gnu.org/licenses/agpl-3.0.html)。
 
-## 安装与依赖
+## 安装依赖
 ```bash
 pip install -r requirements.txt
 ```
