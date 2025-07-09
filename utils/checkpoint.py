@@ -73,11 +73,12 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, dict[str, 
     
     Examples:
         >>> tokenizer, msd, osd, metrics = load_checkpoint_train(pathlib.Path("ckpt"))
-        >>> config = extract_midi_net_config(msd)
+        >>> config = extract_config(msd)
         >>> model = MidiNet(config, deivce=torch.device("cuda"))
         >>> model.load_state_dict(msd)
         >>> optimizer = optim.AdamW(model.parameters())
-        >>> 
+        >>> optimizer.load_state_dict(osd)
+        >>> # 继续训练...
     """
     # 加载分词器和模型状态
     tokenizer, model_state = load_checkpoint(path)
