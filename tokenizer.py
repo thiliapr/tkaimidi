@@ -98,11 +98,12 @@ def train_sheet_tokenizer(model_data_samples: Iterable[str], vocab_size: int, mi
     return wrapped_tokenizer
 
 
-def get_samples_midi(midi_files: list[pathlib.Path], max_sequence_length: int) -> list[tuple[int, str]]:
+def get_samples_midi(rank: int, midi_files: list[pathlib.Path], max_sequence_length: int) -> list[tuple[int, str]]:
     """
     从 MIDI 文件中提取音符数据，并转换为字符串表示
 
     Args:
+        rank: 进程编号，用于进度条显示
         midi_files: MIDI 文件的路径列表
         max_sequence_length: 最大序列长度，超过此长度的序列将被截断
     
@@ -113,7 +114,7 @@ def get_samples_midi(midi_files: list[pathlib.Path], max_sequence_length: int) -
     result = []
 
     # 遍历 MIDI 文件夹
-    for filepath in midi_files:
+    for filepath in tqdm(midi_files, desc="处理 MIDI 文件", disable=rank != 0, delay=0.1):
         # 转换处理流程: MIDI 文件 → 音符 → 乐谱表示 → 字符表示
         try:
             midi_file = mido.MidiFile(filepath, clip=True)
@@ -133,11 +134,12 @@ def get_samples_midi(midi_files: list[pathlib.Path], max_sequence_length: int) -
     return result
 
 
-def get_samples_json(json_files: list[pathlib.Path], max_sequence_length: int) -> list[tuple[int, str]]:
+def get_samples_json(rank: int, json_files: list[pathlib.Path], max_sequence_length: int) -> list[tuple[int, str]]:
     """
     从 JSON 文件中提取音符数据，并转换为字符串表示
 
     Args:
+        rank: 进程编号，用于进度条显示
         json_files: JSON 文件的路径列表
         max_sequence_length: 最大序列长度，超过此长度的序列将被截断
     
@@ -146,7 +148,7 @@ def get_samples_json(json_files: list[pathlib.Path], max_sequence_length: int) -
     """
     result = []
 
-    for filepath in json_files:
+    for filepath in tqdm(json_files, desc="处理 JSON 文件", disable=rank != 0, delay=0.1):
         # 读取 JSON 文件
         with open(filepath, encoding="utf-8") as f:
             data = orjson.loads(f.read())
@@ -204,13 +206,13 @@ def get_samples(dirs: list[pathlib.Path], max_sequence_length: int) -> list[tupl
     # 并行处理 MIDI 文件，提取样本
     midi_result = parallel_map(
         get_samples_midi,
-        [(midi_files[i::num_workers], max_sequence_length) for i in range(num_workers)],
+        [(i, midi_files[i::num_workers], max_sequence_length) for i in range(num_workers)],
         num_workers=num_workers
     )
     # 并行处理 JSON 文件，提取样本
     json_result = parallel_map(
         get_samples_json,
-        [(json_files[i::num_workers], max_sequence_length) for i in range(num_workers)],
+        [(i, json_files[i::num_workers], max_sequence_length) for i in range(num_workers)],
         num_workers=num_workers
     )
 

@@ -43,7 +43,7 @@ def process_midi_to_json(
         min_sequence_length: 最小允许的音符数量
     """
     print(f"进程 {rank} 已启动。")
-    for filepath in tqdm(midi_files, desc=f"进程 {rank}", position=rank):
+    for filepath in tqdm(midi_files, desc=f"进程 {rank}", disable=rank != 0, delay=0.1):
         try:
             # 读取 MIDI 文件，clip=True 自动处理异常事件
             midi_file = mido.MidiFile(filepath, clip=True)

@@ -84,8 +84,11 @@ class MidiDataset(Dataset):
         random.Random(seed).shuffle(midi_files)
 
         # 并行处理 MIDI 文件
-        midi_chunks = [midi_files[i::num_workers] for i in range(num_workers)]
-        midi_results = parallel_map(self.process_midi_files, [(chunk, max_sequence_length, min_sequence_length, tokenizer) for chunk in midi_chunks], num_workers=num_workers)
+        midi_results = parallel_map(
+            self.process_midi_files,
+            [(i, midi_files[i::num_workers], max_sequence_length, min_sequence_length, tokenizer) for i in range(num_workers)],
+            num_workers=num_workers
+        )
 
         # 扁平化结果
         self.music_sequences.extend([seq for sublist in midi_results for seq in sublist])
@@ -95,17 +98,20 @@ class MidiDataset(Dataset):
         random.Random(seed).shuffle(json_files)
 
         # 并行处理 JSON 文件
-        json_chunks = [json_files[i::num_workers] for i in range(num_workers)]
-        json_results = parallel_map(self.process_json_files, [(chunk, max_sequence_length, min_sequence_length, tokenizer) for chunk in json_chunks], num_workers=num_workers)
+        json_results = parallel_map(
+            self.process_json_files,
+            [(i, json_files[i::num_workers], max_sequence_length, min_sequence_length, tokenizer) for i in range(num_workers)],
+            num_workers=num_workers
+        )
 
         # 扁平化结果
         self.music_sequences.extend([seq for sublist in json_results for seq in sublist])
 
     @staticmethod
-    def process_midi_files(files: list[pathlib.Path], max_sequence_length: int, min_sequence_length: int, tokenizer: AutoTokenizer) -> list[list[int]]:
+    def process_midi_files(rank: int, files: list[pathlib.Path], max_sequence_length: int, min_sequence_length: int, tokenizer: AutoTokenizer) -> list[list[int]]:
         "并行处理 MIDI 文件，将其转为分词序列。"
         result = []
-        for file_path in files:
+        for file_path in tqdm(files, desc="处理 MIDI 文件", disable=rank != 0, delay=0.1):
             try:
                 midi_file = mido.MidiFile(file_path, clip=True)
             except (ValueError, EOFError, OSError):
@@ -127,10 +133,10 @@ class MidiDataset(Dataset):
         return result
 
     @staticmethod
-    def process_json_files(files: list[pathlib.Path], max_sequence_length: int, min_sequence_length: int, tokenizer: AutoTokenizer) -> list[list[int]]:
+    def process_json_files(rank: int, files: list[pathlib.Path], max_sequence_length: int, min_sequence_length: int, tokenizer: AutoTokenizer) -> list[list[int]]:
         "并行处理 JSON 文件，直接读取分词序列。"
         result = []
-        for file_path in files:
+        for file_path in tqdm(files, desc="处理 JSON 文件", disable=rank != 0, delay=0.1):
             try:
                 with open(file_path, encoding="utf-8") as f:
                     data = orjson.loads(f.read())
