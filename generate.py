@@ -96,7 +96,7 @@ def generate_sheet(
 
         # 如果设置了最小长度且当前输入长度小于最小长度，则将结束标记的概率设为负无穷大
         if min_length is not None and input_tensor.size(0) < min_length:
-            probs[tokenizer.eos_token_id] = -torch.inf
+            logits[tokenizer.eos_token_id] = -torch.inf
 
         # Repetition Penalty
         score = torch.gather(logits, 0, input_tensor)
@@ -378,7 +378,7 @@ def main(args: argparse.Namespace):
 
     # 模型推理生成
     music = []
-    for note in generate_midi(prompt_notes, model, tokenizer, seed=args.seed, temperature=args.temperature, repetition_penalty=args.repetition_penalty, max_pitch_span_semitones=args.max_pitch_span_semitones, max_length=args.max_length, device=device):
+    for note in generate_midi(prompt_notes, model, tokenizer, seed=args.seed, temperature=args.temperature, repetition_penalty=args.repetition_penalty, max_pitch_span_semitones=args.max_pitch_span_semitones, max_length=args.max_length, min_length=args.min_length, device=device):
         music.append(note)
         print(note)
 
