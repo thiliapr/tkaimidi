@@ -33,7 +33,7 @@ def generate_sheet(
     top_k: Optional[int],
     repetition_penalty: float,
     min_length: Optional[int] = None,
-    device: torch.device
+    device: Optional[torch.device] = None
 ) -> Generator[str, Optional[list[tuple[str, float]]], None]:
     """
     使用自回归方式生成音乐乐谱事件序列的生成器函数。
