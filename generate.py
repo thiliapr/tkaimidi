@@ -9,6 +9,7 @@ import argparse
 import pathlib
 import random
 import math
+from re import A
 from typing import Iterator, Generator, Optional
 import mido
 import numpy as np
@@ -31,6 +32,7 @@ def generate_sheet(
     temperature: float,
     top_k: Optional[int],
     repetition_penalty: float,
+    min_length: Optional[int] = None,
     device: torch.device
 ) -> Generator[str, Optional[list[tuple[str, float]]], None]:
     """
@@ -47,6 +49,7 @@ def generate_sheet(
         temperature: 采样温度参数，值越高生成结果越多样，值越低结果越保守
         top_k: 仅对概率前`top_k`个token采样，减小随机性
         repetition_penalty: 重复惩罚，大于 1 则减少重复
+        min_length: 生成的最小长度，若为 None，则不限制最小长度
         device: 指定模型运行的计算设备
 
     Yields:
@@ -90,6 +93,10 @@ def generate_sheet(
         logits[tokenizer.bos_token_id] = -torch.inf
         logits[tokenizer.pad_token_id] = -torch.inf
         logits[tokenizer.unk_token_id] = -torch.inf
+
+        # 如果设置了最小长度且当前输入长度小于最小长度，则将结束标记的概率设为负无穷大
+        if min_length is not None and input_tensor.size(0) < min_length:
+            probs[tokenizer.eos_token_id] = -torch.inf
 
         # Repetition Penalty
         score = torch.gather(logits, 0, input_tensor)
@@ -140,6 +147,7 @@ def generate_midi(
     repetition_penalty: float = 1.2,
     max_pitch_span_semitones: float = 20.,
     max_length: Optional[int] = None,
+    min_length: Optional[int] = None,
     device: Optional[torch.device] = None
 ) -> Iterator[tuple[int, int]]:
     """
@@ -157,6 +165,7 @@ def generate_midi(
         repetition_penalty: 重复惩罚系数
         pitch_volatility_threshold: 音高波动阈值(半音标准差)，超过此值会触发抑制机制
         max_length: 生成的最大音符数量，若为 None，则会持续生成直到遇到结束标志
+        min_length: 生成的最小音符数量，若为 None，则不限制最小长度
         device: 使用的计算设备(CPU/GPU)
 
     返回:
@@ -182,7 +191,7 @@ def generate_midi(
     pitch_window = np.array([], dtype=int)
 
     # 创建主生成器
-    generator = generate_sheet(prompt_text, model, tokenizer, seed, temperature, top_k, repetition_penalty, device)
+    generator = generate_sheet(prompt_text, model, tokenizer, seed, temperature, top_k, repetition_penalty, min_length, device)
 
     # 初始化状态变量
     global_offset = sheet_music.count(KEY_UP) - sheet_music.count(KEY_DOWN)  # 当前全局偏移
@@ -314,8 +323,16 @@ def clamp_midi_pitch(pitches: list[int]):
     return normalized_pitches
 
 
-def main():
-    # 设置命令行参数解析
+def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
+    """
+    解析命令行参数。
+
+    Args:
+        args: 可选的命令行参数列表，默认为 None，表示使用 sys.argv
+
+    Returns:
+        argparse.Namespace: 包含解析后的参数
+    """
     parser = argparse.ArgumentParser(description="以指定 MIDI 为前面部分并生成音乐和保存。")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点的路径")
     parser.add_argument("output_path", type=pathlib.Path, help="MIDI 文件保存路径。生成的 MIDI 文件将会保存到这里。")
@@ -326,8 +343,12 @@ def main():
     parser.add_argument("-s", "--seed", type=int, help="随机种子，不指定表示随机生成")
     parser.add_argument("-p", "--max-pitch-span-semitones", type=int, default=64, help="触发音高调整的阈值（半音数），当生成的音高跨度大于阈值时，包含音调上升或下降事件的 token 将被降低概率。默认为 %(default)s")
     parser.add_argument("-l", "--max-length", type=int, help="限制最多生成的音符数量。如果不指定，将会持续生成直到遇到结束标志。")
-    args = parser.parse_args()
+    parser.add_argument("-ml", "--min-length", type=int, default=None, help="生成的音符数量的最小值。生成的音符数量将至少为此值，默认为 None，表示不限制最小长度。")
 
+    return parser.parse_args(args)
+
+
+def main(args: argparse.Namespace):
     # 加载模型的预训练检查点
     tokenizer, state_dict = load_checkpoint(args.ckpt_path)
 
@@ -380,4 +401,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(parse_args())

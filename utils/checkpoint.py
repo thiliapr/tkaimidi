@@ -82,7 +82,7 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, dict[str, 
     """
     # 加载分词器和模型状态
     tokenizer, model_state = load_checkpoint(path)
-    
+
     # 检查并加载优化器权重
     optimizer_state = {}
     if (optimizer_path := path / "optimizer.pth").exists():
