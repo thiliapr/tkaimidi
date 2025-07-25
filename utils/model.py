@@ -204,8 +204,8 @@ class MultiqueryAttention(nn.Module):
         values = values.transpose(1, 2)
 
         # 应用 RoPE 到 Q/K
-        queries = self.apply_rope(queries, seq_len)
-        keys = self.apply_rope(keys, seq_len)
+        queries = self.apply_rope(queries)
+        keys = self.apply_rope(keys)
 
         # 处理注意力掩码
         if padding_mask is None:
