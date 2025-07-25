@@ -118,7 +118,7 @@ class MultiqueryAttention(nn.Module):
         nn.init.xavier_uniform_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
 
-    def apply_rope(self, x: torch.Tensor, start: int = 0) -> torch.Tensor:
+    def apply_rope(self, x: torch.Tensor, seq_start_idx: int = 0, cache_start_idx: int = 0) -> torch.Tensor:
         """
         应用旋转位置编码(RoPE)到输入张量。
 
@@ -131,23 +131,33 @@ class MultiqueryAttention(nn.Module):
         该方法支持增量计算：
         - 维护旋转频率缓存(freqs_cis_cache)避免重复计算
         - 当序列长度超过缓存大小时自动扩展缓存
-        - 支持从指定位置(start)开始应用旋转编码
+        - 支持从指定位置开始应用旋转编码
 
         Args:
             x: 输入张量，形状为 [batch, num_heads, seq_len, dim_head]
-            start: 开始应用旋转编码的位置索引，默认为0
+            seq_start_idx: 在输入序列中开始应用旋转编码的位置索引
+                - 例如：seq_start_idx=5 表示跳过前5个token，从第6个token开始应用旋转编码
+                - 默认值0表示对整个序列应用旋转编码
+            cache_start_idx: 在旋转频率缓存中开始使用的位置索引
+                - 用于支持增量解码场景
+                - 例如：cache_start_idx=10 表示从缓存的第10个位置开始使用旋转频率
+                - 默认值0表示从头开始使用旋转频率缓存
 
         Returns:
             应用旋转位置编码后的张量，形状与输入相同
         """
-        # 计算需要应用RoPE的序列长度（从start位置到结尾）
-        required_seq_len = x.size(2) - start
+        # 计算需要应用RoPE的序列长度（从seq_start_idx位置到结尾）
+        required_seq_len = x.size(2) - seq_start_idx
 
         # 检查并更新旋转频率缓存
         current_cache_len = self.freqs_cis_cache.size(0)
-        if current_cache_len < required_seq_len:
+        if current_cache_len < cache_start_idx + required_seq_len:
             # 生成缺失位置的时间索引
-            new_positions = torch.arange(current_cache_len, required_seq_len, device=self.inv_freq.device)
+            new_positions = torch.arange(
+                current_cache_len,
+                cache_start_idx + required_seq_len,
+                device=self.inv_freq.device
+            )
             # 计算新位置的旋转频率
             new_freqs = torch.outer(new_positions, self.inv_freq)
             # 转换为复数形式 (cosθ + i·sinθ)
@@ -156,10 +166,10 @@ class MultiqueryAttention(nn.Module):
             self.freqs_cis_cache = torch.cat([self.freqs_cis_cache, new_cis], dim=0)
 
         # 获取当前序列所需的旋转频率
-        freqs_cis = self.freqs_cis_cache[:required_seq_len]
+        freqs_cis = self.freqs_cis_cache[cache_start_idx:cache_start_idx + required_seq_len]
 
-        # 提取需要旋转的部分（从start位置开始）
-        to_rotate = x[..., start:, :]
+        # 提取需要旋转的部分（从seq_start_idx位置开始）
+        to_rotate = x[..., seq_start_idx:, :]
 
         # 将最后维度重塑为复数对 (..., dim_head//2, 2)
         complex_shape = to_rotate.shape[:-1] + (-1, 2)
@@ -180,7 +190,7 @@ class MultiqueryAttention(nn.Module):
         rotated_output = rotated_real.flatten(-2).to(dtype=x.dtype)
 
         # 组合结果：未旋转部分 + 旋转后的部分
-        return torch.cat([x[..., :start, :], rotated_output], dim=2)
+        return torch.cat([x[..., :seq_start_idx, :], rotated_output], dim=2)
 
     def forward(self, x: torch.Tensor, padding_mask: Optional[torch.BoolTensor] = None) -> torch.Tensor:
         batch_size, seq_len, _ = x.shape
