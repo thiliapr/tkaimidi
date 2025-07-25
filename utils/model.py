@@ -230,11 +230,9 @@ class MultiqueryAttention(nn.Module):
             # 应用 KV Cache
             keys = torch.cat([kv_cache[0], keys], dim=2)
             values = torch.cat([kv_cache[1], values], dim=2)
-            total_len = seq_len + cache_len
         else:
             queries = self.apply_rope(queries)
             keys = self.apply_rope(keys)
-            total_len = seq_len
 
         # 处理注意力掩码
         if padding_mask is None:
@@ -242,7 +240,7 @@ class MultiqueryAttention(nn.Module):
             use_builtin_causal = True
         else:
             use_builtin_causal = False
-            causal_mask = torch.ones(total_len, total_len, dtype=torch.bool, device=x.device).triu(diagonal=1)
+            causal_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device).triu(diagonal=1)
             attn_mask = (
                 causal_mask.unsqueeze(0)
                 | padding_mask.unsqueeze(1)
@@ -325,13 +323,21 @@ class MidiNetLayer(nn.Module):
                 torch.nn.init.xavier_uniform_(module.weight)
                 torch.nn.init.zeros_(module.bias)
 
-    def forward(self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # 对输入张量进行多查询注意力和前馈网络处理
-        x = x + self.dropout(self.attention(self.attention_norm(x), padding_mask=padding_mask) * self.attention_scale)
+    def forward(
+        self,
+        x: torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
+        kv_cache: Optional[tuple[torch.Tensor, torch.Tensor]] = None
+    ) -> torch.Tensor:
+        # 注意力模块
+        attn_output, kv_cache = self.attention(self.attention_norm(x), padding_mask=padding_mask, kv_cache=kv_cache)
+        x = x + self.dropout(attn_output * self.attention_scale)
+
+        # 前馈网络
         x = x + self.dropout(self.feedforward(self.feedforward_norm(x)) * self.feedforward_scale)
 
         # 返回最终输出张量
-        return x
+        return x, kv_cache
 
 
 class MidiNet(nn.Module):
@@ -379,7 +385,12 @@ class MidiNet(nn.Module):
         torch.nn.init.xavier_uniform_(self.output_layer.weight)
         torch.nn.init.zeros_(self.output_layer.bias)
 
-    def forward(self, x: torch.Tensor, padding_mask: Optional[torch.BoolTensor] = None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        padding_mask: Optional[torch.BoolTensor] = None,
+        kv_cache: Optional[list[tuple[torch.Tensor, torch.Tensor]]] = None
+    ):
         # 将 token 转为向量，并乘以 sqrt(dim_model) 进行缩放
         x = self.embedding(x) * math.sqrt(self.dim_model)
 
@@ -387,10 +398,15 @@ class MidiNet(nn.Module):
         x = self.dropout(x)
 
         # 逐层应用 Transformer 结构
-        for layer in self.layers:
-            # 进入单层 Transformer 结构
-            x = layer(x, padding_mask)
+        layers_kv_cache = []
+        for layer_idx, layer in enumerate(self.layers):
+            if kv_cache:
+                x, layer_kv_cache = layer(x, padding_mask, kv_cache[layer_idx])
+            else:
+                x, layer_kv_cache = layer(x, padding_mask)
+
+            layers_kv_cache.append(layer_kv_cache)
 
         # 映射回词汇表空间，得到每个位置的预测分布
         logits = self.output_layer(x)
-        return logits
+        return logits, layers_kv_cache

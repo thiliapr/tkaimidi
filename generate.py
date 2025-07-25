@@ -9,7 +9,6 @@ import argparse
 import pathlib
 import random
 import math
-from re import A
 from typing import Iterator, Generator, Optional
 import mido
 import numpy as np
@@ -84,10 +83,19 @@ def generate_sheet(
     # 用于存储需要调整概率的事件及其频率衰减值
     events_to_dampen = None
 
+    # 储存 kv_cache
+    kv_cache = None
+
     # 自回归生成循环
     while True:
         # 增加输入张量的批次维度，再进行推理
-        logits = model(input_tensor.unsqueeze(0))[0, -1, :]
+        if kv_cache is None:
+            logits, kv_cache = model(input_tensor.unsqueeze(0))
+        else:
+            logits, kv_cache = model(input_tensor[-1:].unsqueeze(0), kv_cache=kv_cache)
+
+        # 只取最后一位token
+        logits = logits[0, -1, :]
 
         # 屏蔽特殊标记(BOS/PAD/UNK)
         logits[tokenizer.bos_token_id] = -torch.inf
