@@ -192,8 +192,16 @@ class MultiqueryAttention(nn.Module):
         # 组合结果：未旋转部分 + 旋转后的部分
         return torch.cat([x[..., :seq_start_idx, :], rotated_output], dim=2)
 
-    def forward(self, x: torch.Tensor, padding_mask: Optional[torch.BoolTensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        padding_mask: Optional[torch.BoolTensor] = None,
+        kv_cache: Optional[tuple[torch.Tensor, torch.Tensor]] = None
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         batch_size, seq_len, _ = x.shape
+
+        if kv_cache is not None and padding_mask is not None:
+            raise RuntimeError("padding_mask 和 kv_cache 不能同时使用。padding_mask 用于训练阶段的批次填充处理，kv_cache 用于推理阶段的增量解码。")
 
         # 计算查询、键值投影 [batch, seq_len, dim_model + 2 * dim_head]
         qkv = self.qkv_proj(x)
@@ -214,8 +222,19 @@ class MultiqueryAttention(nn.Module):
         values = values.transpose(1, 2)
 
         # 应用 RoPE 到 Q/K
-        queries = self.apply_rope(queries)
-        keys = self.apply_rope(keys)
+        if kv_cache is not None:
+            cache_len = kv_cache[0].size(2)
+            queries = self.apply_rope(queries, cache_start_idx=cache_len)
+            keys = self.apply_rope(keys, cache_start_idx=cache_len)
+
+            # 应用 KV Cache
+            keys = torch.cat([kv_cache[0], keys], dim=2)
+            values = torch.cat([kv_cache[1], values], dim=2)
+            total_len = seq_len + cache_len
+        else:
+            queries = self.apply_rope(queries)
+            keys = self.apply_rope(keys)
+            total_len = seq_len
 
         # 处理注意力掩码
         if padding_mask is None:
@@ -223,7 +242,7 @@ class MultiqueryAttention(nn.Module):
             use_builtin_causal = True
         else:
             use_builtin_causal = False
-            causal_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device).triu(diagonal=1)
+            causal_mask = torch.ones(total_len, total_len, dtype=torch.bool, device=x.device).triu(diagonal=1)
             attn_mask = (
                 causal_mask.unsqueeze(0)
                 | padding_mask.unsqueeze(1)
@@ -241,7 +260,7 @@ class MultiqueryAttention(nn.Module):
         )
 
         # 合并多头输出 (batch, seq_len, dim_model)
-        return self.out_proj(attn_output.transpose(1, 2).reshape(batch_size, seq_len, -1))
+        return self.out_proj(attn_output.transpose(1, 2).reshape(batch_size, seq_len, -1)), (keys, values)
 
 
 class MidiNetLayer(nn.Module):
