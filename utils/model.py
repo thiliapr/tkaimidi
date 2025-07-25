@@ -90,7 +90,7 @@ class MultiqueryAttention(nn.Module):
         >>> output = attention(x)
     """
 
-    def __init__(self, dim_head: int, num_heads: int, dropout: float = 0., device: torch.device = None):
+    def __init__(self, dim_head: int, num_heads: int, dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
         self.dim_head = dim_head
         self.num_heads = num_heads
@@ -105,8 +105,12 @@ class MultiqueryAttention(nn.Module):
         self.out_proj = nn.Linear(dim_model, dim_model, device=device)
 
         # RoPE 旋转频率
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim_head, 2).float() / dim_head))
-        self.register_buffer("rope_inv_freq", inv_freq, persistent=False)
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim_head, 2, device=device) / dim_head))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+        # freqs_cis 缓存
+        self.freqs_cis_cache: torch.Tensor
+        self.register_buffer("freqs_cis_cache", torch.empty(0, dim_head // 2, device=device), persistent=False)
 
         # 使用 Xavier 均匀分布初始化查询、键值投影权重
         nn.init.xavier_uniform_(self.qkv_proj.weight)
@@ -114,59 +118,71 @@ class MultiqueryAttention(nn.Module):
         nn.init.xavier_uniform_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
 
-    def apply_rope(self, x: torch.Tensor, seq_len: int):
+    def apply_rope(self, x: torch.Tensor, start: int = 0) -> torch.Tensor:
         """
-        对输入张量 x 应用旋转位置编码（Rotary Positional Embedding, RoPE）。
+        应用旋转位置编码(RoPE)到输入张量。
+
+        旋转位置编码通过复数乘法实现位置信息的注入：
+        1. 将输入张量的最后两个维度视为复数对(实部和虚部)
+        2. 生成与位置相关的旋转复数向量
+        3. 通过复数乘法实现旋转操作
+        4. 将旋转后的复数转换回实数表示
+
+        该方法支持增量计算：
+        - 维护旋转频率缓存(freqs_cis_cache)避免重复计算
+        - 当序列长度超过缓存大小时自动扩展缓存
+        - 支持从指定位置(start)开始应用旋转编码
 
         Args:
-            x: 输入张量，形状为 [batch, heads, seq_len, dim_head]，表示多头注意力中的特征表示。
-            seq_len: 序列长度，通常等于 x 的第三维长度。
+            x: 输入张量，形状为 [batch, num_heads, seq_len, dim_head]
+            start: 开始应用旋转编码的位置索引，默认为0
 
         Returns:
-            应用 RoPE 后的张量，形状与输入 x 相同。
-
-        详细说明:
-            - 仅对最后一维（dim_head）进行旋转位置编码处理。
-            - 首先根据 inv_freq（RoPE 的频率参数）生成正弦和余弦位置编码 emb，形状为 [seq_len, dim_head]。
-            - emb 通过 unsqueeze 扩展为 [1, 1, seq_len, dim_head]，以便与输入 x 广播相乘。
-            - 将 x 的最后一维拆分为偶数索引（x1）和奇数索引（x2），分别与 emb 的前后半部分进行组合，实现旋转编码。
-            - 最终返回与输入形状一致的编码后张量。
-
-        注意事项:
-            - self.rope_inv_freq 应为 [dim_head // 2] 形状的频率张量。
-            - self.dim_head 应为最后一维的特征维度，且为偶数。
+            应用旋转位置编码后的张量，形状与输入相同
         """
-        # x: [batch, heads, seq_len, dim_head]
-        # 只对最后一维（特征维度 dim_head）做 RoPE 旋转位置编码
-        device = x.device
-        inv_freq = self.rope_inv_freq  # [dim_head // 2]，每个偶数维度的旋转频率
+        # 计算需要应用RoPE的序列长度（从start位置到结尾）
+        required_seq_len = x.size(2) - start
 
-        # 生成位置索引 t: [seq_len]
-        t = torch.arange(seq_len, device=device, dtype=inv_freq.dtype)
+        # 检查并更新旋转频率缓存
+        current_cache_len = self.freqs_cis_cache.size(0)
+        if current_cache_len < required_seq_len:
+            # 生成缺失位置的时间索引
+            new_positions = torch.arange(current_cache_len, required_seq_len, device=self.inv_freq.device)
+            # 计算新位置的旋转频率
+            new_freqs = torch.outer(new_positions, self.inv_freq)
+            # 转换为复数形式 (cosθ + i·sinθ)
+            new_cis = torch.polar(torch.ones_like(new_freqs), new_freqs)
+            # 更新缓存
+            self.freqs_cis_cache = torch.cat([self.freqs_cis_cache, new_cis], dim=0)
 
-        # 计算每个位置和每个频率的乘积，得到 [seq_len, dim_head//2]
-        freqs = torch.einsum("i,j->ij", t, inv_freq)
+        # 获取当前序列所需的旋转频率
+        freqs_cis = self.freqs_cis_cache[:required_seq_len]
 
-        # 拼接正弦和余弦编码，得到 [seq_len, dim_head]
-        emb = torch.cat((freqs.sin(), freqs.cos()), dim=-1)
+        # 提取需要旋转的部分（从start位置开始）
+        to_rotate = x[..., start:, :]
 
-        # 扩展 emb 形状为 [1, 1, seq_len, dim_head]，方便与 x 广播相乘
-        emb = emb.unsqueeze(0).unsqueeze(0)
+        # 将最后维度重塑为复数对 (..., dim_head//2, 2)
+        complex_shape = to_rotate.shape[:-1] + (-1, 2)
+        complex_pairs = to_rotate.float().reshape(complex_shape)
 
-        # 拆分 x 的最后一维为偶数索引（x1）和奇数索引（x2），形状均为 [..., dim_head//2]
-        x1, x2 = x[..., ::2], x[..., 1::2]
-        x_rope = torch.empty_like(x)
+        # 转换为复数张量
+        complex_tensor = torch.view_as_complex(complex_pairs)
 
-        # 偶数位置：x1 * cos - x2 * sin
-        x_rope[..., ::2] = x1 * emb[..., :self.dim_head//2] - x2 * emb[..., self.dim_head//2:]
+        # 调整旋转频率形状以匹配输入 (添加批量和头维度)
+        freqs_cis = freqs_cis.view(1, 1, -1, freqs_cis.shape[-1])
 
-        # 奇数位置：x1 * sin + x2 * cos
-        x_rope[..., 1::2] = x1 * emb[..., self.dim_head//2:] + x2 * emb[..., :self.dim_head//2]
+        # 应用旋转（复数乘法）
+        rotated_complex = complex_tensor * freqs_cis
 
-        # 返回应用 RoPE 后的张量，形状与输入一致
-        return x_rope
+        # 转换回实数表示
+        rotated_real = torch.view_as_real(rotated_complex)
+        # 展平最后两个维度 (..., dim_head//2, 2) -> (..., dim_head)
+        rotated_output = rotated_real.flatten(-2).to(dtype=x.dtype)
 
-    def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor = None) -> torch.Tensor:
+        # 组合结果：未旋转部分 + 旋转后的部分
+        return torch.cat([x[..., :start, :], rotated_output], dim=2)
+
+    def forward(self, x: torch.Tensor, padding_mask: Optional[torch.BoolTensor] = None) -> torch.Tensor:
         batch_size, seq_len, _ = x.shape
 
         # 计算查询、键值投影 [batch, seq_len, dim_model + 2 * dim_head]
