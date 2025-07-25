@@ -15,6 +15,9 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+AttentionKVCache = tuple[torch.Tensor, torch.Tensor]
+NetKVCache = list[AttentionKVCache]
+
 
 class MidiNetConfig(NamedTuple):
     """
@@ -196,8 +199,8 @@ class MultiqueryAttention(nn.Module):
         self,
         x: torch.Tensor,
         padding_mask: Optional[torch.BoolTensor] = None,
-        kv_cache: Optional[tuple[torch.Tensor, torch.Tensor]] = None
-    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        kv_cache: Optional[AttentionKVCache] = None
+    ) -> tuple[torch.Tensor, AttentionKVCache]:
         batch_size, seq_len, _ = x.shape
 
         if kv_cache is not None and padding_mask is not None:
@@ -327,8 +330,8 @@ class MidiNetLayer(nn.Module):
         self,
         x: torch.Tensor,
         padding_mask: Optional[torch.Tensor] = None,
-        kv_cache: Optional[tuple[torch.Tensor, torch.Tensor]] = None
-    ) -> torch.Tensor:
+        kv_cache: Optional[AttentionKVCache] = None
+    ) -> tuple[torch.Tensor, AttentionKVCache]:
         # 注意力模块
         attn_output, kv_cache = self.attention(self.attention_norm(x), padding_mask=padding_mask, kv_cache=kv_cache)
         x = x + self.dropout(attn_output * self.attention_scale)
@@ -389,8 +392,8 @@ class MidiNet(nn.Module):
         self,
         x: torch.Tensor,
         padding_mask: Optional[torch.BoolTensor] = None,
-        kv_cache: Optional[list[tuple[torch.Tensor, torch.Tensor]]] = None
-    ):
+        kv_cache: Optional[NetKVCache] = None
+    ) -> tuple[torch.Tensor, NetKVCache]:
         # 将 token 转为向量，并乘以 sqrt(dim_model) 进行缩放
         x = self.embedding(x) * math.sqrt(self.dim_model)
 
