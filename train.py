@@ -344,7 +344,7 @@ def train(
         try:
             # 使用半精度节省显存
             with autocast(device_type, dtype=torch.float16):
-                outputs, _ = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
+                outputs = model(inputs, padding_mask=inputs == pad_token)[0].view(-1, vocab_size)  # 前向传播并 reshape 成二维张量
                 loss = F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token)  # 计算损失
 
             scaler.scale(loss).backward()  # 反向传播
@@ -419,7 +419,7 @@ def validate(
         # 使用半精度节省显存
         with autocast(device.type if device else "cpu", dtype=torch.float16):
             # 模型前向传播，得到输出并 reshape 成二维张量
-            outputs, _ = model(inputs, padding_mask=inputs == pad_token).view(-1, vocab_size)
+            outputs = model(inputs, padding_mask=inputs == pad_token)[0].view(-1, vocab_size)
 
             # 计算并记录损失
             loss = F.cross_entropy(outputs, labels.view(-1), ignore_index=pad_token).item()
