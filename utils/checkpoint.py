@@ -66,7 +66,6 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, dict[str, 
 
     Args:
         path: 加载检查点的目录路径
-        train: 是否加载训练所需数据（优化器状态等）
 
     Returns:
         分词器、模型和优化器的状态，指标
