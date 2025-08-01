@@ -121,7 +121,7 @@ class MultiqueryAttention(nn.Module):
         nn.init.xavier_uniform_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
 
-    def apply_rope(self, x: torch.Tensor, seq_start_idx: int = 0, cache_start_idx: int = 0) -> torch.Tensor:
+    def apply_rope(self, x: torch.Tensor, cache_start_idx: int = 0) -> torch.Tensor:
         """
         应用旋转位置编码(RoPE)到输入张量。
 
@@ -138,19 +138,16 @@ class MultiqueryAttention(nn.Module):
 
         Args:
             x: 输入张量，形状为 [batch, num_heads, seq_len, dim_head]
-            seq_start_idx: 在输入序列中开始应用旋转编码的位置索引
-                - 例如：seq_start_idx=5 表示跳过前5个token，从第6个token开始应用旋转编码
-                - 默认值0表示对整个序列应用旋转编码
             cache_start_idx: 在旋转频率缓存中开始使用的位置索引
-                - 用于支持增量解码场景
+                - 用于支持增量解码场景，所以不考虑多 batch 情况
                 - 例如：cache_start_idx=10 表示从缓存的第10个位置开始使用旋转频率
                 - 默认值0表示从头开始使用旋转频率缓存
 
         Returns:
             应用旋转位置编码后的张量，形状与输入相同
         """
-        # 计算需要应用RoPE的序列长度（从seq_start_idx位置到结尾）
-        required_seq_len = x.size(2) - seq_start_idx
+        # 计算需要应用RoPE的序列长度
+        required_seq_len = x.size(2)
 
         # 检查并更新旋转频率缓存
         current_cache_len = self.freqs_cis_cache.size(0)
@@ -171,12 +168,9 @@ class MultiqueryAttention(nn.Module):
         # 获取当前序列所需的旋转频率
         freqs_cis = self.freqs_cis_cache[cache_start_idx:cache_start_idx + required_seq_len]
 
-        # 提取需要旋转的部分（从seq_start_idx位置开始）
-        to_rotate = x[..., seq_start_idx:, :]
-
         # 将最后维度重塑为复数对 (..., dim_head//2, 2)
-        complex_shape = to_rotate.shape[:-1] + (-1, 2)
-        complex_pairs = to_rotate.float().reshape(complex_shape)
+        complex_shape = x.shape[:-1] + (-1, 2)
+        complex_pairs = x.float().reshape(complex_shape)
 
         # 转换为复数张量
         complex_tensor = torch.view_as_complex(complex_pairs)
@@ -189,11 +183,10 @@ class MultiqueryAttention(nn.Module):
 
         # 转换回实数表示
         rotated_real = torch.view_as_real(rotated_complex)
+
         # 展平最后两个维度 (..., dim_head//2, 2) -> (..., dim_head)
         rotated_output = rotated_real.flatten(-2).to(dtype=x.dtype)
-
-        # 组合结果：未旋转部分 + 旋转后的部分
-        return torch.cat([x[..., :seq_start_idx, :], rotated_output], dim=2)
+        return rotated_output
 
     def forward(
         self,
