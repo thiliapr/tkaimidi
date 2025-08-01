@@ -588,7 +588,7 @@ def main(args: argparse.Namespace):
     # 加载训练检查点（包括 tokenizer、模型、优化器状态、指标）
     tokenizer, model_state_dict, optimizer_state_dict, metrics = load_checkpoint_train(args.ckpt_path)
 
-    # 加载训练数据集及分布式采样器
+    # 加载训练数据集及采样器
     train_dataset = MidiDataset(args.train_dataset, tokenizer, args.min_sequence_length, args.max_sequence_length)
     train_sampler = MidiDatasetSampler(train_dataset, args.train_max_batch_tokens, args.seed)
     train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=lambda x: sequence_collate_fn(x, pad_token=tokenizer.pad_token_id))
