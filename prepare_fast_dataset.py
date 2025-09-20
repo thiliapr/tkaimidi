@@ -53,7 +53,7 @@ def convert(
         try:
             # 读取 MIDI 文件，clip=True 自动处理异常事件
             midi_file = mido.MidiFile(filepath, clip=True)
-        except (ValueError, EOFError, OSError):
+        except (ValueError, EOFError, OSError, mido.KeySignatureError):
             # 跳过无法解析的损坏文件
             continue
 
