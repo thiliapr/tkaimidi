@@ -320,6 +320,7 @@ def train(
         if (step + 1) % accumulation_steps == 0:
             scaler.step(optimizer)  # 更新模型参数
             scaler.update()  # 调整缩放因子
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
             optimizer.zero_grad()  # 清空梯度
             global_step = completed_iters + ((step + 1) // accumulation_steps) - 1  # 计算全局步数
 
