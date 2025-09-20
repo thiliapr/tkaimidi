@@ -298,7 +298,7 @@ def train(
     # 遍历整个训练集
     for step, batch in zip(range(num_steps), dataloader):
         # 数据移至目标设备
-        piano_roll, note_counts, pitch_means, pitch_ranges, padding_mask = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
+        piano_roll, note_counts, pitch_means, pitch_ranges, padding_mask = [item.to(device=device) for item in batch]
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
@@ -380,7 +380,7 @@ def validate(
     # 遍历验证集所有批次数据，显示进度条
     for batch_idx, batch in enumerate(tqdm(dataloader, total=len(dataloader), desc="Validate")):
         # 数据移至目标设备
-        piano_roll, note_counts, pitch_means, pitch_ranges, padding_mask = [(item.to(device=device) if isinstance(item, torch.Tensor) else item) for item in batch]
+        piano_roll, note_counts, pitch_means, pitch_ranges, padding_mask = [item.to(device=device) for item in batch]
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
