@@ -59,7 +59,7 @@ def convert(
 
         # 提取音符序列，并过滤音符数量不足或时间过长的文件
         notes = midi_to_notes(midi_file)
-        if len(notes) < min_notes or sum(zip(*notes)[1]) > max_frames:
+        if len(notes) < min_notes or sum(tuple(zip(*notes))[1]) > max_frames:
             continue
 
         # 转换为钢琴卷帘表示 [时间帧, 128 个音高]
