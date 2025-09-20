@@ -42,9 +42,9 @@ def convert(
         包含四个 NumPy 数组的元组列表：(钢琴卷帘矩阵, 音符数量数组, 平均音高数组, 音高范围数组)
 
     Examples:
-        >>> dataset = convert(midi_files, 1000, 10)
+        >>> dataset = convert(midi_files, 1989, 64)
         >>> len(dataset)
-        50
+        8964
     """
     dataset = []
 
