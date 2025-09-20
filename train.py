@@ -241,7 +241,7 @@ def midinet_loss(
         return masked_loss.sum(dim=[1, 2]) / (~expanded_mask).sum(dim=[1, 2])
 
     # 计算各分量损失
-    piano_roll_loss = masked_loss(piano_roll_pred, piano_roll_target.to(dtype=piano_roll_pred.dtype), padding_mask, F.binary_cross_entropy)
+    piano_roll_loss = masked_loss(piano_roll_pred, piano_roll_target.to(dtype=piano_roll_pred.dtype), padding_mask, F.binary_cross_entropy_with_logits)
     note_counts_loss = masked_loss(note_counts_pred, note_counts_target, padding_mask, F.mse_loss)
     pitch_mean_loss = masked_loss(pitch_mean_pred, pitch_mean_target, padding_mask, F.mse_loss)
     pitch_range_loss = masked_loss(pitch_range_pred, pitch_range_target, padding_mask, F.mse_loss)
@@ -342,7 +342,7 @@ def train(
         if step + 1 == num_steps:
             results = [
                 x[0].detach().cpu().numpy()
-                for x in [piano_roll_pred, piano_roll, note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
+                for x in [F.sigmoid(piano_roll_pred), piano_roll, note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
             ]
             return results[::2], results[1::2]
 
@@ -398,7 +398,7 @@ def validate(
         if logged_pred is None and (random.random() > 0.5 or batch_idx == len(dataloader) - 1):
             results = [
                 x[0].cpu().numpy()
-                for x in [piano_roll_pred, piano_roll, note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
+                for x in [F.sigmoid(piano_roll_pred), piano_roll, note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
             ]
             logged_pred, logged_target = results[::2], results[1::2]
 

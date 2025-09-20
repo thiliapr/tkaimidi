@@ -521,5 +521,5 @@ class MidiNet(nn.Module):
             decoder_kv_cache.append(layer_kv_cache)
 
         # 激活音符预测
-        note_prediction = F.sigmoid(self.note_predictor(x))  # [batch_size, seq_len, 128]
+        note_prediction = self.note_predictor(x)  # [batch_size, seq_len, 128]
         return note_prediction, note_count_prediction, pitch_mean_prediction, pitch_range_prediction, (encoder_kv_cache, decoder_kv_cache)
