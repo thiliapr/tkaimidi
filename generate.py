@@ -55,7 +55,7 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
         # 首次使用完整提示，后续仅使用最后一帧
         model_input = prompt if kv_cache is None else prompt[:, -1:]
         note_pred, note_count_pred, pitch_mean_pred, pitch_range_pred, kv_cache = model(
-            model_input > VOICED_THRESHOLD,
+            model_input > 0.5,
             kv_cache=kv_cache
         )
 
