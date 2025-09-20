@@ -1,14 +1,12 @@
-"这个模块提供了 MIDI 文件的转换和处理功能，包括将音符转换为 MIDI 轨道、从 MIDI 文件提取音符等。"
-
 # 本文件是 tkaimidi 的一部分
 # SPDX-FileCopyrightText: 2024-2025 thiliapr <thiliapr@tutanota.com>
 # SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import math
-from typing import Iterator, Optional
 import mido
-from utils.constants import NATURAL_SCALE, TIME_PRECISION, KEY_UP, KEY_DOWN, OCTAVE_JUMP_UP, OCTAVE_JUMP_DOWN, TIME_INTERVAL, LOOKAHEAD_COUNT
+import numpy as np
+from utils.constants import TIME_PRECISION
 
 
 def notes_to_track(notes: list[tuple[int, int]]) -> mido.MidiTrack:
@@ -163,170 +161,82 @@ def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     return deduped_notes
 
 
-def notes_to_sheet(notes: list[tuple[int, int]], max_length: Optional[int] = None) -> tuple[list[tuple[str, int]], list[int]]:
+def notes_to_piano_roll(notes: list[tuple[int]]) -> np.ndarray:
     """
-    将MIDI音符列表转换为电子乐谱（事件序列）。
+    将音符序列转换为钢琴卷帘矩阵表示。
+
+    该函数接收一个包含音符和相对时间间隔的列表，将其转换为一个二维布尔矩阵（钢琴卷帘）。
+    矩阵的行表示时间步，列表示音高（MIDI音符编号0-127），矩阵中的True值表示在对应时间点有音符开始。
+    首先提取所有音符的音高和时间间隔，计算每个音符的绝对开始时间，然后创建一个全零矩阵，
+    最后在对应的时间步和音高位置标记为 True。
 
     Args:
-        notes: MIDI音符列表，每个音符是一个元组 (pitch, interval)：
-            - pitch: 音高（MIDI音符编号，0-127）
-            - interval: 时间间隔（单位：ticks或自定义时间单位）
-        max_length: 乐谱的最大允许长度（事件数量）。如果超过，则截断。
+        notes: 包含音符和相对时间间隔的列表，每个元素为元组 (音高, 时间间隔)
 
     Returns:
-        返回包括两个值的数组:
-            - sheet: 电子乐谱事件列表，包含以下事件类型：
-                - 0-11: 音符（音阶中的音高，0=C, 1=C#, ..., 11=B）
-                - 12 (KEY_DOWN): 音高下调一个半音
-                - 13 (KEY_UP): 音高上调一个半音
-                - 14 (OCTAVE_DOWN): 音符下移一个八度
-                - 15 (OCTAVE_UP): 音符上移一个八度
-                - 16 (TIME_INTERVAL): 时间间隔
-            - positions: 每个音符在 sheet 中的索引位置列表
-    """
-    # 如果指定了最大长度，截断音符序列
-    if max_length:
-        notes = notes[:max_length]
-
-    # 分离音高和时间间隔
-    pitches, intervals = zip(*notes)
-
-    # 定义最佳偏移量检测函数
-    def calculate_natural_scale_matches(start_idx: int, current_pitch_offset: int) -> dict[int, int]:
-        "计算不同音高偏移量下，音符符合自然音阶的数量。"
-        end = min(start_idx + LOOKAHEAD_COUNT, len(pitches))
-        segment = [pitch + current_pitch_offset for pitch in pitches[start_idx:end]]
-        return {offset: sum((pitch + offset) % 12 in NATURAL_SCALE for pitch in segment) for offset in range(12)}
-
-    def calculate_octave_offset(start_idx: int, current_pitch_offset: int):
-        "计算最佳八度偏移，使音符集中在合理的八度范围内。"
-        end = min(start_idx + LOOKAHEAD_COUNT, len(pitches))
-        segment = [pitch + current_pitch_offset for pitch in pitches[start_idx:end]]
-        segment_mean = sum(segment) / len(segment)
-
-        # 如果平均音高偏离中央区域(±18半音)太远，则调整八度
-        return -int(segment_mean / 12) if abs(segment_mean) > 18 else 0
-
-    # 初始音高偏移: 选择使前 LOOKAHEAD_COUNT 个音符最匹配自然音阶的偏移量
-    current_pitch_offset = max(calculate_natural_scale_matches(0, 0).items(), key=lambda x: x[1])[0]
-
-    # 调整八度使音符集中在合理范围内
-    octave_offset = calculate_octave_offset(0, current_pitch_offset)
-    current_pitch_offset += octave_offset * 12
-
-    # 初始化自然音阶匹配分数缓存
-    natural_scale_scores = calculate_natural_scale_matches(0, current_pitch_offset)
-
-    # 预先移除即将离开滑动窗口的音符对分数的影响
-    if LOOKAHEAD_COUNT - 1 < len(pitches):
-        for offset in range(12):
-            if (pitches[LOOKAHEAD_COUNT - 1] + current_pitch_offset + offset) % 12 in NATURAL_SCALE:
-                natural_scale_scores[offset] -= 1
-
-    # 开始转换每个音符
-    sheet = []  # 乐谱事件序列
-    positions = []  # 每个音符在`sheet`中的位置
-    for i in range(len(pitches)):
-        total_pitch_adjustment = 0  # 当前位置需要调整的总半音数
-
-        # 添加新进入窗口的音符到分数计算
-        if i + LOOKAHEAD_COUNT - 1 < len(pitches):
-            for offset in range(12):
-                if (pitches[i + LOOKAHEAD_COUNT - 1] + current_pitch_offset + offset) % 12 in NATURAL_SCALE:
-                    natural_scale_scores[offset] += 1
-
-        # 选择最佳音高调整（分数相同时，优先选择0偏移）
-        best_pitch_adjustment = max(natural_scale_scores.items(), key=lambda x: (x[1], x[0] == 0))[0]
-        if best_pitch_adjustment != 0:
-            total_pitch_adjustment += best_pitch_adjustment
-            current_pitch_offset += best_pitch_adjustment
-            natural_scale_scores = calculate_natural_scale_matches(i, current_pitch_offset)
-
-        # 移除当前处理音符对分数的影响（因为它即将离开窗口）
-        for offset in range(12):
-            if (pitches[i] + current_pitch_offset + offset) % 12 in NATURAL_SCALE:
-                natural_scale_scores[offset] -= 1
-
-        # 检查是否需要八度调整
-        optimal_octave_shift = calculate_octave_offset(i, current_pitch_offset)
-        if optimal_octave_shift != 0:
-            total_pitch_adjustment += optimal_octave_shift * 12
-            current_pitch_offset += optimal_octave_shift * 12
-
-        # 检查乐谱长度限制
-        if max_length:
-            # 音高调整事件 + 时间间隔事件 + 八度跳跃事件 + 音符本身
-            events_needed = abs(total_pitch_adjustment) + intervals[i] + abs((pitches[i] + current_pitch_offset) // 12) + 1
-            if len(sheet) + events_needed > max_length:
-                break
-
-        # 添加音高调整事件到乐谱
-        if total_pitch_adjustment:
-            sheet.extend(KEY_UP if total_pitch_adjustment > 0 else KEY_DOWN for _ in range(abs(total_pitch_adjustment)))
-
-        # 记录时间间隔
-        if intervals[i]:
-            sheet.extend(TIME_INTERVAL for _ in range(intervals[i]))
-
-        # 记录乐谱中音符开始的位置
-        # 由于八度跳跃是修正音符的八度位置的，音符包括八度跳跃，所以需要在音符的八度跳跃前记录位置
-        positions.append(len(sheet))
-
-        # 将当前音高调整到[0, 11]范围内，并记录八度跳跃
-        pitch = pitches[i] + current_pitch_offset
-        if pitch < 0 or pitch > 11:
-            octave_jump = pitch // 12
-            sheet.extend(OCTAVE_JUMP_UP if octave_jump > 0 else OCTAVE_JUMP_DOWN for _ in range(abs(octave_jump)))
-            # 归一化 pitch 到 [0, 11] 范围
-            pitch %= 12
-
-        # 记录音符
-        sheet.append(pitch)
-
-    # 返回结果
-    return sheet, positions
-
-
-def sheet_to_notes(sheet: Iterator[int]) -> Iterator[tuple[int, int]]:
-    """
-    将电子乐谱转换为MIDI音符序列。
-
-    该函数处理输入的电子乐谱数据流，将其转换为MIDI音符序列。转换规则如下：
-    1. 数值0-11表示音符，会结合当前偏移量计算最终音高
-    2. 数值12-15用于控制音高偏移量
-    3. 其他数值累加为时间间隔
-    转换过程会维护全局偏移和八度偏移状态，并自动重置时间间隔
-
-    Args:
-        sheet: 电子乐谱数据流，由notes_to_sheet()生成
-
-    Returns:
-        生成器，每次产生一个元组(音高, 时间间隔)
+        一个二维布尔数组，表示钢琴卷帘，形状为 [总时间步数, 128]
 
     Examples:
-        >>> list(sheet_to_notes([0, 1, 14, 0]))
-        [(0, 0), (1, 0), (-12, 0)]
+        >>> notes = [(60, 0), (67, 0), (64, 1)]
+        >>> piano_roll = notes_to_piano_roll(notes)
+        >>> piano_roll.shape
+        (2, 128)
     """
-    # 初始化状态变量
-    global_offset = 0  # 当前全局偏移
-    octave_offset = 0  # 当前八度偏移
-    accumulated_interval = 0  # 累计时间间隔
+    # 空音符列表时直接返回空钢琴卷帘
+    if not notes:
+        return np.empty((0, 128), dtype=bool)
 
-    for event in sheet:
-        if event < 12:
-            # 计算并生成最终音符
-            final_pitch = event - global_offset + octave_offset * 12
-            yield final_pitch, accumulated_interval
+    # 将音符列表解包为音高序列和时间间隔序列
+    pitches, intervals = zip(*notes)
 
-            # 重置状态
-            octave_offset = accumulated_interval = 0
-        elif event == KEY_DOWN:
-            global_offset -= 1  # 降调
-        elif event == KEY_UP:
-            global_offset += 1  # 升调
-        elif event == OCTAVE_JUMP_DOWN:
-            octave_offset -= 1  # 降八度
-        elif event == OCTAVE_JUMP_UP:
-            octave_offset += 1  # 升八度
-        else:
-            accumulated_interval += 1  # 增加时间间隔
+    # 计算累积时间得到每个音符的绝对时间
+    start_times = np.cumsum(np.array(intervals))
+
+    # 计算钢琴卷帘的总时间长度（最后一个音符的开始时间+1）
+    total_time_steps = start_times[-1] + 1 if len(start_times) > 0 else 0
+
+    # 初始化钢琴卷帘矩阵（时间步×音高）
+    piano_roll = np.zeros((total_time_steps, 128), dtype=bool)
+
+    # 在对应时间步和音高位置标记音符弹奏
+    for pitch, time_step in zip(pitches, start_times):
+        piano_roll[time_step, pitch] = True
+
+    return piano_roll
+
+
+def piano_roll_to_notes(piano_roll: np.ndarray) -> list[tuple[int, int]]:
+    """
+    将钢琴卷帘矩阵转换为音符序列。
+
+    该函数接收一个二维布尔矩阵（钢琴卷帘），提取其中所有标记为 True 的位置，
+    这些位置表示在对应时间步有音符开始。然后按时间步排序这些音符，计算每个音符
+    与前一个音符之间的相对时间间隔，最后返回包含音高和相对时间间隔的列表。
+
+    Args:
+        piano_roll: 二维布尔数组，表示钢琴卷帘，形状为 [总时间步数, 128]
+
+    Returns:
+        一个包含音符和相对时间间隔的列表，每个元素为元组(音高，时间间隔)
+
+    Examples:
+        >>> piano_roll = np.zeros((2, 128), dtype=bool)
+        >>> piano_roll[0, 60] = True
+        >>> piano_roll[0, 67] = True
+        >>> piano_roll[1, 64] = True
+        >>> piano_roll_to_notes(piano_roll)
+        [(60, 0), (67, 0), (64, 1)]
+    """
+    previous_time = 0  # 记录上一个音符的时间步
+    result = []  # 存储最终的音符序列
+
+    # 遍历每个时间步
+    for time, pitch_row in enumerate(piano_roll):
+        for pitch in np.where(pitch_row)[0]:
+            # 计算当前音符与上一个音符的相对时间间隔
+            result.append((pitch, time - previous_time))
+
+            # 更新上一个音符的时间步为当前时间步
+            previous_time = time
+
+    return result

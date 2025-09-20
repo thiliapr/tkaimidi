@@ -1,6 +1,6 @@
 # Tk AI MIDI
 ## 简介
-这是一个自由的MIDI生成软件，主要使用[mido](https://github.com/mido/mido/)来解析音乐，[pytorch](https://github.com/pytorch/pytorch/)来机器学习，旨在通过深度学习技术生成音乐作品。
+这是一个自由的 MIDI 生成软件，主要使用[mido](https://github.com/mido/mido/)来解析音乐，[pytorch](https://github.com/pytorch/pytorch/)来机器学习，旨在通过深度学习技术生成音乐作品。
 
 ## License
 ![GNU AGPL Version 3 Logo](https://www.gnu.org/graphics/agplv3-with-text-162x68.png)
@@ -8,38 +8,47 @@
 tkaimidi 是自由软件，遵循`Affero GNU 通用公共许可证第 3 版或任何后续版本`。你可以自由地使用、修改和分发该软件，但不提供任何明示或暗示的担保。有关详细信息，请参见 [Affero GNU 通用公共许可证](https://www.gnu.org/licenses/agpl-3.0.html)。
 
 ## 安装依赖
+### CPU 用户
 ```bash
 pip install -r requirements.txt
 ```
 
+### CUDA 用户（Nvidia 显卡）
+```bash
+nvidia-smi  # 查看 CUDA 版本
+pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
+```
+
+> [!TIP]
+> 根据`nvidia-smi`的输出`CUDA Version`把`cu128`换成你自己的 CUDA 版本，比如输出`CUDA Version: 12.1`就把`cu128`替换为`cu126`  
+> 具体来说，PyTorch 的CUDA是向下兼容的，所以选择时只需要选择比自己的 CUDA 版本小一点的版本就行了。  
+> 比如 PyTorch 提供了三个版本: `12.6, 12.8, 12.9`，然后你的 CUDA 版本是`12.7`，那么就选择`12.8`（因为官方提供的`12.6` < 你的`12.7` < 官方提供的`12.8`）
+
+
 ## 使用示例
 ```bash
-# 这里演示的是大致流程，实际可能需要调整，不过一般照着这个来就行了
-# 下载并解压数据集
+# 下载数据集
 mkdir train_data valid_data
 curl -Lo takara-midi.zip https://www.kaggle.com/api/v1/datasets/download/yigk4out/takara-midi
 curl -Lo lmd_full.tar.gz http://hog.ee.columbia.edu/craffel/lmd/lmd_full.tar.gz
-unzip takara-midi.zip -d valid_data/
-cd train_data
-tar -xf ../lmd_full.tar.gz
 
-# 提取数据，如果训练多次或重新训练分词器，这样就不用多次加载原始数据，节省时间
-python3 extract.py train_data train_optimized_data
-python3 extract.py valid_data valid_optimized_data
+# 解压数据集，这里不作演示，我们假设数据集解压到了 /path/to/dataset/takara-midi 和 /path/to/dataset/lmd_full 里
+...
 
-# 训练分词器（检查点保存到哪里）
-python3 tokenizer.py ckpt -t train_optimized_data -v valid_optimized_data
+# 准备训练集和验证集
+python3 prepare_fast_dataset.py /path/to/dataset /path/to/fast_dataset train:9 val:1
 
-# 训练模型（要训练多少个 Epoch、检查点保存到哪里）
-python3 train.py 15 ckpt -t train_optimized_data -v valid_optimized_data
+# 初始化检查点
+python3 init_checkpoint.py /path/to/ckpt
 
-# 生成音乐并保存为 MIDI
-python3 generate.py ckpt output.mid
+# 训练模型（要训练多少个 Epoch、检查点路径）
+python3 train.py 15 /path/to/ckpt -t /path/to/fast_dataset/train.npz -v /path/to/fast_dataset/val.npz
+
+# 生成 1000 帧音乐并保存
+python3 generate.py /path/to/ckpt 1000 /path/to/output.mid
 ```
 
 **注意事项**
-- 值得注意的是，如果你不重新训练分词器，而是从已有检查点复制分词器过来的话，直接运行`train.py`。在这种情况下，检查点最好不要包含`optimizer.pth`、`model.pth`和`metrics.json`（根据经验，如果检查点包含不符合现在参数的模型和检查点的话，可能引发异常）
-- 更进一步，如果你不重新训练分词器，而且只运行`python3 train.py`一次，则不必先提取数据，即直接运行`python3 train.py 15 ckpt -t train_data -v valid_data`。（在这种情况下，先提取数据再训练和直接训练所耗费时间几乎是相等的。不过我个人还是建议不要这样做，毕竟万一你又不满意模型效果想重新训练了呢 :)）
 - 请在命令行输入`python3 file.py --help`获得帮助
 
 ## 文档

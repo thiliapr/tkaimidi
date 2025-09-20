@@ -1,38 +1,54 @@
-"这个模块实现了 MidiNet 模型的检查点保存和加载功能，以及模型配置的提取。"
-
 # 本文件是 tkaimidi 的一部分
 # SPDX-FileCopyrightText: 2024-2025 thiliapr <thiliapr@tutanota.com>
 # SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import pathlib
-from typing import Any
-import torch
+from typing import Any, TypedDict
+from collections.abc import Mapping
 import orjson
-from transformers import AutoTokenizer
+import torch
 from utils.model import MidiNetConfig
 
 
-def save_checkpoint(model_state_dict: dict[str, Any], optimizer_state_dict: dict[str, Any], metrics: dict[str, list], path: pathlib.Path):
+class MidiNetInfo(TypedDict):
+    """
+    模型的额外信息，也就是不能从状态字典中推断出来的信息
+
+    Args:
+        pitch_num_heads: 音高特征编码器注意力头的数量
+        num_heads: 编-解码器注意力头的数量
+        completed_epochs: 总共训练了多少个 Epoch
+    """
+    pitch_num_heads: int
+    num_heads: int
+    completed_epochs: int
+
+
+def save_checkpoint(
+    path: pathlib.Path,
+    model_state: Mapping[str, Any],
+    optimizer_state: Mapping[str, Any],
+    ckpt_info: MidiNetInfo
+):
     """
     保存模型的检查点到指定路径，包括模型的权重以及训练的进度信息。
 
     Args:
-        model_state_dict: 要保存的模型的状态字典
-        optimizer_state_dict: 要保存的优化器的状态字典
-        metrics: 指标
         path: 保存检查点的目录路径
+        model_state: 要保存的模型的状态字典
+        optimizer_state: 要保存的优化器的状态字典
+        ckpt_info: 模型额外信息（不能从状态字典推断出的信息）
     """
     path.mkdir(parents=True, exist_ok=True)  # 确保目标目录存在，如果不存在则创建
-    torch.save(model_state_dict, path / "model.pth")  # 保存模型权重
-    torch.save(optimizer_state_dict, path / "optimizer.pth")  # 保存优化器权重
+    torch.save(model_state, path / "model.pth")  # 保存模型权重
+    torch.save(optimizer_state, path / "optimizer.pth")  # 保存优化器权重
 
-    # 保存训练信息
-    with open(path / "metrics.json", "wb") as f:
-        f.write(orjson.dumps(metrics))  # 写入JSON文件
+    # 保存额外信息
+    (path / "info.json").write_bytes(orjson.dumps(ckpt_info))
 
 
-def load_checkpoint(path: pathlib.Path) -> tuple[AutoTokenizer, dict[str, Any]]:
+def load_checkpoint(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNetConfig, MidiNetInfo]:
     """
     从指定路径加载模型的检查点（用于推理）。
 
@@ -40,27 +56,25 @@ def load_checkpoint(path: pathlib.Path) -> tuple[AutoTokenizer, dict[str, Any]]:
         path: 加载检查点的目录路径
 
     Returns:
-        分词器、模型的状态
-    
+        模型的状态、用于创建模型的配置、额外信息
+
     Examples:
-        >>> tokenizer, sd = load_checkpoint(pathlib.Path("ckpt"))
-        >>> config = extract_midi_net_config(sd)
-        >>> model = MidiNet(config, device=torch.device("cuda"))
-        >>> model.load_state_dict(sd)
+        >>> state_dict, model_config, ckpt_info = load_checkpoint(pathlib.Path("ckpt"))
+        >>> model = MidiNet(model_config, device=torch.device("cuda"))
+        >>> model.load_state_dict(state_dict)
     """
-    # 加载分词器
-    tokenizer = AutoTokenizer.from_pretrained(path / "tokenizer")
+    # 加载模型权重
+    model_state = torch.load(path / "model.pth", weights_only=True, map_location=torch.device("cpu"))
 
-    # 检查并加载模型权重
-    model_state = {}
-    if (model_path := path / "model.pth").exists():
-        # 加载模型的状态字典并更新
-        model_state = torch.load(model_path, weights_only=True, map_location=torch.device("cpu"))  # 从检查点加载权重
+    # 加载模型额外
+    ckpt_info = orjson.loads((path / "info.json").read_bytes())
 
-    return tokenizer, model_state
+    # 提取模型配置
+    model_config = extract_config(model_state, ckpt_info["pitch_num_heads"], ckpt_info["num_heads"])
+    return model_state, model_config, ckpt_info
 
 
-def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, dict[str, Any], dict[str, Any], dict[str, Any]]:
+def load_checkpoint_train(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNetConfig, MidiNetInfo, Mapping[str, Any]]:
     """
     从指定路径加载模型的检查点（用于恢复训练状态）。
 
@@ -68,64 +82,49 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[AutoTokenizer, dict[str, 
         path: 加载检查点的目录路径
 
     Returns:
-        分词器、模型和优化器的状态，指标
-    
+        模型的状态、用于创建模型的配置、模型额外信息、优化器的状态
+
     Examples:
-        >>> tokenizer, msd, osd, metrics = load_checkpoint_train(pathlib.Path("ckpt"))
-        >>> config = extract_config(msd)
-        >>> model = MidiNet(config, deivce=torch.device("cuda"))
-        >>> model.load_state_dict(msd)
+        >>> model_state, model_config, ckpt_info, optimizer_state = load_checkpoint_train(pathlib.Path("ckpt"))
+        >>> model = MidiNet(model_config, deivce=torch.device("cuda"))
+        >>> model.load_state_dict(model_state)
         >>> optimizer = optim.AdamW(model.parameters())
-        >>> optimizer.load_state_dict(osd)
-        >>> # 继续训练...
+        >>> optimizer.load_state_dict(optimizer_state)
     """
-    # 加载分词器和模型状态
-    tokenizer, model_state = load_checkpoint(path)
+    # 加载检查点
+    model_state, model_config, ckpt_info = load_checkpoint(path)
 
     # 检查并加载优化器权重
-    optimizer_state = {}
-    if (optimizer_path := path / "optimizer.pth").exists():
-        optimizer_state = torch.load(optimizer_path, weights_only=True, map_location=torch.device("cpu"))  # 从检查点加载权重
+    optimizer_state = torch.load(path / "optimizer.pth", weights_only=True, map_location=torch.device("cpu"))
 
-    # 尝试加载指标文件
-    metrics_path = path / "metrics.json"
-    metrics = {"val_loss": [], "train_loss": []}
-    if metrics_path.exists():
-        with open(metrics_path, "r", encoding="utf-8") as f:
-            metrics |= orjson.loads(f.read())  # 读取指标
-
-    return tokenizer, model_state, optimizer_state, metrics
+    # 返回训练所需信息
+    return model_state, model_config, ckpt_info, optimizer_state
 
 
-def extract_config(state_dict: dict[str, Any]) -> MidiNetConfig:
+def extract_config(model_state: dict[str, Any], pitch_num_heads: int, num_heads: int) -> MidiNetConfig:
     """
-    从 MidiNet 的 state_dict 中提取模型的结构配置信息。
-
-    该函数通过解析模型的权重形状，自动推断出 MidiNet 的配置参数，
-    包括词表大小、注意力头数量、每个头的维度、前馈层维度，以及网络层数。
-
-    工作流程:
-    1. 读取嵌入层的权重形状，确定词表大小和模型总维度 dim_model。
-    2. 读取注意力层中合并的 qkv 权重，计算出 dim_head（每个注意力头的维度）。
-    3. 反推出 num_heads（注意力头数量）。
-    4. 读取前馈网络第一层的输出维度，得到 dim_feedforward。
-    5. 统计 transformer 层（MidiNetLayer）的层数 num_layers。
+    从模型状态字典中提取 MidiNet 模型的配置参数
+    通过分析 state_dict 中各层的维度大小和结构，自动推断出模型的超参数配置
 
     Args:
-        state_dict: 模型的 state_dict。
+        model_state: 保存模型参数的状态字典
+        pitch_num_heads: 音高特征编码器的注意力头数量
+        num_heads: 编-解码器的注意力头数量
 
     Returns:
-        包含 MidiNet 结构参数的 MidiNetConfig 实例。
+        包含所有提取出的配置参数的 MidiNetConfig 对象
 
     Examples:
-        >>> tokenizer, sd = load_checkpoint(pathlib.Path("ckpt"))
-        >>> config = extract_config(sd)
-        >>> model = MidiNet(config, deivce=torch.device("cuda"))
-        >>> model.load_state_dict(sd)
+        >>> state_dict = torch.load("model.pth")
+        >>> config = extract_config(state_dict, 1)  # 假设单头注意力
     """
-    vocab_size, dim_model = state_dict["embedding.weight"].size()
-    dim_feedforward = state_dict["layers.0.feedforward.0.weight"].size(0)
-    dim_head = (state_dict["layers.0.attention.qkv_proj.weight"].size(0) - dim_model) // 2
-    num_heads = dim_model // dim_head
-    num_layers = len(set(key.split(".")[1] for key in state_dict.keys() if key.startswith("layers.")))
-    return MidiNetConfig(vocab_size, num_heads, dim_head, dim_feedforward, num_layers)
+    pitch_dim_head = model_state["note_embedding"].size(0) // pitch_num_heads
+    pitch_dim_feedforward, _, pitch_conv1_kernel = model_state["pitch_feature_encoder.0.conv1.weight"].shape
+    pitch_conv2_kernel = model_state["pitch_feature_encoder.0.conv2.weight"].size(2)
+    dim_head = model_state["pitch_projection.weight"].size(0) // num_heads
+    dim_feedforward = model_state["encoder.0.linear1.weight"].size(0)
+    varaince_bins = model_state["pitch_mean_embedding.weight"].size(0)
+    num_pitch_layers = len({key.split(".")[1] for key in model_state if key.startswith("pitch_feature_encoder.")})
+    num_encoder_layers = len({key.split(".")[1] for key in model_state if key.startswith("encoder.")})
+    num_decoder_layers = len({key.split(".")[1] for key in model_state if key.startswith("decoder.")})
+    return MidiNetConfig(pitch_num_heads, pitch_dim_head, pitch_dim_feedforward, num_heads, dim_head, dim_feedforward, pitch_conv1_kernel, pitch_conv2_kernel, varaince_bins, num_pitch_layers, num_encoder_layers, num_decoder_layers)
