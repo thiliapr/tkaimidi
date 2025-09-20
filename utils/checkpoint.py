@@ -29,6 +29,7 @@ def save_checkpoint(
     path: pathlib.Path,
     model_state: Mapping[str, Any],
     optimizer_state: Mapping[str, Any],
+    scaler_state: Mapping[str, Any],
     ckpt_info: MidiNetInfo
 ):
     """
@@ -38,11 +39,13 @@ def save_checkpoint(
         path: 保存检查点的目录路径
         model_state: 要保存的模型的状态字典
         optimizer_state: 要保存的优化器的状态字典
+        scaler_state: 要保存的梯度缩放器的状态字典
         ckpt_info: 模型额外信息（不能从状态字典推断出的信息）
     """
     path.mkdir(parents=True, exist_ok=True)  # 确保目标目录存在，如果不存在则创建
     torch.save(model_state, path / "model.pth")  # 保存模型权重
     torch.save(optimizer_state, path / "optimizer.pth")  # 保存优化器权重
+    torch.save(scaler_state, path / "scaler.pth")  # 保存缩放器权重
 
     # 保存额外信息
     (path / "info.json").write_bytes(orjson.dumps(ckpt_info))
@@ -74,7 +77,7 @@ def load_checkpoint(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNetConfi
     return model_state, model_config, ckpt_info
 
 
-def load_checkpoint_train(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNetConfig, MidiNetInfo, Mapping[str, Any]]:
+def load_checkpoint_train(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNetConfig, MidiNetInfo, Mapping[str, Any], Mapping[str, Any]]:
     """
     从指定路径加载模型的检查点（用于恢复训练状态）。
 
@@ -82,23 +85,26 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNe
         path: 加载检查点的目录路径
 
     Returns:
-        模型的状态、用于创建模型的配置、模型额外信息、优化器的状态
+        模型的状态、用于创建模型的配置、模型额外信息、优化器的状态、梯度缩放器状态
 
     Examples:
-        >>> model_state, model_config, ckpt_info, optimizer_state = load_checkpoint_train(pathlib.Path("ckpt"))
-        >>> model = MidiNet(model_config, deivce=torch.device("cuda"))
+        >>> model_state, model_config, ckpt_info, optimizer_state, scaler_state = load_checkpoint_train(pathlib.Path("ckpt"))
+        >>> model = MidiNet(model_config, deivce="cuda")
         >>> model.load_state_dict(model_state)
         >>> optimizer = optim.AdamW(model.parameters())
         >>> optimizer.load_state_dict(optimizer_state)
+        >>> scaler = torch.amp.GradScaler("cuda")
+        >>> scaler.load_state_dict(scaler_state)
     """
     # 加载检查点
     model_state, model_config, ckpt_info = load_checkpoint(path)
 
-    # 检查并加载优化器权重
+    # 加载优化器、缩放器权重
     optimizer_state = torch.load(path / "optimizer.pth", weights_only=True, map_location=torch.device("cpu"))
+    scaler_state = torch.load(path / "scaler.pth", weights_only=True, map_location=torch.device("cpu"))
 
     # 返回训练所需信息
-    return model_state, model_config, ckpt_info, optimizer_state
+    return model_state, model_config, ckpt_info, optimizer_state, scaler_state
 
 
 def extract_config(model_state: dict[str, Any], pitch_num_heads: int, num_heads: int) -> MidiNetConfig:

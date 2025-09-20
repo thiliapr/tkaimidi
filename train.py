@@ -440,7 +440,7 @@ def main(args: argparse.Namespace):
 
     # 读取检查点
     print("读取检查点 ...")
-    model_state, model_config, ckpt_info, optimizer_state = load_checkpoint_train(args.ckpt_path)
+    model_state, model_config, ckpt_info, optimizer_state, scaler_state = load_checkpoint_train(args.ckpt_path)
 
     # 创建模型并加载状态
     model = MidiNet(model_config, args.pitch_dropout, args.encoder_dropout, args.decoder_dropout, args.variance_predictor_dropout)
@@ -458,8 +458,9 @@ def main(args: argparse.Namespace):
         group["lr"] = args.learning_rate
         group["weight_decay"] = args.weight_decay
 
-    # 创建混合精度梯度缩放器
+    # 创建混合精度梯度缩放器并加载状态
     scaler = GradScaler(device)
+    scaler.load_state_dict(scaler_state)
 
     # 加载训练数据集
     print("加载训练集 ...")
@@ -531,6 +532,7 @@ def main(args: argparse.Namespace):
         args.ckpt_path,
         model.cpu().state_dict(),
         optimizer.state_dict(),
+        scaler.state_dict(),
         ckpt_info
     )
     print(f"训练完成，模型已保存到 {args.ckpt_path}，训练过程记录保存到 {args.ckpt_path / 'logdir'}，你可以通过 `tensorboard --logdir {args.ckpt_path / 'logdir'}` 查看。")

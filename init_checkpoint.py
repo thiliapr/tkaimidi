@@ -95,14 +95,15 @@ def main(args: argparse.Namespace):
         args.num_decoder_layers,
     ))
 
-    # 初始化优化器
+    # 初始化优化器和梯度缩放器
     optimizer = optim.AdamW(model.parameters())
+    scaler = torch.amp.GradScaler("cpu")
 
     # 删除之前的 SummaryWriter，为以后训练可视化模型初始化状态准备
     shutil.rmtree(args.ckpt_path / "logdir", ignore_errors=True)
 
     # 保存为检查点
-    save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), {
+    save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), scaler.state_dict(), {
         "pitch_num_heads": args.pitch_num_heads,
         "num_heads": args.num_heads,
         "completed_epochs": 0,
