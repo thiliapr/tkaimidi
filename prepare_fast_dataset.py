@@ -57,15 +57,13 @@ def convert(
             # 跳过无法解析的损坏文件
             continue
 
-        # 提取音符序列并过滤音符数量不足的文件
+        # 提取音符序列，并过滤音符数量不足或时间过长的文件
         notes = midi_to_notes(midi_file)
-        if len(notes) < min_notes:
+        if len(notes) < min_notes or sum(zip(*notes)[1]) > max_frames:
             continue
 
         # 转换为钢琴卷帘表示 [时间帧, 128 个音高]
         piano_roll = notes_to_piano_roll(notes)
-        if len(piano_roll) > max_frames:
-            continue
 
         # 计算每个时间帧的音符数量并归一化
         note_counts = (piano_roll.sum(1) / 128).astype(np.float32)
