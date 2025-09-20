@@ -49,7 +49,7 @@ class MidiDataset(Dataset):
 
     def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return (
-            self.data_samples[f"{index}:piano_roll"],
+            np.concatenate([np.zeros([1, 128], dtype=bool), self.data_samples[f"{index}:piano_roll"]], axis=0),  # 添加全零帧作为起始帧
             self.data_samples[f"{index}:note_counts"],
             self.data_samples[f"{index}:pitch_means"],
             self.data_samples[f"{index}:pitch_ranges"]
@@ -302,8 +302,8 @@ def train(
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
-            piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll, note_counts, pitch_means, pitch_ranges, padding_mask)  # 模型前向传播（使用教师强制）
-            all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll, note_counts, pitch_means, pitch_ranges, padding_mask)  # 计算损失
+            piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1])  # 模型前向传播（使用教师强制）
+            all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:])  # 计算损失
             piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() for loss in all_loss)  # 计算整个批次的损失
             value = piano_roll_loss + note_counts_loss + pitch_means_loss + pitch_ranges_loss
 
@@ -385,10 +385,10 @@ def validate(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             # 模型前向传播（不使用教师强制）
-            piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll, padding_mask=padding_mask)
+            piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], padding_mask=padding_mask[:, :-1])
 
             # 计算损失
-            all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll, note_counts, pitch_means, pitch_ranges, padding_mask)
+            all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:])
 
         # 记录当前批次的损失信息
         for batch_idx in range(piano_roll.size(0)):
