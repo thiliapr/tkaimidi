@@ -68,7 +68,7 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
         # 将预测添加到序列中
         prompt = torch.cat([prompt, note_pred], dim=1)
     
-    return prompt[:, 1:], note_count_preds, pitch_mean_preds, pitch_range_preds
+    return F.sigmoid(prompt[:, 1:]), note_count_preds, pitch_mean_preds, pitch_range_preds
 
 
 def plot_piano_roll(piano_roll: np.ndarray, pitch_mean: np.ndarray, pitch_range: np.ndarray, ax: plt.Axes):
@@ -180,7 +180,7 @@ def main(args: argparse.Namespace):
 
     # 删除批次维度并转化为 NumPy 数组
     piano_roll, pitch_means, pitch_ranges = [x.squeeze(0).cpu().numpy() for x in (piano_roll, pitch_means, pitch_ranges)]
-
+    
     # 如果需要，绘制频率图表
     if args.show_piano_roll:
         _, ax = plt.subplots(figsize=(12, 6))

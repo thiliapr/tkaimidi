@@ -342,7 +342,7 @@ def train(
         if step + 1 == num_steps:
             results = [
                 x[0].detach().cpu().numpy()
-                for x in [F.sigmoid(piano_roll_pred), piano_roll, note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
+                for x in [F.sigmoid(piano_roll_pred), piano_roll[:, 1:], note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
             ]
             return results[::2], results[1::2]
 
@@ -398,7 +398,7 @@ def validate(
         if logged_pred is None and (random.random() > 0.5 or batch_idx == len(dataloader) - 1):
             results = [
                 x[0].cpu().numpy()
-                for x in [F.sigmoid(piano_roll_pred), piano_roll, note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
+                for x in [F.sigmoid(piano_roll_pred), piano_roll[:, 1:], note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
             ]
             logged_pred, logged_target = results[::2], results[1::2]
 
