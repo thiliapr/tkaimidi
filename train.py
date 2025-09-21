@@ -304,21 +304,20 @@ def train(
         with autocast(device.type, dtype=torch.float16):
             piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1])  # 模型前向传播（使用教师强制）
             all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:])  # 计算损失
-            piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() for loss in all_loss)  # 计算整个批次的损失
+            piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() / accumulation_steps for loss in all_loss)  # 计算整个批次的损失
             value = piano_roll_loss + note_counts_loss + pitch_means_loss + pitch_ranges_loss
 
         # 梯度缩放与反向传播
         scaler.scale(value).backward()
 
         # 更新累积损失
-        acc_piano_roll_loss += piano_roll_loss.item() / accumulation_steps
-        acc_note_counts_loss += note_counts_loss.item() / accumulation_steps
-        acc_pitch_means_loss += pitch_means_loss.item() / accumulation_steps
-        acc_pitch_ranges_loss += pitch_ranges_loss.item() / accumulation_steps
+        acc_piano_roll_loss += piano_roll_loss.item()
+        acc_note_counts_loss += note_counts_loss.item()
+        acc_pitch_means_loss += pitch_means_loss.item()
+        acc_pitch_ranges_loss += pitch_ranges_loss.item()
 
         # 达到累积步数时更新参数
         if (step + 1) % accumulation_steps == 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # 梯度裁剪
             scaler.step(optimizer)  # 更新模型参数
             scaler.update()  # 调整缩放因子
             optimizer.zero_grad()  # 清空梯度
