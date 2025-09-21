@@ -73,7 +73,7 @@ def convert(
         pitch_ranges = np.empty(len(piano_roll), dtype=np.float32)
 
         # 填充钢琴卷帘矩阵以便处理边界情况
-        padded_roll = np.pad(piano_roll, (((frame_length - 1) // 2, (frame_length - 1) // 2), (0, 0)))
+        padded_roll = np.pad(piano_roll, (((frame_length - 1) // 2, (frame_length - 1) // 2), (0, 0)), "edge")
 
         # 预计算每个时间帧的激活音高索引
         active_pitches = [np.where(padded_roll[time])[0] for time in range(len(padded_roll))]
