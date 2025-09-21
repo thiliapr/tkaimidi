@@ -373,7 +373,7 @@ class MidiNetConfig(NamedTuple):
         dim_feedforward:  编-解码器前馈网络的隐藏层维度
         pitch_conv1_kernel: 音高特征编码器中第一个卷积层的卷积核大小
         pitch_conv2_kernel: 音高特征编码器中第二个卷积层的卷积核大小
-        variance_bins: 音高均值离散化的精细度
+        variance_bins: 音符特征离散化的精细度
         num_pitch_layers: 音高特征编码器层的数量
         num_encoder_layers: 编码器层的数量
         num_decoder_layers: 解码器层的数量
@@ -444,11 +444,11 @@ class MidiNet(nn.Module):
         # 音符数量、音高平均值、音高范围预测器和嵌入
         self.variance_bins = config.variance_bins
         self.note_count_predictor = VariancePredictor(dim_model, variance_predictor_dropout, device=device)
-        self.note_count_embedding = nn.Embedding(129, dim_model, device=device)  # 静音至 128 个激活音符，一共 129 种状态
+        self.note_count_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
         self.pitch_mean_predictor = VariancePredictor(dim_model, variance_predictor_dropout, device=device)
         self.pitch_mean_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
         self.pitch_range_predictor = VariancePredictor(dim_model, variance_predictor_dropout, device=device)
-        self.pitch_range_embedding = nn.Embedding(128, dim_model, device=device)
+        self.pitch_range_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
 
         # 音符预测器
         self.note_predictor = nn.Linear(dim_model, 128, device=device)
@@ -504,11 +504,9 @@ class MidiNet(nn.Module):
         pitch_range = pitch_range_prediction if pitch_range_target is None else pitch_range_target
 
         # 限制范围并离散化
-        note_count = (note_count.clamp(min=0, max=1) * 128).round().to(dtype=int)
-
-        # 将静音（预测值小于阈值）置为 0
+        note_count = (note_count.clamp(min=0, max=1) * (self.variance_bins - 1)).round().to(dtype=int)
         pitch_mean = (pitch_mean.clamp(min=0, max=1) * (self.variance_bins - 1)).round().to(dtype=int)
-        pitch_range = (pitch_range.clamp(min=0, max=1) * 127).round().to(dtype=int)
+        pitch_range = (pitch_range.clamp(min=0, max=1) * (self.variance_bins - 1)).round().to(dtype=int)
 
         # 将音高和能量作为附加特征添加到解码器输入中
         x = x + self.note_count_embedding(note_count) + self.pitch_mean_embedding(pitch_mean) + self.pitch_range_embedding(pitch_range)

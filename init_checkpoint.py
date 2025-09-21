@@ -63,7 +63,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-df", "--dim-feedforward", type=int, default=DEFAULT_DIM_FEEDFORWARD, help="编-解码器前馈网络的隐藏层维度，默认为 %(default)s")
     parser.add_argument("-pk1", "--pitch-kernel-size-1", type=int, default=DEFAULT_PITCH_CONV1_KERNEL, help="音高特征编码器前馈层第一个卷积核大小，默认为 %(default)s")
     parser.add_argument("-pk2", "--pitch-kernel-size-2", type=int, default=DEFAULT_PITCH_CONV2_KERNEL, help="音高特征编码器前馈层第二个卷积核大小，默认为 %(default)s")
-    parser.add_argument("-vb", "--variance-bins", type=int, default=DEFAULT_VARIANCE_BINS, help="音高均值离散化的精细度，默认为 %(default)s")
+    parser.add_argument("-vb", "--variance-bins", type=int, default=DEFAULT_VARIANCE_BINS, help="音符特征离散化的精细度，默认为 %(default)s")
     parser.add_argument("-pl", "--num-pitch-layers", type=int, default=DEFAULT_NUM_PITCH_LAYERS, help="音高特征编码器层数，默认为 %(default)s")
     parser.add_argument("-el", "--num-encoder-layers", type=int, default=DEFAULT_NUM_ENCODER_LAYERS, help="编码器层数，默认为 %(default)s")
     parser.add_argument("-dl", "--num-decoder-layers", type=int, default=DEFAULT_NUM_DECODER_LAYERS, help="解码器层数，默认为 %(default)s")

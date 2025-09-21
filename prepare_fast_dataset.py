@@ -18,31 +18,33 @@ from utils.midi import midi_to_notes, notes_to_piano_roll
 def convert(
     midi_files: list[pathlib.Path],
     max_frames: int,
-    min_notes: int
+    min_notes: int,
+    frame_length: int
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
     """
-    将 MIDI 文件集合转换为机器学习可用的数据集格式
-    处理流程包括：读取 MIDI 文件、过滤无效文件、转换为钢琴卷帘表示、提取音符统计特征，并最终打包为包含多种特征的数据集
-    
-    处理流程：
-    1. 遍历所有 MIDI 文件路径
-    2. 使用 mido 库读取并解析每个 MIDI 文件，跳过损坏文件
-    3. 提取音符序列并过滤音符数量不足的文件
+    将MIDI文件集合转换为机器学习可用的数据集格式
+    处理流程包括读取MIDI文件、过滤无效文件、转换为钢琴卷帘表示、提取音符统计特征，并最终打包为包含多种特征的数据集
+
+    具体工作流程：
+    1. 遍历所有MIDI文件路径，使用进度条显示处理进度
+    2. 使用mido库读取并解析每个MIDI文件，自动跳过损坏或无法解析的文件
+    3. 提取音符序列并过滤音符数量不足或时间过长的文件
     4. 将音符序列转换为钢琴卷帘矩阵表示
-    5. 过滤超过最大帧数限制的序列
-    6. 计算每个时间帧的音符数量、平均音高和音高范围
-    7. 将所有特征打包并添加到数据集中
+    5. 预分配数组存储音符统计特征
+    6. 使用滑动窗口计算每个时间帧的音符数量、平均音高和音高范围
+    7. 将所有特征打包并添加到最终数据集中
 
     Args:
         midi_files: MIDI文件路径列表
-        max_frames: 允许的最大时间帧数，超过此长度的序列将被过滤
-        min_notes: 要求的最小音符数量，少于此刻数的文件将被跳过
+        max_frames: 允许的最大时间帧数
+        min_notes: 要求的最小音符数量
+        frame_length: 滑动窗口的帧长度
 
     Returns:
-        包含四个 NumPy 数组的元组列表：(钢琴卷帘矩阵, 音符数量数组, 平均音高数组, 音高范围数组)
+        包含四个NumPy数组的元组列表，分别表示钢琴卷帘矩阵、音符数量数组、平均音高数组和音高范围数组
 
     Examples:
-        >>> dataset = convert(midi_files, 1989, 64)
+        >>> dataset = convert(midi_files, 1989, 64, 16)
         >>> len(dataset)
         8964
     """
@@ -57,36 +59,44 @@ def convert(
             # 跳过无法解析的损坏文件
             continue
 
-        # 提取音符序列，并过滤音符数量不足或时间过长的文件
+        # 提取音符序列并过滤不符合要求的文件
         notes = midi_to_notes(midi_file)
-        if len(notes) < min_notes or sum(tuple(zip(*notes))[1]) > max_frames:
+        if len(notes) < min_notes or sum(interval for _, interval in notes) > max_frames:
             continue
 
         # 转换为钢琴卷帘表示 [时间帧, 128 个音高]
         piano_roll = notes_to_piano_roll(notes)
 
-        # 计算每个时间帧的音符数量并归一化
-        note_counts = (piano_roll.sum(1) / 128).astype(np.float32)
-
-        # 预分配数组存储音高统计特征
-        pitch_means = np.full(len(piano_roll), -1, dtype=np.float32)
+        # 预分配特征数组
+        note_counts = np.empty(len(piano_roll), dtype=np.float32)
+        pitch_means = np.empty(len(piano_roll), dtype=np.float32)
         pitch_ranges = np.empty(len(piano_roll), dtype=np.float32)
 
-        # 遍历每个时间帧计算音高特征
-        last_pitch_mean = 0
-        last_pitch_range = 0
-        for time, pitch_row in enumerate(piano_roll):
-            # 获取当前时间帧被触发的音高值
-            active_pitches = np.where(pitch_row)[0]
+        # 填充钢琴卷帘矩阵以便处理边界情况
+        padded_roll = np.pad(piano_roll, ((frame_length - 1, 0), (0, 0)))
 
-            # 计算平均音高和音高范围并归一化
-            if len(active_pitches) > 0:
-                pitch_means[time] = last_pitch_mean = active_pitches.mean() / 127
-                pitch_ranges[time] = last_pitch_range = (active_pitches.max() - active_pitches.min()) / 127
+        # 预计算每个时间帧的激活音高索引
+        active_pitches = [np.where(padded_roll[time])[0] for time in range(len(padded_roll))]
+
+        # 初始化上一次的有效值（用于处理空帧情况）
+        last_mean = last_range = 0
+
+        # 遍历每个时间帧计算音高特征
+        for time in range(len(padded_roll) - frame_length + 1):
+            # 合并窗口内的所有音高
+            window_pitches = np.concatenate(active_pitches[time:time + frame_length])
+
+            # 计算归一化的音符数量（除以最大可能值128）
+            note_counts[time] = len(window_pitches) / 128
+
+            # 计算归一化的平均音高和音高范围
+            if len(window_pitches):
+                pitch_means[time] = last_mean = window_pitches.mean() / 127
+                pitch_ranges[time] = last_range = (window_pitches.max() - window_pitches.min()) / 127
             else:
-                # 无音符时插值处理
-                pitch_means[time] = last_pitch_mean
-                pitch_ranges[time] = last_pitch_range
+                # 如果没有激活音高，使用上一次的有效值
+                pitch_means[time] = last_mean
+                pitch_ranges[time] = last_range
 
         # 将特征元组添加到数据集
         dataset.append((piano_roll, note_counts, pitch_means, pitch_ranges))
@@ -110,6 +120,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("splits", type=str, nargs="+", help="输出文件名和拆分比例，格式为`filename:proportion`，如`train:9`和`val:1`")
     parser.add_argument("--min-notes", type=int, default=64, help="MIDI 文件中至少包含的音符数量，默认值为 %(default)s")
     parser.add_argument("--max-frames", type=int, default=8964, help="钢琴卷帘表示中允许的最大时间帧数，默认值为 %(default)s")
+    parser.add_argument("--frame-length", type=int, default=15, help="用于计算音符统计特征的滑动窗口帧长度，默认值为 %(default)s")
     return parser.parse_args(args)
 
 
@@ -134,7 +145,7 @@ def main(args: argparse.Namespace):
     print(f"正在转换 {len(midi_files)} 个 MIDI 文件 ...")
 
     # 预处理数据
-    dataset = convert(midi_files, args.max_frames, args.min_notes)
+    dataset = convert(midi_files, args.max_frames, args.min_notes, args.frame_length)
 
     # 验证数据集大小是否满足拆分需求
     # 这里再次验证是因为之前预处理可能过滤了一部分无效数据，导致总数据量减少
