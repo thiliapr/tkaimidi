@@ -341,7 +341,7 @@ def train(
         # 最后一步时，记录训练集上预测和目标值
         if step + 1 == num_steps:
             results = [
-                x[0].detach().cpu().numpy()
+                x[0, :(~padding_mask).sum(dim=1)[0]].detach().cpu().numpy()
                 for x in [F.sigmoid(piano_roll_pred), piano_roll[:, 1:], note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
             ]
             return results[::2], results[1::2]
@@ -397,7 +397,7 @@ def validate(
         # 如果没有记录任何预测，并且随机数大于 0.5 或者已经是最后一个批次，则记录目标和损失
         if logged_pred is None and (random.random() > 0.5 or batch_idx == len(dataloader) - 1):
             results = [
-                x[0].cpu().numpy()
+                x[0, :(~padding_mask).sum(dim=1)[0]].cpu().numpy()
                 for x in [F.sigmoid(piano_roll_pred), piano_roll[:, 1:], note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
             ]
             logged_pred, logged_target = results[::2], results[1::2]
@@ -489,29 +489,43 @@ def main(args: argparse.Namespace):
         val_sampler.set_epoch(current_epoch)
         (val_pred, val_target), val_loss = validate(model, val_loader, device)
 
+        # 随机选取长度截断钢琴卷帘
+        if len(train_pred[0]) > args.piano_roll_length:
+            start_pos = random.randint(0, len(train_pred[0]) - args.piano_roll_length)
+            train_pred, train_target, val_pred, val_target = [
+                [x[start_pos:start_pos + args.piano_roll_length] for x in items]
+                for items in [train_pred, train_target, val_pred, val_target]
+            ]
+
         # 选择训练集最后一步预测，和验证集随机选择结果，绘制预测钢琴卷帘图和其目标钢琴卷帘图
         for title, pred, target in [
             ("Train Sample", train_pred, train_target),
             ("Validate Sample", val_pred, val_target),
         ]:
             # 创建图像和坐标轴
-            figure, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
+            figure, (pred_piano_roll_ax, target_piano_roll_ax, note_count_ax, pitch_mean_ax, pitch_range_ax) = plt.subplots(5, 1, figsize=(12, 30))
 
-            # 绘制对比图
+            # 绘制钢琴卷帘对比图
             for ax, figure_title, piano_roll, _, pitch_mean, pitch_range in [
-                (ax1, "Predicted Piano Roll", *pred),
-                (ax2, "True Piano Roll", *target)
+                (pred_piano_roll_ax, "Predicted Piano Roll", *pred),
+                (target_piano_roll_ax, "True Piano Roll", *target)
             ]:
                 # 设置标题
                 ax.set_title(figure_title)
 
-                # 随机选取长度截断钢琴卷帘
-                if len(piano_roll) > args.piano_roll_length:
-                    start_pos = random.randint(0, len(piano_roll) - args.piano_roll_length)
-                    piano_roll, pitch_mean, pitch_range = [x[start_pos:start_pos + args.piano_roll_length] for x in [piano_roll, pitch_mean, pitch_range]]
-
                 # 绘制钢琴卷帘
                 plot_piano_roll(piano_roll, pitch_mean, pitch_range, ax)
+
+            # 绘制方差预测-目标对比图
+            for ax, label, pred_data, target_data in [
+                (note_count_ax, "Note Count", pred[1], target[1]),
+                (pitch_mean_ax, "Pitch Mean", pred[2], target[2]),
+                (pitch_range_ax, "Pitch Range", pred[3], target[3]),
+            ]:
+                ax.set_title(f"{label} - Predicted vs True")
+                ax.plot(pred_data, color="blue", label=f"Predicted")
+                ax.plot(target_data, color="green", label=f"True")
+                ax.legend(loc="upper right")
 
             # 添加图像到 writer
             writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
