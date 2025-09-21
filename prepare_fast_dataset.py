@@ -102,9 +102,9 @@ def convert(
         dataset.append([piano_roll, note_counts, pitch_means, pitch_ranges])
 
     # 计算音符数量、平均音高、音高范围的百分位数
-    note_count_min, note_count_max = np.percentile(np.concatenate([data[1] for data in dataset]), [1, 99])
-    pitch_mean_min, pitch_mean_max = np.percentile(np.concatenate([data[2] for data in dataset]), [1, 99])
-    pitch_range_min, pitch_range_max = np.percentile(np.concatenate([data[3] for data in dataset]), [1, 99])
+    note_count_min, note_count_max = np.percentile(np.concatenate([data[1] for data in dataset]), [0, 100])
+    pitch_mean_min, pitch_mean_max = np.percentile(np.concatenate([data[2] for data in dataset]), [0, 100])
+    pitch_range_min, pitch_range_max = np.percentile(np.concatenate([data[3] for data in dataset]), [0, 100])
 
     # 归一化音符数量、平均音高、音高范围
     for idx, (_, note_counts, pitch_means, pitch_ranges) in enumerate(dataset):
