@@ -86,8 +86,8 @@ def convert(
             # 合并窗口内的所有音高
             window_pitches = np.concatenate(active_pitches[time:time + frame_length])
 
-            # 计算归一化的音符数量（除以最大可能值 128）
-            note_counts[time] = len(window_pitches) / 128
+            # 计算归一化的音符数量
+            note_counts[time] = len(window_pitches) / frame_length / 128
 
             # 计算归一化的平均音高和音高范围
             if len(window_pitches):
