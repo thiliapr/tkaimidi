@@ -120,7 +120,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("splits", type=str, nargs="+", help="输出文件名和拆分比例，格式为`filename:proportion`，如`train:9`和`val:1`")
     parser.add_argument("--min-notes", type=int, default=64, help="MIDI 文件中至少包含的音符数量，默认值为 %(default)s")
     parser.add_argument("--max-frames", type=int, default=8964, help="钢琴卷帘表示中允许的最大时间帧数，默认值为 %(default)s")
-    parser.add_argument("--frame-length", type=int, default=15, help="用于计算音符统计特征的滑动窗口帧长度，默认值为 %(default)s")
+    parser.add_argument("--frame-length", type=int, default=23, help="用于计算音符统计特征的滑动窗口帧长度，默认值为 %(default)s")
     return parser.parse_args(args)
 
 
