@@ -69,22 +69,24 @@ def convert(
         note_counts = (piano_roll.sum(1) / 128).astype(np.float32)
 
         # 预分配数组存储音高统计特征
-        pitch_means = np.empty(len(piano_roll), dtype=np.float32)
+        pitch_means = np.full(len(piano_roll), -1, dtype=np.float32)
         pitch_ranges = np.empty(len(piano_roll), dtype=np.float32)
 
         # 遍历每个时间帧计算音高特征
+        last_pitch_mean = 0
+        last_pitch_range = 0
         for time, pitch_row in enumerate(piano_roll):
             # 获取当前时间帧被触发的音高值
             active_pitches = np.where(pitch_row)[0]
 
             # 计算平均音高和音高范围并归一化
             if len(active_pitches) > 0:
-                pitch_means[time] = active_pitches.mean() / 127
-                pitch_ranges[time] = (active_pitches.max() - active_pitches.min()) / 127
+                pitch_means[time] = last_pitch_mean = active_pitches.mean() / 127
+                pitch_ranges[time] = last_pitch_range = (active_pitches.max() - active_pitches.min()) / 127
             else:
-                # 无音符时设置为特殊值 -1
-                pitch_means[time] = -1
-                pitch_ranges[time] = -1
+                # 无音符时插值处理
+                pitch_means[time] = last_pitch_mean
+                pitch_ranges[time] = last_pitch_range
 
         # 将特征元组添加到数据集
         dataset.append((piano_roll, note_counts, pitch_means, pitch_ranges))

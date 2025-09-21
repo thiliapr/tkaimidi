@@ -5,7 +5,6 @@
 
 # 基本常识
 TIME_PRECISION = 120  # 时间精度
-VOICED_THRESHOLD = -0.1  # 静音阈值
 
 # 模型参数
 DEFAULT_PITCH_DIM_HEAD = 32

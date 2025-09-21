@@ -7,7 +7,6 @@ from typing import NamedTuple, Optional
 import torch
 from torch import nn
 from torch.nn import functional as F
-from utils.constants import VOICED_THRESHOLD
 
 AttentionKVCache = tuple[torch.Tensor, torch.Tensor]
 NetKVCache = tuple[list[AttentionKVCache], list[AttentionKVCache]]
@@ -449,7 +448,7 @@ class MidiNet(nn.Module):
         self.pitch_mean_predictor = VariancePredictor(dim_model, variance_predictor_dropout, device=device)
         self.pitch_mean_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
         self.pitch_range_predictor = VariancePredictor(dim_model, variance_predictor_dropout, device=device)
-        self.pitch_range_embedding = nn.Embedding(129, dim_model, device=device)  # 第 129 个嵌入代表静音（没有音符）
+        self.pitch_range_embedding = nn.Embedding(128, dim_model, device=device)
 
         # 音符预测器
         self.note_predictor = nn.Linear(dim_model, 128, device=device)
@@ -508,8 +507,8 @@ class MidiNet(nn.Module):
         note_count = (note_count.clamp(min=0, max=1) * 128).round().to(dtype=int)
 
         # 将静音（预测值小于阈值）置为 0
-        pitch_mean = (1 + pitch_mean.clamp(min=0, max=1) * (self.variance_bins - 2)).masked_fill(pitch_mean < VOICED_THRESHOLD, 0).round().to(dtype=int)
-        pitch_range = (1 + pitch_range.clamp(min=0, max=1) * 127).masked_fill(pitch_range < VOICED_THRESHOLD, 0).round().to(dtype=int)
+        pitch_mean = (pitch_mean.clamp(min=0, max=1) * (self.variance_bins - 1)).round().to(dtype=int)
+        pitch_range = (pitch_range.clamp(min=0, max=1) * 127).round().to(dtype=int)
 
         # 将音高和能量作为附加特征添加到解码器输入中
         x = x + self.note_count_embedding(note_count) + self.pitch_mean_embedding(pitch_mean) + self.pitch_range_embedding(pitch_range)
