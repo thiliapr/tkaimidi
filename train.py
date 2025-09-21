@@ -522,6 +522,7 @@ def main(args: argparse.Namespace):
                 (pitch_mean_ax, "Pitch Mean", pred[2], target[2]),
                 (pitch_range_ax, "Pitch Range", pred[3], target[3]),
             ]:
+                ax.set_xlim(0, len(pred_data))
                 ax.set_title(f"{label} - Predicted vs True")
                 ax.plot(pred_data, color="blue", label=f"Predicted")
                 ax.plot(target_data, color="green", label=f"True")
