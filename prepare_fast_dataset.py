@@ -87,19 +87,30 @@ def convert(
             window_pitches = np.concatenate(active_pitches[time:time + frame_length])
 
             # 计算归一化的音符数量
-            note_counts[time] = len(window_pitches) / frame_length / 128
+            note_counts[time] = len(window_pitches)
 
             # 计算归一化的平均音高和音高范围
             if len(window_pitches):
-                pitch_means[time] = last_mean = window_pitches.mean() / 127
-                pitch_ranges[time] = last_range = (window_pitches.max() - window_pitches.min()) / 127
+                pitch_means[time] = last_mean = window_pitches.mean()
+                pitch_ranges[time] = last_range = (window_pitches.max() - window_pitches.min())
             else:
                 # 如果没有激活音高，使用上一次的有效值
                 pitch_means[time] = last_mean
                 pitch_ranges[time] = last_range
 
         # 将特征元组添加到数据集
-        dataset.append((piano_roll, note_counts, pitch_means, pitch_ranges))
+        dataset.append([piano_roll, note_counts, pitch_means, pitch_ranges])
+
+    # 计算音符数量、平均音高、音高范围的百分位数
+    note_count_min, note_count_max = np.percentile(np.concatenate([data[1] for data in dataset]), [1, 99])
+    pitch_mean_min, pitch_mean_max = np.percentile(np.concatenate([data[2] for data in dataset]), [1, 99])
+    pitch_range_min, pitch_range_max = np.percentile(np.concatenate([data[3] for data in dataset]), [1, 99])
+
+    # 归一化音符数量、平均音高、音高范围
+    for idx, (_, note_counts, pitch_means, pitch_ranges) in enumerate(dataset):
+        dataset[idx][1] = np.clip(((note_counts - note_count_min) / (note_count_max - note_count_min)), 0, 1).astype(np.float32)
+        dataset[idx][2] = np.clip(((pitch_means - pitch_mean_min) / (pitch_mean_max - pitch_mean_min)), 0, 1).astype(np.float32)
+        dataset[idx][3] = np.clip(((pitch_ranges - pitch_range_min) / (pitch_range_max - pitch_range_min)), 0, 1).astype(np.float32)
 
     return dataset
 
