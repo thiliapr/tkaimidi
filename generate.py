@@ -112,20 +112,28 @@ def plot_piano_roll(piano_roll: np.ndarray, pitch_mean: np.ndarray, pitch_range:
     ax.set_xlim(0, len(piano_roll))
     ax.set_ylim(min_pitch - 0.5, max_pitch + 0.5)
 
-    # 绘制平均音高曲线（将归一化值转换回原始音高范围）
+    # 创建共享 x 轴的第二个 y 轴
+    varaince_ax = ax.twinx()
+
+    # 绘制平均音高曲线
     pitch_x = np.arange(len(piano_roll)) + 0.5  # 使音高均值对齐音符
-    ax.plot(pitch_x, pitch_mean * 127, label="Pitch Mean", color="blue", alpha=0.5)
+    varaince_ax.plot(pitch_x, pitch_mean, label="Pitch Mean", color="blue", alpha=0.5)
 
     # 绘制音高范围填充区域
-    ax.fill_between(
+    varaince_ax.fill_between(
         pitch_x,
-        (pitch_mean - pitch_range / 2) * 127,
-        (pitch_mean + pitch_range / 2) * 127,
+        pitch_mean - pitch_range / 2,
+        pitch_mean + pitch_range / 2,
         alpha=0.2
     )
 
     # 创造图例
-    ax.legend(loc="upper right")
+    varaince_ax.legend(loc="upper right")
+
+    # 设置标签
+    ax.set_xlabel("Time Step")
+    ax.set_ylabel("MIDI Note Number")
+    varaince_ax.set_ylabel("Pitch Statistics")
 
 
 def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
