@@ -73,7 +73,7 @@ def convert(
         pitch_ranges = np.empty(len(piano_roll), dtype=np.float32)
 
         # 填充钢琴卷帘矩阵以便处理边界情况
-        padded_roll = np.pad(piano_roll, (((frame_length - 1) // 2, (frame_length - 1) // 2), (0, 0)), "edge")
+        padded_roll = np.pad(piano_roll, (((frame_length - 1) // 2, (frame_length - 1) // 2), (0, 0)), "median")
 
         # 预计算每个时间帧的激活音高索引
         active_pitches = [np.where(padded_roll[time])[0] for time in range(len(padded_roll))]
@@ -97,6 +97,11 @@ def convert(
                 # 如果没有激活音高，使用上一次的有效值
                 pitch_means[time] = last_mean
                 pitch_ranges[time] = last_range
+
+        # 使用卷积平滑特征曲线，方便神经网络训练
+        note_counts = np.convolve(np.pad(note_counts, (1, 1), "edge"), [0.2, 0.6, 0.2], "valid")
+        pitch_means = np.convolve(np.pad(pitch_means, (1, 1), "edge"), [0.2, 0.6, 0.2], "valid")
+        pitch_ranges = np.convolve(np.pad(pitch_ranges, (1, 1), "edge"), [0.2, 0.6, 0.2], "valid")
 
         # 将特征元组添加到数据集
         dataset.append([piano_roll, note_counts, pitch_means, pitch_ranges])
