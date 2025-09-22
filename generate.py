@@ -70,21 +70,22 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
     return F.sigmoid(prompt[:, 1:]), note_count_preds, pitch_mean_preds, pitch_range_preds
 
 
-def plot_piano_roll(piano_roll: np.ndarray, pitch_mean: np.ndarray, pitch_range: np.ndarray, ax: plt.Axes):
+def plot_piano_roll(piano_roll: np.ndarray, note_count: np.ndarray, pitch_mean: np.ndarray, pitch_range: np.ndarray, ax: plt.Axes):
     """
     绘制钢琴卷帘可视化图表，展示音符分布和音高趋势
 
     该函数创建一个综合可视化界面，包含两个主要部分：
     1. 钢琴卷帘网格：用矩形块表示每个时间点上激活的音符
-    2. 音高统计曲线：显示平均音高和音高范围的变化趋势
+    2. 音符统计特征曲线：显示音符密度、平均音高和音高范围的变化趋势
 
     工作流程：
     - 设置坐标轴范围和基本参数
     - 遍历钢琴卷帘矩阵，为每个激活的音符绘制矩形块
-    - 绘制平均音高曲线和音高范围填充区域
+    - 绘制音符密度、平均音高曲线和音高范围填充区域
 
     Args:
         piano_roll: 钢琴卷帘数据，形状为 [时间步数, 128]
+        note_count: 每个时间步的平均密度
         pitch_mean: 每个时间步的平均音高
         pitch_range: 每个时间步的音高范围
         ax: Matplotlib 坐标轴对象，用于绘制图形
@@ -94,7 +95,7 @@ def plot_piano_roll(piano_roll: np.ndarray, pitch_mean: np.ndarray, pitch_range:
 
     Examples:
         >>> fig, ax = plt.subplots(figsize=(12, 6))
-        >>> plot_piano_roll(piano_roll_data, pitch_mean, pitch_range, ax)
+        >>> plot_piano_roll(piano_roll_data, note_count, pitch_mean, pitch_range, ax)
         >>> plt.show()
     """
     # 统计最大、最小音高，并绘制钢琴卷帘音符
@@ -118,6 +119,7 @@ def plot_piano_roll(piano_roll: np.ndarray, pitch_mean: np.ndarray, pitch_range:
     # 绘制平均音高曲线
     pitch_x = np.arange(len(piano_roll)) + 0.5  # 使音高均值对齐音符
     varaince_ax.plot(pitch_x, pitch_mean, label="Pitch Mean", color="blue", alpha=0.5)
+    varaince_ax.plot(pitch_x, note_count, label="Note Count", color="red", alpha=0.5)
 
     # 绘制音高范围填充区域
     varaince_ax.fill_between(
@@ -178,19 +180,19 @@ def main(args: argparse.Namespace):
             print(f"加载指定的 MIDI 文件时出错: {e}\n将使用空提示音符生成")
 
     # 转换为钢琴卷轴、添加批次维度并开始生成
-    piano_roll, _, pitch_means, pitch_ranges = generate(
+    piano_roll, note_count, pitch_mean, pitch_range = generate(
         model,
         torch.tensor(notes_to_piano_roll(prompt_notes), device=device).unsqueeze(0),
         args.num_frames
     )
 
     # 删除批次维度并转化为 NumPy 数组
-    piano_roll, pitch_means, pitch_ranges = [x.squeeze(0).cpu().numpy() for x in (piano_roll, pitch_means, pitch_ranges)]
+    piano_roll, note_count, pitch_mean, pitch_range = [x.squeeze(0).cpu().numpy() for x in (piano_roll, note_count, pitch_mean, pitch_range)]
     
     # 如果需要，绘制频率图表
     if args.show_piano_roll:
         _, ax = plt.subplots(figsize=(12, 6))
-        plot_piano_roll(piano_roll, pitch_means, pitch_ranges, ax)
+        plot_piano_roll(piano_roll, note_count, pitch_mean, pitch_range, ax)
         plt.show()
 
     # 转换为 MIDI 轨道并保存为文件

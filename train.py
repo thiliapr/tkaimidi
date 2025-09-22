@@ -506,7 +506,7 @@ def main(args: argparse.Namespace):
             figure, (pred_piano_roll_ax, target_piano_roll_ax, note_count_ax, pitch_mean_ax, pitch_range_ax) = plt.subplots(5, 1, figsize=(12, 30))
 
             # 绘制钢琴卷帘对比图
-            for ax, figure_title, piano_roll, _, pitch_mean, pitch_range in [
+            for ax, figure_title, piano_roll, note_count, pitch_mean, pitch_range in [
                 (pred_piano_roll_ax, "Predicted Piano Roll", *pred),
                 (target_piano_roll_ax, "True Piano Roll", *target)
             ]:
@@ -514,7 +514,7 @@ def main(args: argparse.Namespace):
                 ax.set_title(figure_title)
 
                 # 绘制钢琴卷帘
-                plot_piano_roll(piano_roll, pitch_mean, pitch_range, ax)
+                plot_piano_roll(piano_roll, note_count, pitch_mean, pitch_range, ax)
 
             # 绘制方差预测-目标对比图
             for ax, label, pred_data, target_data in [
