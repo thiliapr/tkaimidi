@@ -24,7 +24,7 @@ def convert(
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
     """
     将 MIDI 文件集合转换为机器学习可用的数据集格式
-    
+
     处理流程包括读取 MIDI 文件、过滤无效文件、转换为钢琴卷帘表示、提取音符统计特征，
     并最终打包为包含多种特征的数据集。具体工作流程包括：
     1. 遍历所有 MIDI 文件路径，使用进度条显示处理进度
