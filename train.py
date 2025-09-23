@@ -40,7 +40,7 @@ class MidiDataset(Dataset):
         - 钢琴卷帘
         - 音符数量（密度）
         - 平均音高
-        - 音高范围（极差）
+        - 音高范围（标准差）
     """
 
     def __init__(self, dataset_file: os.PathLike):

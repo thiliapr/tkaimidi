@@ -19,32 +19,35 @@ def convert(
     midi_files: list[pathlib.Path],
     max_frames: int,
     min_notes: int,
-    frame_length: int
+    frame_length: int,
+    smoothing_iterations: int
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
     """
-    将MIDI文件集合转换为机器学习可用的数据集格式
-    处理流程包括读取MIDI文件、过滤无效文件、转换为钢琴卷帘表示、提取音符统计特征，并最终打包为包含多种特征的数据集
-
-    具体工作流程：
-    1. 遍历所有MIDI文件路径，使用进度条显示处理进度
-    2. 使用mido库读取并解析每个MIDI文件，自动跳过损坏或无法解析的文件
+    将 MIDI 文件集合转换为机器学习可用的数据集格式
+    
+    处理流程包括读取 MIDI 文件、过滤无效文件、转换为钢琴卷帘表示、提取音符统计特征，
+    并最终打包为包含多种特征的数据集。具体工作流程包括：
+    1. 遍历所有 MIDI 文件路径，使用进度条显示处理进度
+    2. 使用 mido 库读取并解析每个 MIDI 文件，自动跳过损坏或无法解析的文件
     3. 提取音符序列并过滤音符数量不足或时间过长的文件
     4. 将音符序列转换为钢琴卷帘矩阵表示
     5. 预分配数组存储音符统计特征
     6. 使用滑动窗口计算每个时间帧的音符数量、平均音高和音高范围
-    7. 将所有特征打包并添加到最终数据集中
+    7. 使用卷积核对特征进行平滑处理
+    8. 基于整个数据集的统计信息对特征进行归一化处理
 
     Args:
         midi_files: MIDI文件路径列表
-        max_frames: 允许的最大时间帧数
-        min_notes: 要求的最小音符数量
-        frame_length: 滑动窗口的帧长度
+        max_frames: 允许的最大时间帧数，用于过滤过长的 MIDI 文件
+        min_notes: 要求的最小音符数量，用于过滤音符过少的 MIDI 文件
+        frame_length: 滑动窗口的帧长度，用于计算局部特征
+        smoothing_iterations: 特征平滑的迭代次数
 
     Returns:
-        包含四个NumPy数组的元组列表，分别表示钢琴卷帘矩阵、音符数量数组、平均音高数组和音高范围数组
+        包含四个 NumPy 数组的元组列表，分别表示钢琴卷帘矩阵、音符数量数组、平均音高数组和音高范围数组
 
     Examples:
-        >>> dataset = convert(midi_files, 1989, 64, 16)
+        >>> dataset = convert(midi_files, 1989, 64, 16, 2)
         >>> len(dataset)
         8964
     """
@@ -72,10 +75,10 @@ def convert(
         pitch_means = np.empty(len(piano_roll), dtype=np.float32)
         pitch_ranges = np.empty(len(piano_roll), dtype=np.float32)
 
-        # 填充钢琴卷帘矩阵以便处理边界情况
+        # 填充钢琴卷帘矩阵以便处理边界情况，使用中值填充减少异常值影响
         padded_roll = np.pad(piano_roll, (((frame_length - 1) // 2, (frame_length - 1) // 2), (0, 0)), "median")
 
-        # 预计算每个时间帧的激活音高索引
+        # 预计算每个时间帧的激活音高索引，提高后续处理效率
         active_pitches = [np.where(padded_roll[time])[0] for time in range(len(padded_roll))]
 
         # 初始化上一次的有效值（用于处理空帧情况）
@@ -86,36 +89,39 @@ def convert(
             # 合并窗口内的所有音高
             window_pitches = np.concatenate(active_pitches[time:time + frame_length])
 
-            # 计算归一化的音符数量
+            # 计算音符数量（未归一化）
             note_counts[time] = len(window_pitches)
 
-            # 计算归一化的平均音高和音高范围
+            # 计算平均音高和音高范围（使用标准差作为范围度量）
             if len(window_pitches):
                 pitch_means[time] = last_mean = window_pitches.mean()
-                pitch_ranges[time] = last_range = (window_pitches.max() - window_pitches.min())
+                pitch_ranges[time] = last_range = window_pitches.std()
             else:
-                # 如果没有激活音高，使用上一次的有效值
+                # 如果没有激活音高，使用上一次的有效值保持连续性
                 pitch_means[time] = last_mean
                 pitch_ranges[time] = last_range
 
         # 使用卷积平滑特征曲线，方便神经网络训练
-        note_counts = np.convolve(np.pad(note_counts, (1, 1), "edge"), [0.2, 0.6, 0.2], "valid")
-        pitch_means = np.convolve(np.pad(pitch_means, (1, 1), "edge"), [0.2, 0.6, 0.2], "valid")
-        pitch_ranges = np.convolve(np.pad(pitch_ranges, (1, 1), "edge"), [0.2, 0.6, 0.2], "valid")
+        smoothing_kernel = [0.1, 0.2, 0.4, 0.2, 0.1]
+        for _ in range(smoothing_iterations):
+            note_counts, pitch_means, pitch_ranges = [
+                np.convolve(np.pad(feature, (2, 2), "edge"), smoothing_kernel, "valid")
+                for feature in [note_counts, pitch_means, pitch_ranges]
+            ]
 
         # 将特征元组添加到数据集
         dataset.append([piano_roll, note_counts, pitch_means, pitch_ranges])
 
-    # 计算音符数量、平均音高、音高范围的百分位数
+    # 计算最小最大值用于归一化
     note_count_min, note_count_max = np.percentile(np.concatenate([data[1] for data in dataset]), [0, 100])
     pitch_mean_min, pitch_mean_max = np.percentile(np.concatenate([data[2] for data in dataset]), [0, 100])
     pitch_range_min, pitch_range_max = np.percentile(np.concatenate([data[3] for data in dataset]), [0, 100])
 
     # 归一化音符数量、平均音高、音高范围
     for idx, (_, note_counts, pitch_means, pitch_ranges) in enumerate(dataset):
-        dataset[idx][1] = np.clip(((note_counts - note_count_min) / (note_count_max - note_count_min)), 0, 1).astype(np.float32)
-        dataset[idx][2] = np.clip(((pitch_means - pitch_mean_min) / (pitch_mean_max - pitch_mean_min)), 0, 1).astype(np.float32)
-        dataset[idx][3] = np.clip(((pitch_ranges - pitch_range_min) / (pitch_range_max - pitch_range_min)), 0, 1).astype(np.float32)
+        dataset[idx][1] = ((note_counts - note_count_min) / (note_count_max - note_count_min)).astype(np.float32)
+        dataset[idx][2] = ((pitch_means - pitch_mean_min) / (pitch_mean_max - pitch_mean_min)).astype(np.float32)
+        dataset[idx][3] = ((pitch_ranges - pitch_range_min) / (pitch_range_max - pitch_range_min)).astype(np.float32)
 
     return dataset
 
@@ -137,6 +143,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--min-notes", type=int, default=64, help="MIDI 文件中至少包含的音符数量，默认值为 %(default)s")
     parser.add_argument("--max-frames", type=int, default=8964, help="钢琴卷帘表示中允许的最大时间帧数，默认值为 %(default)s")
     parser.add_argument("--frame-length", type=int, default=23, help="用于计算音符统计特征的滑动窗口帧长度，默认值为 %(default)s")
+    parser.add_argument("--smoothing-iterations", type=int, default=3, help="用于平滑音符统计特征的卷积迭代次数，默认值为 %(default)s")
     return parser.parse_args(args)
 
 
@@ -165,7 +172,7 @@ def main(args: argparse.Namespace):
     print(f"正在转换 {len(midi_files)} 个 MIDI 文件 ...")
 
     # 预处理数据
-    dataset = convert(midi_files, args.max_frames, args.min_notes, args.frame_length)
+    dataset = convert(midi_files, args.max_frames, args.min_notes, args.frame_length, args.smoothing_iterations)
 
     # 验证数据集大小是否满足拆分需求
     # 这里再次验证是因为之前预处理可能过滤了一部分无效数据，导致总数据量减少
