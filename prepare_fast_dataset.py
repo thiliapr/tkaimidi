@@ -1,5 +1,3 @@
-"从 MIDI 文件夹中提取训练信息，以方便训练分词器和模型。"
-
 # 本文件是 tkaimidi 的一部分
 # SPDX-FileCopyrightText: 2025 thiliapr <thiliapr@tutanota.com>
 # SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>

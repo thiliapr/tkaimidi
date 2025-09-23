@@ -1,5 +1,3 @@
-"这个模块实现了 MidiNet 模型的生成和处理功能，包括音乐生成、音符转换等。"
-
 # 本文件是 tkaimidi 的一部分
 # SPDX-FileCopyrightText: 2024-2025 thiliapr <thiliapr@tutanota.com>
 # SPDX-FileContributor: thiliapr <thiliapr@tutanota.com>
@@ -23,7 +21,7 @@ from utils.midi import midi_to_notes, notes_to_piano_roll, piano_roll_to_notes, 
 def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progress: bool = True):
     """
     使用 MidiNet 模型逐步生成音乐帧序列。
-    
+
     该函数通过自回归方式生成指定数量的音乐帧。每步生成一帧，并将该帧作为下一时间步的输入。
     同时记录生成过程中的音符数量、音高均值和音高范围等统计信息。
     生成过程使用 KV Cache 优化，避免重复计算。
@@ -66,7 +64,7 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
 
         # 将预测添加到序列中
         prompt = torch.cat([prompt, note_pred], dim=1)
-    
+
     return F.sigmoid(prompt[:, 1:]), note_count_preds, pitch_mean_preds, pitch_range_preds
 
 
@@ -188,7 +186,7 @@ def main(args: argparse.Namespace):
 
     # 删除批次维度并转化为 NumPy 数组
     piano_roll, note_count, pitch_mean, pitch_range = [x.squeeze(0).cpu().numpy() for x in (piano_roll, note_count, pitch_mean, pitch_range)]
-    
+
     # 如果需要，绘制频率图表
     if args.show_piano_roll:
         _, ax = plt.subplots(figsize=(12, 6))

@@ -65,6 +65,7 @@ class MultiheadAttention(nn.Module):
         output: 注意力输出张量，形状为 [batch_size, seq_len_q, dim_model]
         updated_kv_cache: 更新后的键值缓存元组
     """
+
     def __init__(self, dim_head: int, num_heads: int, dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
         self.dim_head = dim_head
@@ -434,7 +435,7 @@ class MidiNet(nn.Module):
         # 所以我们需要只使用一个嵌入（区分有无音符），然后通过 RoPE 位置编码注入捕捉音程关系
         pitch_dim_model = config.pitch_dim_head * config.pitch_num_heads
         self.note_embedding = nn.Parameter(torch.Tensor(pitch_dim_model, device=device))
-        self.pitch_feature_encoder =  nn.ModuleList(PitchFeatureEncoderLayer(config.pitch_dim_head, config.pitch_num_heads, config.pitch_dim_feedforward, config.pitch_conv1_kernel, config.pitch_conv2_kernel, pitch_dropout, device) for _ in range(config.num_pitch_layers))
+        self.pitch_feature_encoder = nn.ModuleList(PitchFeatureEncoderLayer(config.pitch_dim_head, config.pitch_num_heads, config.pitch_dim_feedforward, config.pitch_conv1_kernel, config.pitch_conv2_kernel, pitch_dropout, device) for _ in range(config.num_pitch_layers))
         self.pitch_projection = nn.Linear(128 * pitch_dim_model, dim_model)
 
         # 编码器、解码器
