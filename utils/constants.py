@@ -18,7 +18,7 @@ DEFAULT_PITCH_CONV2_KERNEL = 1  # 音高特征编码器前馈层第二个卷积�
 DEFAULT_VARIANCE_BINS = 256  # 音符特征离散化的精细度
 DEFAULT_NUM_PITCH_LAYERS = 4  # 音高特征编码器层数
 DEFAULT_NUM_ENCODER_LAYERS = 6  # 编码器层数
-DEFAULT_NUM_DECODER_LAYERS = 8  # 解码器层数
+DEFAULT_NUM_DECODER_LAYERS = 6  # 解码器层数
 
 # 训练参数
 DEFAULT_LEARNING_RATE = 3e-4  # 学习率
