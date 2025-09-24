@@ -250,6 +250,71 @@ def midinet_loss(
     return piano_roll_loss, note_counts_loss, pitch_mean_loss, pitch_range_loss
 
 
+def visualize_music_comparison(
+    prediction: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    target: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    title: str,
+    writer: SummaryWriter
+):
+    """
+    可视化音乐生成结果的对比图，包括钢琴卷帘图和统计特征对比
+    创建包含预测结果和真实标签对比的完整可视化图表，并将其添加到 TensorBoard 的 SummaryWriter 中
+
+    工作流程：
+    1. 创建包含5个子图的画布，分别用于显示预测钢琴卷帘、真实钢琴卷帘、音符数量对比、音高均值对比、音高范围对比
+    2. 绘制预测和真实的钢琴卷帘图
+    3. 绘制三个统计特征（音符数量、音高均值、音高范围）的预测值与真实值对比曲线
+    4. 将完整的图表添加到 TensorBoard 的 SummaryWriter 中用于可视化监控
+
+    Args:
+        prediction: 模型预测结果的四元组，包含 (钢琴卷帘矩阵, 音符数量序列, 音高均值序列, 音高范围序列)
+        target: 真实标签的四元组，包含与 prediction 相同结构的真实数据
+        title: 图表在 TensorBoard 中显示的标题
+        writer: TensorBoard 的 SummaryWriter 对象，用于记录图表
+
+    Returns:
+        无返回值
+
+    Examples:
+        >>> pred_data = piano_roll_pred, note_count_pred, pitch_mean_pred, pitch_range_pred
+        >>> target_data = piano_roll_true, note_count_true, pitch_mean_true, pitch_range_true
+        >>> visualize_music_comparison(pred_data, target_data, "Epoch_1", writer)
+    """
+    # 创建图像和坐标轴
+    figure, (pred_piano_roll_ax, target_piano_roll_ax, note_count_ax, pitch_mean_ax, pitch_range_ax) = plt.subplots(5, 1, figsize=(12, 30))
+
+    # 绘制预测和真实的钢琴卷帘对比图
+    for ax, figure_title, piano_roll, note_count, pitch_mean, pitch_range in [
+        (pred_piano_roll_ax, "Predicted Piano Roll", *prediction),
+        (target_piano_roll_ax, "True Piano Roll", *target)
+    ]:
+        # 设置标题
+        ax.set_title(figure_title)
+
+        # 绘制钢琴卷帘
+        plot_piano_roll(piano_roll, note_count, pitch_mean, pitch_range, ax)
+
+    # 绘制统计特征对比图：音符数量、音高均值、音高范围
+    for ax, label, pred_data, target_data in [
+        (note_count_ax, "Note Count", prediction[1], target[1]),
+        (pitch_mean_ax, "Pitch Mean", prediction[2], target[2]),
+        (pitch_range_ax, "Pitch Range", prediction[3], target[3]),
+    ]:
+        # 设置 x 轴范围与预测数据长度一致
+        ax.set_xlim(0, len(pred_data))
+        ax.set_title(f"{label} - Predicted vs True")
+
+        # 绘制预测曲线（蓝色）和真实曲线（绿色）
+        ax.plot(pred_data, color="blue", label="Predicted")
+        ax.plot(target_data, color="green", label="True")
+
+        # 在右上角显示图例
+        ax.legend(loc="upper right")
+
+    # 添加图像到 writer
+    writer.add_figure(title, figure)
+
+
 def train(
     model: MidiNet,
     dataloader: DataLoader,
@@ -257,11 +322,15 @@ def train(
     scaler: GradScaler,
     completed_iters: int,
     writer: SummaryWriter,
+    piano_roll_length: int,
+    logging_interval: int,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
-) -> tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+):
     """
-    训练 MidiNet 模型的函数，支持梯度累积和混合精度训练
+    训练 MidiNet 模型的主函数，支持梯度累积和混合精度训练
+    该函数执行完整的训练循环，包括前向传播、损失计算、反向传播和参数更新
+    同时记录训练过程中的损失值和可视化结果，便于监控训练进度
 
     Args:
         model: 待训练的 MidiNet 模型实例
@@ -269,16 +338,11 @@ def train(
         optimizer: 模型优化器
         scaler: 混合精度梯度缩放器
         completed_iters: 已经完成多少次迭代，记录损失用
-        writer: 记录训练损失用的
+        writer: TensorBoard 日志写入器，用于记录训练过程
+        piano_roll_length: 可视化时钢琴卷帘的最大显示长度
+        logging_interval: 记录日志和生成可视化的间隔步数
         accumulation_steps: 梯度累积步数
         device: 训练设备（默认使用 CPU）
-
-    Returns:
-        最后一步的钢琴卷帘、音符数量、平均音高、音高范围和目标
-
-    Examples:
-        >>> losses = train(model, loader, opt)
-        >>> plt.plot(losses)  # 绘制损失曲线
     """
     # 设置模型为训练模式
     model.train()
@@ -338,13 +402,26 @@ def train(
         # 更新进度条
         progress_bar.update()
 
-        # 最后一步时，记录训练集上预测和目标值
-        if step + 1 == num_steps:
+        # 定期记录训练预测结果
+        if (step + 1) % logging_interval == 0:
+            # 提取预测结果和目标值（去除填充部分）
             results = [
                 x[0, :(~padding_mask).sum(dim=1)[0]].detach().cpu().numpy()
                 for x in [F.sigmoid(piano_roll_pred), piano_roll[:, 1:], note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
             ]
-            return results[::2], results[1::2]
+
+            # 分离预测值和目标值
+            pred, target = results[::2], results[1::2]
+
+            # 随机截取指定长度的钢琴卷帘用于可视化
+            start_pos = random.randint(0, max(0, len(pred[0]) - piano_roll_length))
+            pred, target = [
+                [feature[start_pos:start_pos + piano_roll_length] for feature in items]
+                for items in [pred, target]
+            ]
+
+            # 绘制在训练集上，预测钢琴卷帘和目标钢琴卷帘对比图
+            visualize_music_comparison(pred, target, f"Piano Roll/Train/Iteration {step}", writer)
 
 
 @torch.inference_mode
@@ -430,6 +507,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-dp", "--pitch-dropout", default=DEFAULT_PITCH_DROPOUT, type=float, help="音高特征编码器 Dropout 概率，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
     parser.add_argument("-pr", "--piano-roll-length", default=DEFAULT_PIANO_ROLL_LENGTH, type=int, help="记录预测-目标钢琴卷帘时，最大允许的长度，超过该长度的钢琴卷帘将会被截取，默认为 %(default)s")
+    parser.add_argument("-li", "--logging-interval", default=256, type=int, help="训练时，记录日志和生成可视化的间隔步数，默认为 %(default)s")
     return parser.parse_args(args)
 
 
@@ -483,53 +561,21 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train_pred, train_target = train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.accumulation_steps, device=device)
+        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.piano_roll_length, args.logging_interval, args.accumulation_steps, device=device)
 
         # 验证模型效果
         val_sampler.set_epoch(current_epoch)
         (val_pred, val_target), val_loss = validate(model, val_loader, device)
 
-        # 随机选取长度截断钢琴卷帘
-        if len(train_pred[0]) > args.piano_roll_length:
-            start_pos = random.randint(0, len(train_pred[0]) - args.piano_roll_length)
-            train_pred, train_target, val_pred, val_target = [
-                [x[start_pos:start_pos + args.piano_roll_length] for x in items]
-                for items in [train_pred, train_target, val_pred, val_target]
-            ]
+        # 随机截取指定长度的钢琴卷帘用于可视化
+        start_pos = random.randint(0, max(0, len(val_pred[0]) - args.piano_roll_length))
+        val_pred, val_target = [
+            [feature[start_pos:start_pos + args.piano_roll_length] for feature in items]
+            for items in [val_pred, val_target]
+        ]
 
-        # 选择训练集最后一步预测，和验证集随机选择结果，绘制预测钢琴卷帘图和其目标钢琴卷帘图
-        for title, pred, target in [
-            ("Train Sample", train_pred, train_target),
-            ("Validate Sample", val_pred, val_target),
-        ]:
-            # 创建图像和坐标轴
-            figure, (pred_piano_roll_ax, target_piano_roll_ax, note_count_ax, pitch_mean_ax, pitch_range_ax) = plt.subplots(5, 1, figsize=(12, 30))
-
-            # 绘制钢琴卷帘对比图
-            for ax, figure_title, piano_roll, note_count, pitch_mean, pitch_range in [
-                (pred_piano_roll_ax, "Predicted Piano Roll", *pred),
-                (target_piano_roll_ax, "True Piano Roll", *target)
-            ]:
-                # 设置标题
-                ax.set_title(figure_title)
-
-                # 绘制钢琴卷帘
-                plot_piano_roll(piano_roll, note_count, pitch_mean, pitch_range, ax)
-
-            # 绘制方差预测-目标对比图
-            for ax, label, pred_data, target_data in [
-                (note_count_ax, "Note Count", pred[1], target[1]),
-                (pitch_mean_ax, "Pitch Mean", pred[2], target[2]),
-                (pitch_range_ax, "Pitch Range", pred[3], target[3]),
-            ]:
-                ax.set_xlim(0, len(pred_data))
-                ax.set_title(f"{label} - Predicted vs True")
-                ax.plot(pred_data, color="blue", label=f"Predicted")
-                ax.plot(target_data, color="green", label=f"True")
-                ax.legend(loc="upper right")
-
-            # 添加图像到 writer
-            writer.add_figure(f"Epoch {current_epoch + 1}/{title}", figure)
+        # 绘制在验证集上，预测钢琴卷帘和目标钢琴卷帘对比图
+        visualize_music_comparison(val_pred, val_target, f"Piano Roll/Validate/Epoch {current_epoch + 1}")
 
         # 绘制验证损失分布直方图，记录验证损失
         for loss_idx, loss_name in enumerate(["Piano Roll", "Note Count", "Pitch Mean", "Pitch Range"]):
