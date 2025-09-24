@@ -20,7 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
 from generate import plot_piano_roll
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_PIANO_ROLL_LENGTH, DEFAULT_PITCH_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_PIANO_ROLL_LENGTH, DEFAULT_PITCH_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_VARIANCE_WEIGHT, DEFAULT_WEIGHT_DECAY
 from utils.model import MidiNet
 from utils.toolkit import convert_to_tensor, create_padding_mask
 
@@ -324,6 +324,7 @@ def train(
     writer: SummaryWriter,
     piano_roll_length: int,
     logging_interval: int,
+    variance_weight: float,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
 ):
@@ -341,6 +342,7 @@ def train(
         writer: TensorBoard 日志写入器，用于记录训练过程
         piano_roll_length: 可视化时钢琴卷帘的最大显示长度
         logging_interval: 记录日志和生成可视化的间隔步数
+        variance_weight: 统计特征损失的权重
         accumulation_steps: 梯度累积步数
         device: 训练设备（默认使用 CPU）
     """
@@ -369,7 +371,7 @@ def train(
             piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1])  # 模型前向传播（使用教师强制）
             all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:])  # 计算损失
             piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() / accumulation_steps for loss in all_loss)  # 计算整个批次的损失
-            value = piano_roll_loss + note_counts_loss + pitch_means_loss + pitch_ranges_loss
+            value = piano_roll_loss + (note_counts_loss + pitch_means_loss + pitch_ranges_loss) * variance_weight
 
         # 梯度缩放与反向传播
         scaler.scale(value).backward()
@@ -506,6 +508,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-dv", "--variance-predictor-dropout", default=DEFAULT_VARIANCE_PREDICTOR_DROPOUT, type=float, help="变异性预测器 Dropout 概率，默认为 %(default)s")
     parser.add_argument("-dp", "--pitch-dropout", default=DEFAULT_PITCH_DROPOUT, type=float, help="音高特征编码器 Dropout 概率，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
+    parser.add_argument("-vw", "--variance-weight", default=DEFAULT_VARIANCE_WEIGHT, type=float, help="统计特征损失的权重，默认为 %(default)s")
     parser.add_argument("-pr", "--piano-roll-length", default=DEFAULT_PIANO_ROLL_LENGTH, type=int, help="记录预测-目标钢琴卷帘时，最大允许的长度，超过该长度的钢琴卷帘将会被截取，默认为 %(default)s")
     parser.add_argument("-li", "--logging-interval", default=256, type=int, help="训练时，记录日志和生成可视化的间隔步数，默认为 %(default)s")
     return parser.parse_args(args)
@@ -561,7 +564,7 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.piano_roll_length, args.logging_interval, args.accumulation_steps, device=device)
+        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.piano_roll_length, args.logging_interval, args.variance_weight, args.accumulation_steps, device=device)
 
         # 验证模型效果
         val_sampler.set_epoch(current_epoch)
