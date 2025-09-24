@@ -9,7 +9,9 @@ from torch import nn
 from torch.nn import functional as F
 
 AttentionKVCache = tuple[torch.Tensor, torch.Tensor]
-NetKVCache = tuple[list[AttentionKVCache], list[AttentionKVCache]]
+GPT2BlocksKVCache = list[AttentionKVCache]
+VarianceKVCache = tuple[GPT2BlocksKVCache, GPT2BlocksKVCache, GPT2BlocksKVCache]
+NetKVCache = tuple[GPT2BlocksKVCache, VarianceKVCache, GPT2BlocksKVCache]
 
 
 class ScaleNorm(nn.Module):
@@ -317,48 +319,57 @@ class GPT2Block(nn.Module):
 
 class VariancePredictor(nn.Module):
     """
-    方差预测器模块，用于预测序列数据的方差相关特征（如时长、音高或能量）。
+    方差预测器模块，用于预测序列数据的方差相关特征。
+    本模块借鉴了 [FastSpeech 2](https://arxiv.org/abs/2006.04558) 的方差预测器思想，
+    通过 GPT-2 块提取特征，最后通过线性层输出单维度的预测值。
 
-    该模块采用两层线性变换结构，每层后接 Mish 激活函数和 Dropout 正则化，
-    使用 ScaleNorm 进行归一化处理，最后通过输出层生成预测结果。
-    适用于处理时间序列数据的回归预测任务。
+    该模块的工作流程如下：
+    1. 输入序列数据通过 GPT2Block 层进行特征提取
+    2. 每个 GPT2Block 层都包含多头自注意力机制和前馈神经网络
+    3. 使用残差连接和层归一化来稳定训练过程
+    4. 最终通过线性输出层将特征映射为单维度预测值
+    5. 支持键值缓存机制以提高推理效率
 
     Args:
-        dim_model: 输入张量的维度。
-        dropout: Dropout 概率，用于防止过拟合。
-        device: 可选的设备参数，用于指定模型运行的设备。
+        dim_head: 每个注意力头的维度大小
+        num_heads: 注意力头的数量
+        dim_feedforward: 前馈神经网络的隐藏层维度
+        dropout: Dropout 概率，用于防止过拟合
+        device: 模型运行的设备
 
     Inputs:
-        x: 输入张量，形状为 (batch_size, seq_len, dim_model)
+        x: 输入张量，形状为 [batch_size, seq_len, dim_model]
+        padding_mask: 填充掩码，形状为 [batch_size, seq_len]
+        kv_cache: 可选的键值缓存，用于加速自回归生成
 
     Outputs:
-        返回预测的时长、音高或能量，形状为 (batch_size, seq_len)
+        x: 预测结果张量，形状为 [batch_size, seq_len]
+        layers_kv_cache: 各层的键值缓存列表
     """
 
-    def __init__(self, dim_model: int, dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, dim_head: int, num_heads: int, dim_feedforward: int, dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
-        self.linear1 = nn.Linear(dim_model, dim_model, device=device)
-        self.linear2 = nn.Linear(dim_model, dim_model, device=device)
-        self.output_layer = nn.Linear(dim_model, 1, device=device)
-        self.norm1 = ScaleNorm(dim_model, device=device)
-        self.norm2 = ScaleNorm(dim_model, device=device)
-        self.dropout = nn.Dropout(dropout)
+        # 创建 GPT-2 块组成的序列
+        self.layers = nn.ModuleList(GPT2Block(dim_head, num_heads, dim_feedforward, dropout, device) for _ in range(2))
+
+        # 输出层将多头注意力输出映射为单维度预测
+        self.output_layer = nn.Linear(dim_head * num_heads, 1, device=device)
 
         # 初始化权重
-        for module in [self.linear1, self.linear2, self.output_layer]:
-            nn.init.xavier_uniform_(module.weight)
-            nn.init.zeros_(module.bias)
+        nn.init.xavier_uniform_(self.output_layer.weight)
+        nn.init.zeros_(self.output_layer.bias)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # 第一层卷积和归一化
-        x = x + self.dropout(F.mish(self.linear1(self.norm1(x))))
+    def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor, kv_cache: Optional[GPT2BlocksKVCache]) -> tuple[torch.Tensor, GPT2BlocksKVCache]:
+        layers_kv_cache = []
 
-        # 第二层卷积和归一化
-        x = x + self.dropout(F.mish(self.linear2(self.norm2(x))))
+        # 逐层通过 GPT-2 块
+        for layer_idx, layer in enumerate(self.layers):
+            x, layer_kv_cache = layer(x, padding_mask, None if kv_cache is None else kv_cache[layer_idx])
+            layers_kv_cache.append(layer_kv_cache)
 
-        # 最终输出层，形状为 [batch_size, seq_len, 1] => [batch_size, seq_len]
+        # 通过输出层并压缩最后一维，得到形状 [batch_size, seq_len]
         x = self.output_layer(x).squeeze(-1)
-        return x
+        return x, layers_kv_cache
 
 
 class MidiNetConfig(NamedTuple):
@@ -444,11 +455,11 @@ class MidiNet(nn.Module):
 
         # 音符数量、音高平均值、音高范围预测器和嵌入
         self.variance_bins = config.variance_bins
-        self.note_count_predictor = VariancePredictor(dim_model, variance_predictor_dropout, device=device)
+        self.note_count_predictor = VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, variance_predictor_dropout, device=device)
         self.note_count_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
-        self.pitch_mean_predictor = VariancePredictor(dim_model, variance_predictor_dropout, device=device)
+        self.pitch_mean_predictor = VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, variance_predictor_dropout, device=device)
         self.pitch_mean_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
-        self.pitch_range_predictor = VariancePredictor(dim_model, variance_predictor_dropout, device=device)
+        self.pitch_range_predictor = VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, variance_predictor_dropout, device=device)
         self.pitch_range_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
 
         # 音符预测器
@@ -495,19 +506,22 @@ class MidiNet(nn.Module):
             encoder_kv_cache.append(layer_kv_cache)
 
         # 预测音高范围、平均值和能量
-        note_count_prediction = self.note_count_predictor(x)  # [batch_size, seq_len]
-        pitch_mean_prediction = self.pitch_mean_predictor(x)  # [batch_size, seq_len]
-        pitch_range_prediction = self.pitch_range_predictor(x)  # [batch_size, seq_len]
+        variance_prediction, variance_kv_cache = zip(*[
+            predictor(x, padding_mask, None if kv_cache is None else kv_cache[1][kv_cache_idx])
+            for kv_cache_idx, predictor in enumerate([self.note_count_predictor, self.pitch_mean_predictor, self.pitch_range_predictor])
+        ])
 
         # 使用目标值替代预测值（如果提供）
-        note_count = note_count_prediction if note_count_target is None else note_count_target
-        pitch_mean = pitch_mean_prediction if pitch_mean_target is None else pitch_mean_target
-        pitch_range = pitch_range_prediction if pitch_range_target is None else pitch_range_target
+        variance = [
+            prediction if target is None else target
+            for prediction, target in zip(variance_prediction, [note_count_target, pitch_mean_target, pitch_range_target])
+        ]
 
         # 限制范围并离散化
-        note_count = (note_count.clamp(min=0, max=1) * (self.variance_bins - 1)).round().to(dtype=int)
-        pitch_mean = (pitch_mean.clamp(min=0, max=1) * (self.variance_bins - 1)).round().to(dtype=int)
-        pitch_range = (pitch_range.clamp(min=0, max=1) * (self.variance_bins - 1)).round().to(dtype=int)
+        note_count, pitch_mean, pitch_range = [
+            (item.clamp(min=0, max=1) * (self.variance_bins - 1)).round().to(dtype=int)
+            for item in variance
+        ]
 
         # 将音高和能量作为附加特征添加到解码器输入中
         x = x + self.note_count_embedding(note_count) + self.pitch_mean_embedding(pitch_mean) + self.pitch_range_embedding(pitch_range)
@@ -515,9 +529,9 @@ class MidiNet(nn.Module):
         # 解码器
         decoder_kv_cache = []
         for layer_idx, layer in enumerate(self.decoder):
-            x, layer_kv_cache = layer(x, padding_mask, None if kv_cache is None else kv_cache[1][layer_idx])
+            x, layer_kv_cache = layer(x, padding_mask, None if kv_cache is None else kv_cache[2][layer_idx])
             decoder_kv_cache.append(layer_kv_cache)
 
         # 激活音符预测
         note_prediction = self.note_predictor(x)  # [batch_size, seq_len, 128]
-        return note_prediction, note_count_prediction, pitch_mean_prediction, pitch_range_prediction, (encoder_kv_cache, decoder_kv_cache)
+        return note_prediction, *variance_prediction, (encoder_kv_cache, variance_kv_cache, decoder_kv_cache)
