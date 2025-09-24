@@ -384,6 +384,8 @@ def train(
 
         # 达到累积步数时更新参数
         if (step + 1) % accumulation_steps == 0:
+            scaler.unscale_(optimizer)  # 先将梯度反缩放回原始量级，为裁剪做准备
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # 在原始梯度量级上进行裁剪
             scaler.step(optimizer)  # 更新模型参数
             scaler.update()  # 调整缩放因子
             optimizer.zero_grad()  # 清空梯度
