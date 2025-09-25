@@ -580,7 +580,7 @@ def main(args: argparse.Namespace):
         ]
 
         # 绘制在验证集上，预测钢琴卷帘和目标钢琴卷帘对比图
-        visualize_music_comparison(val_pred, val_target, f"Piano Roll/Validate/Epoch {current_epoch + 1}")
+        visualize_music_comparison(val_pred, val_target, f"Piano Roll/Validate/Epoch {current_epoch + 1}", writer)
 
         # 绘制验证损失分布直方图，记录验证损失
         for loss_idx, loss_name in enumerate(["Piano Roll", "Note Count", "Pitch Mean", "Pitch Range"]):
