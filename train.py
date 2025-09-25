@@ -20,7 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
 from generate import plot_piano_roll
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_PIANO_ROLL_LENGTH, DEFAULT_PITCH_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_VARIANCE_WEIGHT, DEFAULT_WEIGHT_DECAY
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_PIANO_ROLL_LENGTH, DEFAULT_PITCH_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY
 from utils.model import MidiNet
 from utils.toolkit import convert_to_tensor, create_padding_mask
 
@@ -194,14 +194,15 @@ def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np
 
 def midinet_loss(
     piano_roll_pred: torch.Tensor,
-    note_counts_pred: torch.Tensor,
+    note_count_pred: torch.Tensor,
     pitch_mean_pred: torch.Tensor,
     pitch_range_pred: torch.Tensor,
     piano_roll_target: torch.Tensor,
-    note_counts_target: torch.Tensor,
+    note_count_target: torch.Tensor,
     pitch_mean_target: torch.Tensor,
     pitch_range_target: torch.Tensor,
     padding_mask: torch.BoolTensor,
+    variance_weight: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     计算 MidiNet 模型的复合损失函数，包含钢琴卷帘、音符数量、音高均值和音高范围四个损失分量
@@ -210,14 +211,15 @@ def midinet_loss(
 
     Args:
         piano_roll_pred: 预测的钢琴卷帘矩阵，形状为 [batch_size, seq_len, 128]
-        note_counts_pred: 预测的音符数量，形状为 [batch_size, seq_len]
+        note_count_pred: 预测的音符数量，形状为 [batch_size, seq_len]
         pitch_mean_pred: 预测的平均音高，形状为 [batch_size, seq_len]
         pitch_range_pred: 预测的音高范围，形状为 [batch_size, seq_len]
         piano_roll_target: 目标的钢琴卷帘矩阵，形状为 [batch_size, seq_len, 128]
-        note_counts_target: 目标的音符数量，形状为 [batch_size, seq_len]
+        note_count_target: 目标的音符数量，形状为 [batch_size, seq_len]
         pitch_mean_target: 目标的平均音高，形状为 [batch_size, seq_len]
         pitch_range_target: 目标的音高范围，形状为 [batch_size, seq_len]
         padding_mask: 填充掩码，True 表示填充位置，形状为 [batch_size, seq_len]
+        variance_weight: 用于缩放回归损失的权重因子
 
     Returns:
         返回四个损失张量的元组：(钢琴卷帘损失, 音符数量损失, 音高均值损失, 音高范围损失)
@@ -242,12 +244,17 @@ def midinet_loss(
 
     # 计算各分量损失
     piano_roll_loss = masked_loss(piano_roll_pred, piano_roll_target.to(dtype=piano_roll_pred.dtype), padding_mask, F.binary_cross_entropy_with_logits)
-    note_counts_loss = masked_loss(note_counts_pred, note_counts_target, padding_mask, F.mse_loss)
-    pitch_mean_loss = masked_loss(pitch_mean_pred, pitch_mean_target, padding_mask, F.mse_loss)
-    pitch_range_loss = masked_loss(pitch_range_pred, pitch_range_target, padding_mask, F.mse_loss)
+    note_count_loss, pitch_mean_loss, pitch_range_loss = [
+        masked_loss(pred * variance_weight, target * variance_weight, padding_mask, F.mse_loss)
+        for pred, target in [
+            (note_count_pred, note_count_target),
+            (pitch_mean_pred, pitch_mean_target),
+            (pitch_range_pred, pitch_range_target),
+        ]
+    ]
 
     # 返回各分量损失
-    return piano_roll_loss, note_counts_loss, pitch_mean_loss, pitch_range_loss
+    return piano_roll_loss, note_count_loss, pitch_mean_loss, pitch_range_loss
 
 
 def visualize_music_comparison(
@@ -324,7 +331,6 @@ def train(
     writer: SummaryWriter,
     piano_roll_length: int,
     logging_interval: int,
-    variance_weight: float,
     accumulation_steps: int = 1,
     device: torch.device = torch.device("cpu")
 ):
@@ -342,7 +348,6 @@ def train(
         writer: TensorBoard 日志写入器，用于记录训练过程
         piano_roll_length: 可视化时钢琴卷帘的最大显示长度
         logging_interval: 记录日志和生成可视化的间隔步数
-        variance_weight: 统计特征损失的权重
         accumulation_steps: 梯度累积步数
         device: 训练设备（默认使用 CPU）
     """
@@ -369,9 +374,9 @@ def train(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1])  # 模型前向传播（使用教师强制）
-            all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:])  # 计算损失
+            all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:], model.variance_bins - 1)  # 计算损失
             piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() / accumulation_steps for loss in all_loss)  # 计算整个批次的损失
-            value = piano_roll_loss + (note_counts_loss + pitch_means_loss + pitch_ranges_loss) * variance_weight
+            value = piano_roll_loss + note_counts_loss + pitch_means_loss + pitch_ranges_loss
 
         # 梯度缩放与反向传播
         scaler.scale(value).backward()
@@ -469,7 +474,7 @@ def validate(
             piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], padding_mask=padding_mask[:, :-1])
 
             # 计算损失
-            all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:])
+            all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:], model.variance_bins - 1)
 
         # 记录当前批次的损失信息
         for batch_idx in range(piano_roll.size(0)):
@@ -510,7 +515,6 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-dv", "--variance-predictor-dropout", default=DEFAULT_VARIANCE_PREDICTOR_DROPOUT, type=float, help="变异性预测器 Dropout 概率，默认为 %(default)s")
     parser.add_argument("-dp", "--pitch-dropout", default=DEFAULT_PITCH_DROPOUT, type=float, help="音高特征编码器 Dropout 概率，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
-    parser.add_argument("-vw", "--variance-weight", default=DEFAULT_VARIANCE_WEIGHT, type=float, help="统计特征损失的权重，默认为 %(default)s")
     parser.add_argument("-pr", "--piano-roll-length", default=DEFAULT_PIANO_ROLL_LENGTH, type=int, help="记录预测-目标钢琴卷帘时，最大允许的长度，超过该长度的钢琴卷帘将会被截取，默认为 %(default)s")
     parser.add_argument("-li", "--logging-interval", default=256, type=int, help="训练时，记录日志和生成可视化的间隔步数，默认为 %(default)s")
     return parser.parse_args(args)
@@ -566,7 +570,7 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.piano_roll_length, args.logging_interval, args.variance_weight, args.accumulation_steps, device=device)
+        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.piano_roll_length, args.logging_interval, args.accumulation_steps, device=device)
 
         # 验证模型效果
         val_sampler.set_epoch(current_epoch)
