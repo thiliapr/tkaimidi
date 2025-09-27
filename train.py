@@ -49,7 +49,7 @@ class MidiDataset(Dataset):
 
     def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return (
-            np.concatenate([np.zeros([1, 128], dtype=bool), self.data_samples[f"{index}:piano_roll"]], axis=0),  # 添加全零帧作为起始帧
+            np.concatenate([np.zeros([1, 88], dtype=bool), self.data_samples[f"{index}:piano_roll"]], axis=0),  # 添加全零帧作为起始帧
             self.data_samples[f"{index}:note_counts"],
             self.data_samples[f"{index}:pitch_means"],
             self.data_samples[f"{index}:pitch_ranges"]
@@ -210,11 +210,11 @@ def midinet_loss(
     使用二元交叉熵计算钢琴卷帘损失，使用均方误差计算其他三个回归损失分量
 
     Args:
-        piano_roll_pred: 预测的钢琴卷帘矩阵，形状为 [batch_size, seq_len, 128]
+        piano_roll_pred: 预测的钢琴卷帘矩阵，形状为 [batch_size, seq_len, 88]
         note_count_pred: 预测的音符数量，形状为 [batch_size, seq_len]
         pitch_mean_pred: 预测的平均音高，形状为 [batch_size, seq_len]
         pitch_range_pred: 预测的音高范围，形状为 [batch_size, seq_len]
-        piano_roll_target: 目标的钢琴卷帘矩阵，形状为 [batch_size, seq_len, 128]
+        piano_roll_target: 目标的钢琴卷帘矩阵，形状为 [batch_size, seq_len, 88]
         note_count_target: 目标的音符数量，形状为 [batch_size, seq_len]
         pitch_mean_target: 目标的平均音高，形状为 [batch_size, seq_len]
         pitch_range_target: 目标的音高范围，形状为 [batch_size, seq_len]
@@ -230,7 +230,7 @@ def midinet_loss(
         elementwise_loss = criterion(pred, target, reduction="none")
 
         # 重塑损失张量以便统一 variance 和 piano_roll 掩码应用逻辑
-        # [batch_size, seq_len, feature_dim]，其中 feature_dim 可能为 1 或 128
+        # [batch_size, seq_len, feature_dim]，其中 feature_dim 可能为 1 或 88
         loss_reshaped = elementwise_loss.view(*elementwise_loss.shape[:2], -1)
 
         # 扩展掩码以匹配损失张量的形状

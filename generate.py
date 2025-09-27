@@ -28,7 +28,7 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
 
     Args:
         model: 用于音乐生成的神经网络模型
-        prompt: 初始提示序列，钢琴卷帘，形状为[批次大小, 序列长度, 128]
+        prompt: 初始提示序列，钢琴卷帘，形状为[批次大小, 序列长度, 88]
         num_frames: 需要生成的帧数
         show_progress: 是否显示进度条
 
@@ -36,11 +36,11 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
         生成的完整序列、音符数量预测、音高均值预测、音高范围预测
 
     Examples:
-        >>> prompt = torch.randn(1, 10, 128)
+        >>> prompt = torch.randn(1, 10, 88)
         >>> output, note_counts, pitch_means, pitch_ranges = generate(model, prompt, 100)
     """
     # 在提示序列前添加全零起始帧
-    prompt = torch.cat([torch.zeros([prompt.size(0), 1, 128], dtype=torch.float32, device=prompt.device), prompt.to(dtype=torch.float32)], dim=1)
+    prompt = torch.cat([torch.zeros([prompt.size(0), 1, 88], dtype=torch.float32, device=prompt.device), prompt.to(dtype=torch.float32)], dim=1)
 
     # 初始化 KV Cache 和预测结果容器
     kv_cache = None
@@ -82,7 +82,7 @@ def plot_piano_roll(piano_roll: np.ndarray, note_count: np.ndarray, pitch_mean: 
     - 绘制音符密度、平均音高曲线和音高范围填充区域
 
     Args:
-        piano_roll: 钢琴卷帘数据，形状为 [时间步数, 128]
+        piano_roll: 钢琴卷帘数据，形状为 [时间步数, 88]
         note_count: 每个时间步的平均密度
         pitch_mean: 每个时间步的平均音高
         pitch_range: 每个时间步的音高范围
@@ -97,7 +97,7 @@ def plot_piano_roll(piano_roll: np.ndarray, note_count: np.ndarray, pitch_mean: 
         >>> plt.show()
     """
     # 统计最大、最小音高，并绘制钢琴卷帘音符
-    max_pitch, min_pitch = 0, 127
+    max_pitch, min_pitch = 0, 87
     for time, pitch_row in enumerate(piano_roll):
         for pitch in np.where(pitch_row > 0.5)[0]:
             # 统计音高
@@ -173,7 +173,7 @@ def main(args: argparse.Namespace):
     prompt_notes = []  # 默认空提示音符列表
     if args.midi_path:
         try:
-            prompt_notes = midi_to_notes(mido.MidiFile(args.midi_path))
+            prompt_notes = midi_to_notes(mido.MidiFile(args.midi_path), 87)
         except Exception as e:
             print(f"加载指定的 MIDI 文件时出错: {e}\n将使用空提示音符生成")
 

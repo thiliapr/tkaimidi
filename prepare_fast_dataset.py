@@ -61,11 +61,11 @@ def convert(
             continue
 
         # 提取音符序列并过滤不符合要求的文件
-        notes = midi_to_notes(midi_file)
-        if len(notes) < min_notes or sum(interval for _, interval in notes) > max_frames:
+        notes = midi_to_notes(midi_file, 87)
+        if len(notes) < min_notes or notes[-1][1] > max_frames:
             continue
 
-        # 转换为钢琴卷帘表示 [时间帧, 128 个音高]
+        # 转换为钢琴卷帘表示 [时间帧, 88 个音高]
         piano_roll = notes_to_piano_roll(notes)
 
         # 预分配特征数组
@@ -141,7 +141,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--min-notes", type=int, default=64, help="MIDI 文件中至少包含的音符数量，默认值为 %(default)s")
     parser.add_argument("--max-frames", type=int, default=8964, help="钢琴卷帘表示中允许的最大时间帧数，默认值为 %(default)s")
     parser.add_argument("--frame-length", type=int, default=23, help="用于计算音符统计特征的滑动窗口帧长度，默认值为 %(default)s")
-    parser.add_argument("--smoothing-iterations", type=int, default=3, help="用于平滑音符统计特征的卷积迭代次数，默认值为 %(default)s")
+    parser.add_argument("--smoothing-iterations", type=int, default=5, help="用于平滑音符统计特征的卷积迭代次数，默认值为 %(default)s")
     return parser.parse_args(args)
 
 

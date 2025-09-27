@@ -217,7 +217,7 @@ class PitchFeatureEncoderLayer(nn.Module):
     5. 将前馈输出与原始输入进行残差连接，得到最终输出
 
     Inputs:
-        x: 输入特征张量，形状为 [batch_size, 128, dim_model]
+        x: 输入特征张量，形状为 [batch_size, 88, dim_model]
 
     Outputs:
         编码后的特征张量，形状与输入相同
@@ -413,7 +413,7 @@ class MidiNet(nn.Module):
     加速推理过程。
 
     Inputs:
-        x: 钢琴卷帘，[batch_size, seq_len, 128]
+        x: 钢琴卷帘，[batch_size, seq_len, 88]
         note_count_target: 音符数量的目标值（用于训练）
         pitch_mean_target: 平均音高的目标值（用于训练）
         pitch_range_target: 音高范围的目标值（用于训练）
@@ -421,7 +421,7 @@ class MidiNet(nn.Module):
         kv_cache: 可选 NetKVCache 对象，用于缓存键值对以加速推理
 
     Outputs:
-        note_prediction: 预测的音符存在概率，[batch_size, seq_len, 128]
+        note_prediction: 预测的音符存在概率，[batch_size, seq_len, 88]
         note_count_prediction: 预测的音符数量，[batch_size, seq_len]
         pitch_mean_prediction: 预测的平均音高,[batch_size, seq_len]
         pitch_range_prediction: 预测的音高范围，[batch_size, seq_len]
@@ -430,9 +430,9 @@ class MidiNet(nn.Module):
     Examples:
         >>> config = MidiNetConfig(...)
         >>> model = MidiNet(config)
-        >>> input_tensor = torch.randint(0, 2, (2, 100, 128), dtype=torch.bool)
+        >>> input_tensor = torch.randint(0, 2, (2, 100, 88), dtype=torch.bool)
         >>> note_pred, count_pred, mean_pred, range_pred, _ = model(input_tensor, None, None, None, None, None)
-        >>> print(note_pred.shape)  # torch.Size([2, 100, 128])
+        >>> print(note_pred.shape)  # torch.Size([2, 100, 88])
     """
 
     def __init__(self, config: MidiNetConfig, pitch_dropout: float = 0, encoder_dropout: float = 0., decoder_dropout: float = 0., variance_predictor_dropout: float = 0., device: Optional[torch.device] = None):
@@ -440,14 +440,14 @@ class MidiNet(nn.Module):
         dim_model = config.dim_head * config.num_heads  # 总模型维度
 
         # 音符嵌入和音高聚合器
-        # 这里为什么不用 nn.Embedding(128, dim_model) 呢？因为这会使模型认为 128 个音高都是不同的
+        # 这里为什么不用 nn.Embedding(88, dim_model) 呢？因为这会使模型认为 88 个音高都是不同的
         # 但事实上，我们压根没什么关注绝对音高，我们更加关注的音程信息
-        # 比如 C4、G4 是纯五度关系，而 D4、A4 也是纯五度关系，如果使用 128 个不同的嵌入，模型就难以认识到它们的相对音高关系，它只会把 C4、G4、D4、A4 看成四个不同的音高
+        # 比如 C4、G4 是纯五度关系，而 D4、A4 也是纯五度关系，如果使用 88 个不同的嵌入，模型就难以认识到它们的相对音高关系，它只会把 C4、G4、D4、A4 看成四个不同的音高
         # 所以我们需要只使用一个嵌入（区分有无音符），然后通过 RoPE 位置编码注入捕捉音程关系
         pitch_dim_model = config.pitch_dim_head * config.pitch_num_heads
         self.note_embedding = nn.Parameter(torch.Tensor(pitch_dim_model, device=device))
         self.pitch_feature_encoder = nn.ModuleList(PitchFeatureEncoderLayer(config.pitch_dim_head, config.pitch_num_heads, config.pitch_dim_feedforward, config.pitch_conv1_kernel, config.pitch_conv2_kernel, pitch_dropout, device) for _ in range(config.num_pitch_layers))
-        self.pitch_projection = nn.Linear(128 * pitch_dim_model, dim_model)
+        self.pitch_projection = nn.Linear(88 * pitch_dim_model, dim_model)
 
         # 编码器、解码器
         self.encoder = nn.ModuleList(GPT2Block(config.dim_head, config.num_heads, config.dim_feedforward, encoder_dropout, device) for _ in range(config.num_encoder_layers))
@@ -463,7 +463,7 @@ class MidiNet(nn.Module):
         self.pitch_range_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
 
         # 音符预测器
-        self.note_predictor = nn.Linear(dim_model, 128, device=device)
+        self.note_predictor = nn.Linear(dim_model, 88, device=device)
 
         # 初始化权重
         nn.init.uniform_(self.note_embedding)
@@ -484,10 +484,10 @@ class MidiNet(nn.Module):
         batch_size, seq_len, _ = x.shape
 
         # 展平批次和序列维度，便于并行处理所有时间步的音高
-        x = x.flatten(0, 1)  # [batch_size * seq_len, 128]
+        x = x.flatten(0, 1)  # [batch_size * seq_len, 88]
 
         # 将音高信息与嵌入结合，仅保留存在的音高对应的嵌入
-        x = x.unsqueeze(2) * self.note_embedding.unsqueeze(0)  # [batch_size * seq_len, 128, pitch_dim_model]
+        x = x.unsqueeze(2) * self.note_embedding.unsqueeze(0)  # [batch_size * seq_len, 88, pitch_dim_model]
 
         # 通过带 RoPE 的注意力机制捕获音高间的相对关系
         for layer in self.pitch_feature_encoder:
@@ -533,5 +533,5 @@ class MidiNet(nn.Module):
             decoder_kv_cache.append(layer_kv_cache)
 
         # 激活音符预测
-        note_prediction = self.note_predictor(x)  # [batch_size, seq_len, 128]
+        note_prediction = self.note_predictor(x)  # [batch_size, seq_len, 88]
         return note_prediction, *variance_prediction, (encoder_kv_cache, variance_kv_cache, decoder_kv_cache)
