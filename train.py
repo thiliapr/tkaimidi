@@ -193,7 +193,7 @@ def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np
 
 
 def midinet_loss(
-    piano_roll_pred: Optional[torch.Tensor],
+    piano_roll_pred: torch.Tensor,
     note_count_pred: torch.Tensor,
     pitch_mean_pred: torch.Tensor,
     pitch_range_pred: torch.Tensor,
@@ -226,10 +226,6 @@ def midinet_loss(
     """
     def masked_loss(pred: Optional[torch.Tensor], target: torch.Tensor, padding_mask: torch.BoolTensor, criterion: Callable[..., torch.Tensor]):
         "计算掩码区域的损失，仅对有效帧求平均"
-        # 处理预测为 None 的情况
-        if pred is None:
-            return torch.tensor(0, device=target.device)
-
         # 计算逐元素损失 [batch_size, seq_len, ...]
         elementwise_loss = criterion(pred, target, reduction="none")
 
@@ -382,7 +378,7 @@ def train(
             piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1], encoder_only=encoder_only)  # 模型前向传播（使用教师强制）
             all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:], model.variance_bins - 1)  # 计算损失
             piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() / accumulation_steps for loss in all_loss)  # 计算整个批次的损失
-            value = piano_roll_loss + note_counts_loss + pitch_means_loss + pitch_ranges_loss
+            value = piano_roll_loss * encoder_only + note_counts_loss + pitch_means_loss + pitch_ranges_loss
 
         # 梯度缩放与反向传播
         scaler.scale(value).backward()

@@ -481,7 +481,7 @@ class MidiNet(nn.Module):
         padding_mask: Optional[torch.BoolTensor] = None,
         kv_cache: Optional[NetKVCache] = None,
         encoder_only: bool = False
-    ) -> tuple[Optional[torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor, NetKVCache]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, NetKVCache]:
         # 处理输入音高张量，准备进入编码器
         batch_size, seq_len, _ = x.shape
 
@@ -515,7 +515,7 @@ class MidiNet(nn.Module):
 
         # 如果只需要编码器输出，则直接返回
         if encoder_only:
-            return None, *variance_prediction, (encoder_kv_cache, variance_kv_cache, None)
+            return torch.zeros(batch_size, seq_len, 88, device=x.device, dtype=x.dtype), *variance_prediction, (encoder_kv_cache, variance_kv_cache, None)
 
         # 使用目标值替代预测值（如果提供）
         variance = [
