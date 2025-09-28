@@ -11,7 +11,7 @@ from torch.nn import functional as F
 AttentionKVCache = tuple[torch.Tensor, torch.Tensor]
 GPT2BlocksKVCache = list[AttentionKVCache]
 VarianceKVCache = tuple[GPT2BlocksKVCache, GPT2BlocksKVCache, GPT2BlocksKVCache]
-NetKVCache = tuple[GPT2BlocksKVCache, VarianceKVCache, GPT2BlocksKVCache]
+NetKVCache = tuple[GPT2BlocksKVCache, VarianceKVCache, Optional[GPT2BlocksKVCache]]
 
 
 class ScaleNorm(nn.Module):
@@ -419,6 +419,7 @@ class MidiNet(nn.Module):
         pitch_range_target: 音高范围的目标值（用于训练）
         padding_mask: 可选填充掩码，True 表示序列中的填充位置
         kv_cache: 可选 NetKVCache 对象，用于缓存键值对以加速推理
+        encoder_only: 如果为 True，则仅返回编码器输出和方差预测，而不进行解码器处理
 
     Outputs:
         note_prediction: 预测的音符存在概率，[batch_size, seq_len, 88]
@@ -478,8 +479,9 @@ class MidiNet(nn.Module):
         pitch_mean_target: Optional[torch.Tensor] = None,
         pitch_range_target: Optional[torch.Tensor] = None,
         padding_mask: Optional[torch.BoolTensor] = None,
-        kv_cache: Optional[NetKVCache] = None
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, NetKVCache]:
+        kv_cache: Optional[NetKVCache] = None,
+        encoder_only: bool = False
+    ) -> tuple[Optional[torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor, NetKVCache]:
         # 处理输入音高张量，准备进入编码器
         batch_size, seq_len, _ = x.shape
 
@@ -510,6 +512,10 @@ class MidiNet(nn.Module):
             predictor(x, padding_mask, None if kv_cache is None else kv_cache[1][kv_cache_idx])
             for kv_cache_idx, predictor in enumerate([self.note_count_predictor, self.pitch_mean_predictor, self.pitch_range_predictor])
         ])
+
+        # 如果只需要编码器输出，则直接返回
+        if encoder_only:
+            return None, *variance_prediction, (encoder_kv_cache, variance_kv_cache, None)
 
         # 使用目标值替代预测值（如果提供）
         variance = [

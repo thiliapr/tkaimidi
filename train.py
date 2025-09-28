@@ -193,7 +193,7 @@ def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np
 
 
 def midinet_loss(
-    piano_roll_pred: torch.Tensor,
+    piano_roll_pred: Optional[torch.Tensor],
     note_count_pred: torch.Tensor,
     pitch_mean_pred: torch.Tensor,
     pitch_range_pred: torch.Tensor,
@@ -224,8 +224,12 @@ def midinet_loss(
     Returns:
         返回四个损失张量的元组：(钢琴卷帘损失, 音符数量损失, 音高均值损失, 音高范围损失)
     """
-    def masked_loss(pred: torch.Tensor, target: torch.Tensor, padding_mask: torch.BoolTensor, criterion: Callable[..., torch.Tensor]):
+    def masked_loss(pred: Optional[torch.Tensor], target: torch.Tensor, padding_mask: torch.BoolTensor, criterion: Callable[..., torch.Tensor]):
         "计算掩码区域的损失，仅对有效帧求平均"
+        # 处理预测为 None 的情况
+        if pred is None:
+            return torch.tensor(0, device=target.device)
+
         # 计算逐元素损失 [batch_size, seq_len, ...]
         elementwise_loss = criterion(pred, target, reduction="none")
 
@@ -243,7 +247,7 @@ def midinet_loss(
         return masked_loss.sum(dim=[1, 2]) / (~expanded_mask).sum(dim=[1, 2])
 
     # 计算各分量损失
-    piano_roll_loss = masked_loss(piano_roll_pred, piano_roll_target.to(dtype=piano_roll_pred.dtype), padding_mask, F.binary_cross_entropy_with_logits)
+    piano_roll_loss = masked_loss(piano_roll_pred, piano_roll_target.to(dtype=piano_roll_target.dtype), padding_mask, F.binary_cross_entropy_with_logits)
     note_count_loss, pitch_mean_loss, pitch_range_loss = [
         masked_loss(pred * variance_weight, target * variance_weight, padding_mask, F.mse_loss)
         for pred, target in [
@@ -254,7 +258,7 @@ def midinet_loss(
     ]
 
     # 返回各分量损失
-    return piano_roll_loss, note_count_loss, pitch_mean_loss, pitch_range_loss
+    return piano_roll_loss.to(dtype=note_count_loss.dtype), note_count_loss, pitch_mean_loss, pitch_range_loss
 
 
 def visualize_music_comparison(
@@ -332,7 +336,8 @@ def train(
     piano_roll_length: int,
     logging_interval: int,
     accumulation_steps: int = 1,
-    device: torch.device = torch.device("cpu")
+    encoder_only: bool = False,
+    device: torch.device = "cpu"
 ):
     """
     训练 MidiNet 模型的主函数，支持梯度累积和混合精度训练
@@ -347,8 +352,9 @@ def train(
         completed_iters: 已经完成多少次迭代，记录损失用
         writer: TensorBoard 日志写入器，用于记录训练过程
         piano_roll_length: 可视化时钢琴卷帘的最大显示长度
-        logging_interval: 记录日志和生成可视化的间隔步数
         accumulation_steps: 梯度累积步数
+        logging_interval: 记录日志和生成可视化的间隔步数
+        encoder_only: 如果为 True，则只训练编码器部分
         device: 训练设备（默认使用 CPU）
     """
     # 设置模型为训练模式
@@ -373,7 +379,7 @@ def train(
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
-            piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1])  # 模型前向传播（使用教师强制）
+            piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1], encoder_only=encoder_only)  # 模型前向传播（使用教师强制）
             all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:], model.variance_bins - 1)  # 计算损失
             piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() / accumulation_steps for loss in all_loss)  # 计算整个批次的损失
             value = piano_roll_loss + note_counts_loss + pitch_means_loss + pitch_ranges_loss
@@ -437,7 +443,8 @@ def train(
 def validate(
     model: MidiNet,
     dataloader: DataLoader,
-    device: torch.device = torch.device("cpu")
+    encoder_only: bool = False,
+    device: torch.device = "cpu"
 ) -> tuple[tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]], list[tuple[float, float, float, float]]]:
     """
     在验证集上评估 MidiNet 模型的性能，计算模型在验证集上的各项损失值
@@ -447,6 +454,7 @@ def validate(
     Args:
         model: 要验证的 MidiNet 模型实例
         dataloader: 验证集的数据加载器，提供批次数据
+        encoder_only: 如果为 True，则只使用编码器部分进行验证
         device: 计算设备，用于指定模型和数据所在的硬件设备
 
     Returns:
@@ -471,7 +479,7 @@ def validate(
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
             # 模型前向传播（不使用教师强制）
-            piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], padding_mask=padding_mask[:, :-1])
+            piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], padding_mask=padding_mask[:, :-1], encoder_only=encoder_only)
 
             # 计算损失
             all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:], model.variance_bins - 1)
@@ -517,6 +525,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
     parser.add_argument("-pr", "--piano-roll-length", default=DEFAULT_PIANO_ROLL_LENGTH, type=int, help="记录预测-目标钢琴卷帘时，最大允许的长度，超过该长度的钢琴卷帘将会被截取，默认为 %(default)s")
     parser.add_argument("-li", "--logging-interval", default=256, type=int, help="训练时，记录日志和生成可视化的间隔步数，默认为 %(default)s")
+    parser.add_argument("-eo", "--encoder-only", action="store_true", help="如果设置该标志，则只训练编码器部分")
     return parser.parse_args(args)
 
 
@@ -570,11 +579,11 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.piano_roll_length, args.logging_interval, args.accumulation_steps, device=device)
+        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.piano_roll_length, args.logging_interval, args.accumulation_steps, args.encoder_only, device)
 
         # 验证模型效果
         val_sampler.set_epoch(current_epoch)
-        (val_pred, val_target), val_loss = validate(model, val_loader, device)
+        (val_pred, val_target), val_loss = validate(model, val_loader, args.encoder_only, device)
 
         # 随机截取指定长度的钢琴卷帘用于可视化
         start_pos = random.randint(0, max(0, len(val_pred[0]) - args.piano_roll_length))
