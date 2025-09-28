@@ -243,7 +243,7 @@ def midinet_loss(
         return masked_loss.sum(dim=[1, 2]) / (~expanded_mask).sum(dim=[1, 2])
 
     # 计算各分量损失
-    piano_roll_loss = masked_loss(piano_roll_pred, piano_roll_target.to(dtype=piano_roll_target.dtype), padding_mask, F.binary_cross_entropy_with_logits)
+    piano_roll_loss = masked_loss(piano_roll_pred, piano_roll_target.to(dtype=piano_roll_pred.dtype), padding_mask, F.binary_cross_entropy_with_logits)
     note_count_loss, pitch_mean_loss, pitch_range_loss = [
         masked_loss(pred * variance_weight, target * variance_weight, padding_mask, F.mse_loss)
         for pred, target in [
@@ -254,7 +254,7 @@ def midinet_loss(
     ]
 
     # 返回各分量损失
-    return piano_roll_loss.to(dtype=note_count_loss.dtype), note_count_loss, pitch_mean_loss, pitch_range_loss
+    return piano_roll_loss, note_count_loss, pitch_mean_loss, pitch_range_loss
 
 
 def visualize_music_comparison(
