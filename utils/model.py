@@ -212,9 +212,9 @@ class PitchFeatureEncoderLayer(nn.Module):
     工作流程：
     1. 输入张量首先通过 ScaleNorm 进行归一化
     2. 使用多头自注意力机制计算注意力权重并生成注意力输出
-    3. 将原始输入与注意力输出进行残差连接
+    3. 将原始输入与注意力输出进行缩放残差连接
     4. 再次通过 ScaleNorm 归一化后，使用两个卷积层进行前馈处理
-    5. 将前馈输出与原始输入进行残差连接，得到最终输出
+    5. 将前馈输出与原始输入进行缩放残差连接，得到最终输出
 
     Inputs:
         x: 输入特征张量，形状为 [batch_size, 88, dim_model]
@@ -232,9 +232,11 @@ class PitchFeatureEncoderLayer(nn.Module):
         self.conv1 = nn.Conv1d(dim_model, dim_feedforward, conv1_kernel_size, padding="same", device=device)
         self.conv2 = nn.Conv1d(dim_feedforward, dim_model, conv2_kernel_size, padding="same", device=device)
 
-        # 归一化
+        # 归一化与缩放
         self.attention_norm = ScaleNorm(dim_model, device=device)
         self.feedforward_norm = ScaleNorm(dim_model, device=device)
+        self.attention_scale = nn.Parameter(torch.zeros(1, device=device))
+        self.feedforward_scale = nn.Parameter(torch.zeros(1, device=device))
 
         # Dropout 层
         self.dropout = nn.Dropout(dropout)
@@ -247,11 +249,11 @@ class PitchFeatureEncoderLayer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # 多头注意力计算
         attn_output, _ = self.attention(self.attention_norm(x), None, False, None)
-        x = x + self.dropout(attn_output)
+        x = x + self.dropout(attn_output * self.attention_scale)
 
         # 前馈网络计算
         ff_output = self.conv2(F.mish(self.conv1(self.feedforward_norm(x).transpose(1, 2)))).transpose(1, 2)
-        x = x + self.dropout(ff_output)
+        x = x + self.dropout(ff_output * self.feedforward_scale)
         return x
 
 
@@ -299,6 +301,8 @@ class GPT2Block(nn.Module):
         # 归一化
         self.attention_norm = ScaleNorm(dim_model, device=device)
         self.feedforward_norm = ScaleNorm(dim_model, device=device)
+        self.attention_scale = nn.Parameter(torch.zeros(1, device=device))
+        self.feedforward_scale = nn.Parameter(torch.zeros(1, device=device))
 
         # Dropout 层
         self.dropout = nn.Dropout(dropout)
@@ -311,11 +315,11 @@ class GPT2Block(nn.Module):
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor, kv_cache: Optional[AttentionKVCache]) -> tuple[torch.Tensor, AttentionKVCache]:
         # 多头注意力计算
         attn_output, kv_cache = self.attention(self.attention_norm(x), padding_mask, True, kv_cache)
-        x = x + self.dropout(attn_output)
+        x = x + self.dropout(attn_output * self.attention_scale)
 
         # 前馈网络计算
         ff_output = self.linear2(F.mish(self.linear1(self.feedforward_norm(x))))
-        x = x + self.dropout(ff_output)
+        x = x + self.dropout(ff_output * self.feedforward_scale)
         return x, kv_cache
 
 
