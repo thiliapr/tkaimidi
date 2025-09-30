@@ -407,6 +407,21 @@ def train(
             ]:
                 writer.add_scalars(f"Loss/{loss_name}", {"Train": loss_value}, global_step)
 
+            # 记录 Transformer 层的注意力和前馈网络的缩放
+            for module_name, module in [
+                ("Pitch Feature Encoder", model.pitch_feature_encoder),
+                ("Encoder", model.encoder),
+                ("Note Count Predictor", model.note_count_predictor.layers),
+                ("Pitch Mean Predictor", model.pitch_mean_predictor.layers),
+                ("Pitch Range Predictor", model.pitch_range_predictor.layers),
+                ("Decoder", model.decoder),
+            ]:
+                for layer_idx, layer in enumerate(module):
+                    writer.add_scalars(f"Scale/{module_name}", {
+                        f"{layer_idx}.feedforward": layer.feedforward_scale.item(),
+                        f"{layer_idx}.attention": layer.attention_scale.item()
+                    }, global_step)
+
             # 重置累积损失
             acc_piano_roll_loss = acc_note_counts_loss = acc_pitch_means_loss = acc_pitch_ranges_loss = 0
 
