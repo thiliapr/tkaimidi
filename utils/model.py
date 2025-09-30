@@ -250,7 +250,8 @@ class PitchFeatureEncoderLayer(nn.Module):
         x = x + self.dropout(attn_output)
 
         # 前馈网络计算
-        x = x + self.dropout(self.conv2(F.mish(self.conv1(self.feedforward_norm(x.transpose(1, 2)))))).transpose(1, 2)
+        ff_output = self.conv2(F.mish(self.conv1(self.feedforward_norm(x).transpose(1, 2)))).transpose(1, 2)
+        x = x + self.dropout(ff_output)
         return x
 
 
@@ -313,7 +314,8 @@ class GPT2Block(nn.Module):
         x = x + self.dropout(attn_output)
 
         # 前馈网络计算
-        x = x + self.dropout(self.linear2(F.mish(self.linear1(self.feedforward_norm(x)))))
+        ff_output = self.linear2(F.mish(self.linear1(self.feedforward_norm(x))))
+        x = x + self.dropout(ff_output)
         return x, kv_cache
 
 
