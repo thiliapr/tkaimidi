@@ -348,8 +348,8 @@ def train(
         completed_iters: 已经完成多少次迭代，记录损失用
         writer: TensorBoard 日志写入器，用于记录训练过程
         piano_roll_length: 可视化时钢琴卷帘的最大显示长度
-        accumulation_steps: 梯度累积步数
         logging_interval: 记录日志和生成可视化的间隔步数
+        accumulation_steps: 梯度累积步数
         encoder_only: 如果为 True，则只训练编码器部分
         device: 训练设备（默认使用 CPU）
     """
@@ -378,7 +378,7 @@ def train(
             piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1], encoder_only=encoder_only)  # 模型前向传播（使用教师强制）
             all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:], model.variance_bins - 1)  # 计算损失
             piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() / accumulation_steps for loss in all_loss)  # 计算整个批次的损失
-            value = piano_roll_loss * encoder_only + note_counts_loss + pitch_means_loss + pitch_ranges_loss
+            value = piano_roll_loss * (not encoder_only) + note_counts_loss + pitch_means_loss + pitch_ranges_loss
 
         # 梯度缩放与反向传播
         scaler.scale(value).backward()
