@@ -333,6 +333,7 @@ def train(
     logging_interval: int,
     accumulation_steps: int = 1,
     encoder_only: bool = False,
+    decoder_only: bool = False,
     device: torch.device = "cpu"
 ):
     """
@@ -351,6 +352,7 @@ def train(
         logging_interval: 记录日志和生成可视化的间隔步数
         accumulation_steps: 梯度累积步数
         encoder_only: 如果为 True，则只训练编码器部分
+        decoder_only: 如果为 True，则只训练解码器部分
         device: 训练设备（默认使用 CPU）
     """
     # 设置模型为训练模式
@@ -378,7 +380,7 @@ def train(
             piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1], encoder_only=encoder_only)  # 模型前向传播（使用教师强制）
             all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:], model.variance_bins - 1)  # 计算损失
             piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() / accumulation_steps for loss in all_loss)  # 计算整个批次的损失
-            value = piano_roll_loss * (not encoder_only) + note_counts_loss + pitch_means_loss + pitch_ranges_loss
+            value = piano_roll_loss * (not encoder_only) + (note_counts_loss + pitch_means_loss + pitch_ranges_loss) * (not decoder_only)
 
         # 梯度缩放与反向传播
         scaler.scale(value).backward()
@@ -537,10 +539,15 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-pr", "--piano-roll-length", default=DEFAULT_PIANO_ROLL_LENGTH, type=int, help="记录预测-目标钢琴卷帘时，最大允许的长度，超过该长度的钢琴卷帘将会被截取，默认为 %(default)s")
     parser.add_argument("-li", "--logging-interval", default=256, type=int, help="训练时，记录日志和生成可视化的间隔步数，默认为 %(default)s")
     parser.add_argument("-eo", "--encoder-only", action="store_true", help="如果设置该标志，则只训练编码器部分")
+    parser.add_argument("-do", "--decoder-only", action="store_true", help="如果设置该标志，则只训练解码器部分")
     return parser.parse_args(args)
 
 
 def main(args: argparse.Namespace):
+    # 检查参数合法性
+    if args.encoder_only and args.decoder_only:
+        raise ValueError("不能同时设置 --encoder-only 和 --decoder-only")
+
     # 设置当前进程的设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -563,6 +570,12 @@ def main(args: argparse.Namespace):
     for group in optimizer.param_groups:
         group["lr"] = args.learning_rate
         group["weight_decay"] = args.weight_decay
+
+    # 如果只训练解码器，则冻结编码器相关参数
+    if args.decoder_only:
+        for module in [model.note_embedding, model.pitch_feature_encoder, model.encoder, model.note_count_predictor, model.pitch_mean_predictor, model.pitch_range_predictor]:
+            for parameter in module.parameters():
+                parameter.requires_grad_(False)
 
     # 创建混合精度梯度缩放器并加载状态
     scaler = GradScaler(device)
@@ -590,7 +603,7 @@ def main(args: argparse.Namespace):
 
         # 训练一轮模型
         train_sampler.set_epoch(current_epoch)
-        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.piano_roll_length, args.logging_interval, args.accumulation_steps, args.encoder_only, device)
+        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.piano_roll_length, args.logging_interval, args.accumulation_steps, args.encoder_only, args.decoder_only, device)
 
         # 验证模型效果
         val_sampler.set_epoch(current_epoch)
