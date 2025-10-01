@@ -68,7 +68,7 @@ class MultiheadAttention(nn.Module):
         updated_kv_cache: 更新后的键值缓存元组
     """
 
-    def __init__(self, dim_head: int, num_heads: int, dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, dim_head: int, num_heads: int, rope_base: float = 10000., dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
         self.dim_head = dim_head
         self.num_heads = num_heads
@@ -82,7 +82,7 @@ class MultiheadAttention(nn.Module):
         self.out_proj = nn.Linear(dim_model, dim_model, device=device)
 
         # RoPE 旋转频率
-        self.inv_freq = nn.Buffer(1.0 / (10000 ** (torch.arange(0, dim_head, 2, device=device) / dim_head)), persistent=False)
+        self.inv_freq = nn.Buffer(1.0 / (rope_base ** (torch.arange(0, dim_head, 2, device=device) / dim_head)), persistent=False)
 
         # freqs_cis 缓存
         self.freqs_cis_cache = nn.Buffer(torch.empty(0, dim_head // 2, device=device), persistent=False)
@@ -228,7 +228,7 @@ class PitchFeatureEncoderLayer(nn.Module):
         dim_model = dim_head * num_heads  # 总模型维度
 
         # 自注意力和前馈网络
-        self.attention = MultiheadAttention(dim_head, num_heads, dropout, device=device)
+        self.attention = MultiheadAttention(dim_head, num_heads, 88 * 4, dropout, device=device)
         self.conv1 = nn.Conv1d(dim_model, dim_feedforward, conv1_kernel_size, padding="same", device=device)
         self.conv2 = nn.Conv1d(dim_feedforward, dim_model, conv2_kernel_size, padding="same", device=device)
 
