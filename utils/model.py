@@ -340,6 +340,7 @@ class VariancePredictor(nn.Module):
         dim_head: 每个注意力头的维度大小
         num_heads: 注意力头的数量
         dim_feedforward: 前馈神经网络的隐藏层维度
+        num_layers: GPT2Block 层的数量
         dropout: Dropout 概率，用于防止过拟合
         device: 模型运行的设备
 
@@ -353,10 +354,10 @@ class VariancePredictor(nn.Module):
         layers_kv_cache: 各层的键值缓存列表
     """
 
-    def __init__(self, dim_head: int, num_heads: int, dim_feedforward: int, dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, dim_head: int, num_heads: int, dim_feedforward: int, num_layers: int, dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
         # 创建 GPT-2 块组成的序列
-        self.layers = nn.ModuleList(GPT2Block(dim_head, num_heads, dim_feedforward, dropout, device) for _ in range(2))
+        self.layers = nn.ModuleList(GPT2Block(dim_head, num_heads, dim_feedforward, dropout, device) for _ in range(num_layers))
 
         # 输出层将多头注意力输出映射为单维度预测
         self.output_layer = nn.Linear(dim_head * num_heads, 1, device=device)
@@ -393,6 +394,7 @@ class MidiNetConfig(NamedTuple):
         pitch_conv2_kernel: 音高特征编码器中第二个卷积层的卷积核大小
         variance_bins: 音符特征离散化的精细度
         num_pitch_layers: 音高特征编码器层的数量
+        num_variance_layers: 方差预测器中 GPT2Block 层的数量
         num_encoder_layers: 编码器层的数量
         num_decoder_layers: 解码器层的数量
     """
@@ -406,6 +408,7 @@ class MidiNetConfig(NamedTuple):
     pitch_conv2_kernel: int
     variance_bins: int
     num_pitch_layers: int
+    num_variance_layers: int
     num_encoder_layers: int
     num_decoder_layers: int
 
@@ -445,6 +448,7 @@ class MidiNet(nn.Module):
     def __init__(self, config: MidiNetConfig, pitch_dropout: float = 0, encoder_dropout: float = 0., decoder_dropout: float = 0., variance_predictor_dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
         dim_model = config.dim_head * config.num_heads  # 总模型维度
+        self.variance_bins = config.variance_bins
 
         # 音符嵌入和音高聚合器
         # 这里为什么不用 nn.Embedding(88, dim_model) 呢？因为这会使模型认为 88 个音高都是不同的
@@ -461,13 +465,14 @@ class MidiNet(nn.Module):
         self.decoder = nn.ModuleList(GPT2Block(config.dim_head, config.num_heads, config.dim_feedforward, decoder_dropout, device) for _ in range(config.num_decoder_layers))
 
         # 音符数量、音高平均值、音高范围预测器和嵌入
-        self.variance_bins = config.variance_bins
-        self.note_count_predictor = VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, variance_predictor_dropout, device=device)
-        self.note_count_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
-        self.pitch_mean_predictor = VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, variance_predictor_dropout, device=device)
-        self.pitch_mean_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
-        self.pitch_range_predictor = VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, variance_predictor_dropout, device=device)
-        self.pitch_range_embedding = nn.Embedding(self.variance_bins, dim_model, device=device)
+        self.note_count_predictor, self.note_count_embedding, self.pitch_mean_predictor, self.pitch_mean_embedding, self.pitch_range_predictor, self.pitch_range_embedding = [
+            module
+            for _ in range(3)
+            for module in [
+                VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, config.num_variance_layers, variance_predictor_dropout, device=device),
+                nn.Embedding(config.variance_bins, dim_model, device=device)
+            ]
+        ]
 
         # 音符预测器
         self.note_predictor = nn.Linear(dim_model, 88, device=device)
@@ -480,7 +485,7 @@ class MidiNet(nn.Module):
 
     def forward(
         self,
-        x: torch.BoolTensor,
+        x: torch.Tensor,
         note_count_target: Optional[torch.Tensor] = None,
         pitch_mean_target: Optional[torch.Tensor] = None,
         pitch_range_target: Optional[torch.Tensor] = None,

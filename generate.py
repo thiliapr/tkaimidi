@@ -17,7 +17,7 @@ from utils.model import MidiNet
 from utils.midi import midi_to_notes, notes_to_piano_roll, piano_roll_to_notes, notes_to_track
 
 
-@torch.inference_mode
+@torch.inference_mode()
 def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progress: bool = True):
     """
     使用 MidiNet 模型逐步生成音乐帧序列。
@@ -40,7 +40,10 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
         >>> output, note_counts, pitch_means, pitch_ranges = generate(model, prompt, 100)
     """
     # 在提示序列前添加全零起始帧
-    prompt = torch.cat([torch.zeros([prompt.size(0), 1, 88], dtype=torch.float32, device=prompt.device), prompt.to(dtype=torch.float32)], dim=1)
+    prompt = torch.cat([
+        torch.zeros(prompt.size(0), 1, 88, device=prompt.device),
+        prompt
+    ], dim=1)
 
     # 初始化 KV Cache 和预测结果容器
     kv_cache = None
@@ -53,7 +56,7 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
         # 首次使用完整提示，后续仅使用最后一帧
         model_input = prompt if kv_cache is None else prompt[:, -1:]
         note_pred, note_count_pred, pitch_mean_pred, pitch_range_pred, kv_cache = model(
-            F.sigmoid(model_input) > 0.5,
+            model_input,
             kv_cache=kv_cache
         )
 
@@ -63,9 +66,9 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
         pitch_range_preds = torch.cat([pitch_range_preds, pitch_range_pred], dim=1)
 
         # 将预测添加到序列中
-        prompt = torch.cat([prompt, note_pred], dim=1)
+        prompt = torch.cat([prompt, F.sigmoid(note_pred)], dim=1)
 
-    return F.sigmoid(prompt[:, 1:]), note_count_preds, pitch_mean_preds, pitch_range_preds
+    return prompt[:, 1:], note_count_preds, pitch_mean_preds, pitch_range_preds
 
 
 def plot_piano_roll(piano_roll: np.ndarray, note_count: np.ndarray, pitch_mean: np.ndarray, pitch_range: np.ndarray, ax: plt.Axes):

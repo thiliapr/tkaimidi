@@ -131,6 +131,7 @@ def extract_config(model_state: dict[str, Any], pitch_num_heads: int, num_heads:
     dim_feedforward = model_state["encoder.0.linear1.weight"].size(0)
     varaince_bins = model_state["pitch_mean_embedding.weight"].size(0)
     num_pitch_layers = len({key.split(".")[1] for key in model_state if key.startswith("pitch_feature_encoder.")})
+    num_variance_layers = len({key.split(".")[2] for key in model_state if key.startswith("pitch_mean_predictor.layers.")})
     num_encoder_layers = len({key.split(".")[1] for key in model_state if key.startswith("encoder.")})
     num_decoder_layers = len({key.split(".")[1] for key in model_state if key.startswith("decoder.")})
-    return MidiNetConfig(pitch_num_heads, pitch_dim_head, pitch_dim_feedforward, num_heads, dim_head, dim_feedforward, pitch_conv1_kernel, pitch_conv2_kernel, varaince_bins, num_pitch_layers, num_encoder_layers, num_decoder_layers)
+    return MidiNetConfig(pitch_num_heads, pitch_dim_head, pitch_dim_feedforward, num_heads, dim_head, dim_feedforward, pitch_conv1_kernel, pitch_conv2_kernel, varaince_bins, num_pitch_layers, num_variance_layers, num_encoder_layers, num_decoder_layers)

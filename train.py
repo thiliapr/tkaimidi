@@ -450,7 +450,7 @@ def train(
             visualize_music_comparison(pred, target, f"Piano Roll/Train/Iteration {(step // accumulation_steps) + 1}", writer)
 
 
-@torch.inference_mode
+@torch.inference_mode()
 def validate(
     model: MidiNet,
     dataloader: DataLoader,
