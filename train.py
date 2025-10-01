@@ -418,8 +418,8 @@ def train(
             ]:
                 for layer_idx, layer in enumerate(module):
                     writer.add_scalars(f"Scale/{module_name}", {
-                        f"{layer_idx}.feedforward": layer.feedforward_scale.item(),
-                        f"{layer_idx}.attention": layer.attention_scale.item()
+                        f"{layer_idx}.feedforward": layer.feedforward_scale.abs().item(),
+                        f"{layer_idx}.attention": layer.attention_scale.abs().item()
                     }, global_step)
 
             # 重置累积损失
