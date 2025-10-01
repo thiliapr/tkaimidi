@@ -39,7 +39,8 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
         >>> prompt = torch.randn(1, 10, 88)
         >>> output, note_counts, pitch_means, pitch_ranges = generate(model, prompt, 100)
     """
-    # 在提示序列前添加全零起始帧
+    # 在提示序列前添加全零起始帧，并保存初始提示长度用于截断
+    prompt_len = 1 + prompt.size(1)
     prompt = torch.cat([
         torch.zeros(prompt.size(0), 1, 88, device=prompt.device),
         prompt
@@ -68,7 +69,7 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
         # 将预测添加到序列中
         prompt = torch.cat([prompt, F.sigmoid(note_pred)], dim=1)
 
-    return prompt[:, 1:], note_count_preds, pitch_mean_preds, pitch_range_preds
+    return prompt[:, prompt_len:], note_count_preds, pitch_mean_preds, pitch_range_preds
 
 
 def plot_piano_roll(piano_roll: np.ndarray, note_count: np.ndarray, pitch_mean: np.ndarray, pitch_range: np.ndarray, ax: plt.Axes):
