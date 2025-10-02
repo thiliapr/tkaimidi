@@ -18,6 +18,8 @@ def convert(
     max_frames: int,
     min_notes: int,
     frame_length: int,
+    smoothing_kernel_size: int,
+    smoothing_sigma: float,
     smoothing_iterations: int
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
     """
@@ -39,6 +41,8 @@ def convert(
         max_frames: 允许的最大时间帧数，用于过滤过长的 MIDI 文件
         min_notes: 要求的最小音符数量，用于过滤音符过少的 MIDI 文件
         frame_length: 滑动窗口的帧长度，用于计算局部特征
+        smoothing_kernel_size: 高斯平滑卷积核的大小
+        smoothing_sigma: 高斯平滑的标准差，控制平滑程度
         smoothing_iterations: 特征平滑的迭代次数
 
     Returns:
@@ -50,6 +54,9 @@ def convert(
         8964
     """
     dataset = []
+
+    # 准备高斯卷积核
+    smoothing_kernel = np.exp(-0.5 * (np.arange(smoothing_kernel_size) - (smoothing_kernel_size - 1) / 2) ** 2 / smoothing_sigma ** 2)
 
     # 使用进度条显示处理进度
     for filepath in tqdm(midi_files):
@@ -100,10 +107,9 @@ def convert(
                 pitch_ranges[time] = last_range
 
         # 使用卷积平滑特征曲线，方便神经网络训练
-        smoothing_kernel = [0.1, 0.2, 0.4, 0.2, 0.1]
         for _ in range(smoothing_iterations):
             note_counts, pitch_means, pitch_ranges = [
-                np.convolve(np.pad(feature, (2, 2), "edge"), smoothing_kernel, "valid")
+                np.convolve(np.pad(feature, ((smoothing_kernel_size - 1) // 2, (smoothing_kernel_size - 1) // 2), "edge"), smoothing_kernel, "valid")
                 for feature in [note_counts, pitch_means, pitch_ranges]
             ]
 
@@ -140,8 +146,10 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("splits", type=str, nargs="+", help="输出文件名和拆分比例，格式为`filename:proportion`，如`train:9`和`val:1`")
     parser.add_argument("--min-notes", type=int, default=64, help="MIDI 文件中至少包含的音符数量，默认值为 %(default)s")
     parser.add_argument("--max-frames", type=int, default=8964, help="钢琴卷帘表示中允许的最大时间帧数，默认值为 %(default)s")
-    parser.add_argument("--frame-length", type=int, default=23, help="用于计算音符统计特征的滑动窗口帧长度，默认值为 %(default)s")
-    parser.add_argument("--smoothing-iterations", type=int, default=5, help="用于平滑音符统计特征的卷积迭代次数，默认值为 %(default)s")
+    parser.add_argument("--frame-length", type=int, default=33, help="用于计算音符统计特征的滑动窗口帧长度，默认值为 %(default)s")
+    parser.add_argument("--smoothing-kernel-size", type=int, default=33, help="高斯平滑卷积核的大小，必须为奇数，默认值为 %(default)s")
+    parser.add_argument("--smoothing-sigma", type=float, default=1.0, help="高斯平滑的标准差，控制平滑程度，默认值为 %(default)s")
+    parser.add_argument("--smoothing-iterations", type=int, default=16, help="用于平滑音符统计特征的卷积迭代次数，默认值为 %(default)s")
     return parser.parse_args(args)
 
 
@@ -149,6 +157,8 @@ def main(args: argparse.Namespace):
     # 验证提取配置
     if args.frame_length < 0 or args.frame_length % 2 == 0:
         raise Exception("滑动窗口帧长度 --frame-length 必须正数且奇数")
+    if args.smoothing_kernel_size < 0 or args.smoothing_kernel_size % 2 == 0:
+        raise Exception("高斯平滑卷积核的大小 --smoothing-kernel-size 必须正数且奇数")
 
     # 遍历数据集文件
     midi_files = [
@@ -170,7 +180,7 @@ def main(args: argparse.Namespace):
     print(f"正在转换 {len(midi_files)} 个 MIDI 文件 ...")
 
     # 预处理数据
-    dataset = convert(midi_files, args.max_frames, args.min_notes, args.frame_length, args.smoothing_iterations)
+    dataset = convert(midi_files, args.max_frames, args.min_notes, args.frame_length, args.smoothing_kernel_size, args.smoothing_sigma, args.smoothing_iterations)
 
     # 验证数据集大小是否满足拆分需求
     # 这里再次验证是因为之前预处理可能过滤了一部分无效数据，导致总数据量减少
