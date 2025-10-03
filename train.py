@@ -287,7 +287,7 @@ def visualize_music_comparison(
     Examples:
         >>> pred_data = piano_roll_pred, note_count_pred, pitch_mean_pred, pitch_range_pred
         >>> target_data = piano_roll_true, note_count_true, pitch_mean_true, pitch_range_true
-        >>> visualize_music_comparison(pred_data, target_data, "Epoch_1", writer)
+        >>> visualize_music_comparison(pred_data, target_data, "Epoch_1", 64, writer)
     """
     # 创建图像和坐标轴
     figure, (pred_piano_roll_ax, target_piano_roll_ax, note_count_ax, pitch_mean_ax, pitch_range_ax) = plt.subplots(5, 1, figsize=(12, 30))
