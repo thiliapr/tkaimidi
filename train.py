@@ -20,7 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
 from generate import plot_piano_roll
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_LOGGING_INTERVAL, DEFAULT_PIANO_ROLL_LENGTH, DEFAULT_PITCH_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_LOGGING_INTERVAL, DEFAULT_PIANO_ROLL_LENGTH, DEFAULT_PITCH_DROPOUT, DEFAULT_TRAIN_MAX_BATCH_TOKENS, DEFAULT_VAL_MAX_BATCH_TOKENS, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY
 from utils.model import MidiNet
 from utils.toolkit import convert_to_tensor, create_padding_mask
 
@@ -535,8 +535,8 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("ckpt_path", type=pathlib.Path, help="加载和保存检查点的路径")
     parser.add_argument("-t", "--train-dataset", type=pathlib.Path, required=True, help="训练集文件路径")
     parser.add_argument("-v", "--val-dataset", type=pathlib.Path, required=True, help="验证集文件路径")
-    parser.add_argument("-tt", "--train-max-batch-tokens", default=2048, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
-    parser.add_argument("-tv", "--val-max-batch-tokens", default=4096, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
+    parser.add_argument("-tt", "--train-max-batch-tokens", default=DEFAULT_TRAIN_MAX_BATCH_TOKENS, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
+    parser.add_argument("-tv", "--val-max-batch-tokens", default=DEFAULT_VAL_MAX_BATCH_TOKENS, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-lr", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率，默认为 %(default)s")
     parser.add_argument("-wd", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数，默认为 %(default)s")
     parser.add_argument("-de", "--encoder-dropout", default=DEFAULT_ENCODER_DROPOUT, type=float, help="编码器 Dropout 概率，默认为 %(default)s")
