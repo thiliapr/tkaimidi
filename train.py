@@ -261,6 +261,7 @@ def visualize_music_comparison(
     prediction: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     target: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     title: str,
+    variance_weight: int,
     writer: SummaryWriter
 ):
     """
@@ -277,6 +278,7 @@ def visualize_music_comparison(
         prediction: 模型预测结果的四元组，包含 (钢琴卷帘矩阵, 音符数量序列, 音高均值序列, 音高范围序列)
         target: 真实标签的四元组，包含与 prediction 相同结构的真实数据
         title: 图表在 TensorBoard 中显示的标题
+        variance_weight: 用于缩放统计特征的权重因子
         writer: TensorBoard 的 SummaryWriter 对象，用于记录图表
 
     Returns:
@@ -289,6 +291,12 @@ def visualize_music_comparison(
     """
     # 创建图像和坐标轴
     figure, (pred_piano_roll_ax, target_piano_roll_ax, note_count_ax, pitch_mean_ax, pitch_range_ax) = plt.subplots(5, 1, figsize=(12, 30))
+
+    # 将统计特征扩大到 variance_bins 尺度
+    prediction, target = [
+        features[:1] + [feature * variance_weight for feature in features[1:]]
+        for features in [prediction, target]
+    ]
 
     # 绘制预测和真实的钢琴卷帘对比图
     for ax, figure_title, piano_roll, note_count, pitch_mean, pitch_range in [
@@ -449,7 +457,7 @@ def train(
             ]
 
             # 绘制在训练集上，预测钢琴卷帘和目标钢琴卷帘对比图
-            visualize_music_comparison(pred, target, f"Piano Roll/Train/Iteration {(step // accumulation_steps) + 1}", writer)
+            visualize_music_comparison(pred, target, f"Piano Roll/Train/Iteration {(step // accumulation_steps) + 1}", model.variance_bins - 1, writer)
 
 
 @torch.inference_mode()
@@ -617,7 +625,7 @@ def main(args: argparse.Namespace):
         ]
 
         # 绘制在验证集上，预测钢琴卷帘和目标钢琴卷帘对比图
-        visualize_music_comparison(val_pred, val_target, f"Piano Roll/Validate/Epoch {current_epoch + 1}", writer)
+        visualize_music_comparison(val_pred, val_target, f"Piano Roll/Validate/Epoch {current_epoch + 1}", model.variance_bins - 1, writer)
 
         # 绘制验证损失分布直方图，记录验证损失
         for loss_idx, loss_name in enumerate(["Piano Roll", "Note Count", "Pitch Mean", "Pitch Range"]):
