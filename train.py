@@ -20,7 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
 from generate import plot_piano_roll
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_PIANO_ROLL_LENGTH, DEFAULT_PITCH_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_LOGGING_INTERVAL, DEFAULT_PIANO_ROLL_LENGTH, DEFAULT_PITCH_DROPOUT, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY
 from utils.model import MidiNet
 from utils.toolkit import convert_to_tensor, create_padding_mask
 
@@ -537,7 +537,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-dp", "--pitch-dropout", default=DEFAULT_PITCH_DROPOUT, type=float, help="音高特征编码器 Dropout 概率，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
     parser.add_argument("-pr", "--piano-roll-length", default=DEFAULT_PIANO_ROLL_LENGTH, type=int, help="记录预测-目标钢琴卷帘时，最大允许的长度，超过该长度的钢琴卷帘将会被截取，默认为 %(default)s")
-    parser.add_argument("-li", "--logging-interval", default=256, type=int, help="训练时，记录日志和生成可视化的间隔步数，默认为 %(default)s")
+    parser.add_argument("-li", "--logging-interval", default=DEFAULT_LOGGING_INTERVAL, type=int, help="训练时，记录日志和生成可视化的间隔步数，默认为 %(default)s")
     parser.add_argument("-eo", "--encoder-only", action="store_true", help="如果设置该标志，则只训练编码器部分")
     parser.add_argument("-do", "--decoder-only", action="store_true", help="如果设置该标志，则只训练解码器部分")
     return parser.parse_args(args)
