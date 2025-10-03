@@ -9,9 +9,9 @@ from torch import nn
 from torch.nn import functional as F
 
 AttentionKVCache = tuple[torch.Tensor, torch.Tensor]
-GPT2BlocksKVCache = list[AttentionKVCache]
-VarianceKVCache = tuple[GPT2BlocksKVCache, GPT2BlocksKVCache, GPT2BlocksKVCache]
-NetKVCache = tuple[GPT2BlocksKVCache, VarianceKVCache, Optional[GPT2BlocksKVCache]]
+GPTBlocksKVCache = list[AttentionKVCache]
+VarianceKVCache = tuple[GPTBlocksKVCache, GPTBlocksKVCache, GPTBlocksKVCache]
+NetKVCache = tuple[GPTBlocksKVCache, VarianceKVCache, Optional[GPTBlocksKVCache]]
 
 
 class ScaleNorm(nn.Module):
@@ -257,9 +257,9 @@ class PitchFeatureEncoderLayer(nn.Module):
         return x
 
 
-class GPT2Block(nn.Module):
+class GPTBlock(nn.Module):
     """
-    GPT2Block 是一个基于多头注意力和前馈网络的模块，主要用于处理序列数据。它包含自注意力机制和前馈网络，并使用缩放归一化来增强模型的稳定性。
+    GPTBlock 是一个基于多头注意力和前馈网络的模块，主要用于处理序列数据。它包含自注意力机制和前馈网络，并使用缩放归一化来增强模型的稳定性。
 
     工作流程如下：
         1. 输入张量通过多头注意力机制进行处理，计算注意力输出。
@@ -288,11 +288,11 @@ class GPT2Block(nn.Module):
         dim_model = dim_head * num_heads  # 总模型维度
 
         # 自注意力和前馈网络
-        # PitchFeatureEncoderLayer 使用卷积层而 GPT2Block 不使用的原因是，卷积层（这里指的是因果卷积）不适合增量生成
+        # PitchFeatureEncoderLayer 使用卷积层而 GPTBlock 不使用的原因是，卷积层（这里指的是因果卷积）不适合增量生成
         # 具体来说，卷积会扩充感受野，比如 conv(kernel_size=3) 需要 seq_len=3 的 x
         # 对于前馈层，两个卷积层叠加，假设两个卷积核分别是 3 和 5，第二个卷积层需要第一个卷积层的输出时间长度为 5
         # 而第二个卷积层所需要的 x[-5] 来自第一个卷积层的 x[-7]，也就是说，需要给第一个卷积层提供 seq_len=7 的 x
-        # 如果是多个 GPT2Block 层叠加，计算量将会变得非常大，那么我不就增量了个寂寞？
+        # 如果是多个 GPTBlock 层叠加，计算量将会变得非常大，那么我不就增量了个寂寞？
         # 而且整个模型会变得十分 ... 逻辑混乱，让我们使用 Linear 而不是 Conv 使其保持简单
         self.attention = MultiheadAttention(dim_head, num_heads, dropout, device=device)
         self.linear1 = nn.Linear(dim_model, dim_feedforward, device=device)
@@ -330,8 +330,8 @@ class VariancePredictor(nn.Module):
     通过 GPT-2 块提取特征，最后通过线性层输出单维度的预测值。
 
     该模块的工作流程如下：
-    1. 输入序列数据通过 GPT2Block 层进行特征提取
-    2. 每个 GPT2Block 层都包含多头自注意力机制和前馈神经网络
+    1. 输入序列数据通过 GPTBlock 层进行特征提取
+    2. 每个 GPTBlock 层都包含多头自注意力机制和前馈神经网络
     3. 使用残差连接和层归一化来稳定训练过程
     4. 最终通过线性输出层将特征映射为单维度预测值
     5. 支持键值缓存机制以提高推理效率
@@ -340,7 +340,7 @@ class VariancePredictor(nn.Module):
         dim_head: 每个注意力头的维度大小
         num_heads: 注意力头的数量
         dim_feedforward: 前馈神经网络的隐藏层维度
-        num_layers: GPT2Block 层的数量
+        num_layers: GPTBlock 层的数量
         dropout: Dropout 概率，用于防止过拟合
         device: 模型运行的设备
 
@@ -357,7 +357,7 @@ class VariancePredictor(nn.Module):
     def __init__(self, dim_head: int, num_heads: int, dim_feedforward: int, num_layers: int, dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
         # 创建 GPT-2 块组成的序列
-        self.layers = nn.ModuleList(GPT2Block(dim_head, num_heads, dim_feedforward, dropout, device) for _ in range(num_layers))
+        self.layers = nn.ModuleList(GPTBlock(dim_head, num_heads, dim_feedforward, dropout, device) for _ in range(num_layers))
 
         # 输出层将多头注意力输出映射为单维度预测
         self.output_layer = nn.Linear(dim_head * num_heads, 1, device=device)
@@ -366,7 +366,7 @@ class VariancePredictor(nn.Module):
         nn.init.xavier_uniform_(self.output_layer.weight)
         nn.init.zeros_(self.output_layer.bias)
 
-    def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor, kv_cache: Optional[GPT2BlocksKVCache]) -> tuple[torch.Tensor, GPT2BlocksKVCache]:
+    def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor, kv_cache: Optional[GPTBlocksKVCache]) -> tuple[torch.Tensor, GPTBlocksKVCache]:
         layers_kv_cache = []
 
         # 逐层通过 GPT-2 块
@@ -394,7 +394,7 @@ class MidiNetConfig(NamedTuple):
         pitch_conv2_kernel: 音高特征编码器中第二个卷积层的卷积核大小
         variance_bins: 音符特征离散化的精细度
         num_pitch_layers: 音高特征编码器层的数量
-        num_variance_layers: 方差预测器中 GPT2Block 层的数量
+        num_variance_layers: 方差预测器中 GPTBlock 层的数量
         num_encoder_layers: 编码器层的数量
         num_decoder_layers: 解码器层的数量
     """
@@ -461,8 +461,8 @@ class MidiNet(nn.Module):
         self.pitch_projection = nn.Linear(88 * pitch_dim_model, dim_model)
 
         # 编码器、解码器
-        self.encoder = nn.ModuleList(GPT2Block(config.dim_head, config.num_heads, config.dim_feedforward, encoder_dropout, device) for _ in range(config.num_encoder_layers))
-        self.decoder = nn.ModuleList(GPT2Block(config.dim_head, config.num_heads, config.dim_feedforward, decoder_dropout, device) for _ in range(config.num_decoder_layers))
+        self.encoder = nn.ModuleList(GPTBlock(config.dim_head, config.num_heads, config.dim_feedforward, encoder_dropout, device) for _ in range(config.num_encoder_layers))
+        self.decoder = nn.ModuleList(GPTBlock(config.dim_head, config.num_heads, config.dim_feedforward, decoder_dropout, device) for _ in range(config.num_decoder_layers))
 
         # 音符数量、音高平均值、音高范围预测器和嵌入
         self.note_count_predictor, self.note_count_embedding, self.pitch_mean_predictor, self.pitch_mean_embedding, self.pitch_range_predictor, self.pitch_range_embedding = [
