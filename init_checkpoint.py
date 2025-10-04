@@ -12,7 +12,7 @@ import torch
 import numpy as np
 from torch import optim
 from utils.checkpoint import save_checkpoint
-from utils.constants import DEFAULT_DIM_FEEDFORWARD, DEFAULT_DIM_HEAD, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_NUM_PITCH_LAYERS, DEFAULT_PITCH_CONV1_KERNEL, DEFAULT_PITCH_CONV2_KERNEL, DEFAULT_PITCH_DIM_FEEDFORWARD, DEFAULT_PITCH_DIM_HEAD, DEFAULT_PITCH_NUM_HEADS, DEFAULT_VARIANCE_BINS, DEFAULT_NUM_VARIANCE_LAYERS
+from utils.constants import DEFAULT_DIM_FEEDFORWARD, DEFAULT_DIM_HEAD, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_NUM_PITCH_LAYERS, DEFAULT_PITCH_CONV1_KERNEL, DEFAULT_PITCH_CONV2_KERNEL, DEFAULT_PITCH_DIM_FEEDFORWARD, DEFAULT_PITCH_DIM_HEAD, DEFAULT_PITCH_NUM_HEADS, DEFAULT_VARIANCE_BINS, DEFAULT_NUM_NOTE_COUNT_LAYERS, DEFAULT_NUM_PITCH_MEAN_LAYERS, DEFAULT_NUM_PITCH_RANGE_LAYERS
 from utils.model import MidiNet, MidiNetConfig
 
 
@@ -65,7 +65,9 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-pk2", "--pitch-kernel-size-2", type=int, default=DEFAULT_PITCH_CONV2_KERNEL, help="音高特征编码器前馈层第二个卷积核大小，默认为 %(default)s")
     parser.add_argument("-vb", "--variance-bins", type=int, default=DEFAULT_VARIANCE_BINS, help="音符特征离散化的精细度，默认为 %(default)s")
     parser.add_argument("-pl", "--num-pitch-layers", type=int, default=DEFAULT_NUM_PITCH_LAYERS, help="音高特征编码器层数，默认为 %(default)s")
-    parser.add_argument("-vl", "--num-variance-layers", type=int, default=DEFAULT_NUM_VARIANCE_LAYERS, help="方差预测器的 GPT2Block 层数，默认为 %(default)s")
+    parser.add_argument("-ncl", "--num-note-count-layers", type=int, default=DEFAULT_NUM_NOTE_COUNT_LAYERS, help="音符计数特征编码器层数，默认为 %(default)s")
+    parser.add_argument("-pml", "--num-pitch-mean-layers", type=int, default=DEFAULT_NUM_PITCH_MEAN_LAYERS, help="音高均值特征编码器层数，默认为 %(default)s")
+    parser.add_argument("-prl", "--num-pitch-range-layers", type=int, default=DEFAULT_NUM_PITCH_RANGE_LAYERS, help="音高范围特征编码器层数，默认为 %(default)s")
     parser.add_argument("-el", "--num-encoder-layers", type=int, default=DEFAULT_NUM_ENCODER_LAYERS, help="编码器层数，默认为 %(default)s")
     parser.add_argument("-dl", "--num-decoder-layers", type=int, default=DEFAULT_NUM_DECODER_LAYERS, help="解码器层数，默认为 %(default)s")
     parser.add_argument("-u", "--seed", default=8964, type=int, help="初始化检查点的种子，保证训练过程可复现，默认为 %(default)s")
@@ -92,7 +94,9 @@ def main(args: argparse.Namespace):
         args.pitch_kernel_size_2,
         args.variance_bins,
         args.num_pitch_layers,
-        args.num_variance_layers,
+        args.num_note_count_layers,
+        args.num_pitch_mean_layers,
+        args.num_pitch_range_layers,
         args.num_encoder_layers,
         args.num_decoder_layers,
     ))

@@ -388,13 +388,15 @@ class MidiNetConfig(NamedTuple):
         pitch_dim_head:  音高特征编码器每个注意力头的维度
         pitch_dim_feedforward:  音高特征编码器前馈网络的隐藏层维度
         num_heads: 编-解码器注意力头的数量
-        dim_head:  编-解码器每个注意力头的维度
-        dim_feedforward:  编-解码器前馈网络的隐藏层维度
+        dim_head: 编-解码器每个注意力头的维度
+        dim_feedforward: 编-解码器前馈网络的隐藏层维度
         pitch_conv1_kernel: 音高特征编码器中第一个卷积层的卷积核大小
         pitch_conv2_kernel: 音高特征编码器中第二个卷积层的卷积核大小
         variance_bins: 音符特征离散化的精细度
         num_pitch_layers: 音高特征编码器层的数量
-        num_variance_layers: 方差预测器中 GPTBlock 层的数量
+        num_note_count_layers: 音符数量预测器中 GPTBlock 层的数量
+        num_pitch_mean_layers: 音高平均值预测器中 GPTBlock 层的数量
+        num_pitch_range_layers: 音高范围预测器中 GPTBlock 层的数量
         num_encoder_layers: 编码器层的数量
         num_decoder_layers: 解码器层的数量
     """
@@ -408,7 +410,9 @@ class MidiNetConfig(NamedTuple):
     pitch_conv2_kernel: int
     variance_bins: int
     num_pitch_layers: int
-    num_variance_layers: int
+    num_note_count_layers: int
+    num_pitch_mean_layers: int
+    num_pitch_range_layers: int
     num_encoder_layers: int
     num_decoder_layers: int
 
@@ -467,9 +471,9 @@ class MidiNet(nn.Module):
         # 音符数量、音高平均值、音高范围预测器和嵌入
         self.note_count_predictor, self.note_count_embedding, self.pitch_mean_predictor, self.pitch_mean_embedding, self.pitch_range_predictor, self.pitch_range_embedding = [
             module
-            for _ in range(3)
+            for num_layers in [config.num_note_count_layers, config.num_pitch_mean_layers, config.num_pitch_range_layers]
             for module in [
-                VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, config.num_variance_layers, variance_predictor_dropout, device=device),
+                VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, num_layers, variance_predictor_dropout, device=device),
                 nn.Embedding(config.variance_bins, dim_model, device=device)
             ]
         ]
