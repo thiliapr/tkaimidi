@@ -75,7 +75,7 @@ def midi_to_notes(midi_file: mido.MidiFile, pitch_range: int = 127) -> list[tupl
         >>> midi = mido.MidiFile("example.mid")
         >>> notes = midi_to_notes(midi)
         >>> print(notes[:5])
-        [(60, 0), (62, 120), (64, 240), (65, 360), (67, 480)]
+        [(24, 0), (44, 1), (64, 2), (84, 3), (104, 4)]
     """
     notes = []  # 用于存储提取的音符信息（音高和时间）
     drum_channels = {9}  # 打击乐通道的集合，默认情况下，MIDI 通道 10（索引 9）为打击乐通道
