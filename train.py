@@ -224,26 +224,35 @@ def midinet_loss(
     Returns:
         返回四个损失张量的元组：(钢琴卷帘损失, 音符数量损失, 音高均值损失, 音高范围损失)
     """
-    def masked_loss(pred: Optional[torch.Tensor], target: torch.Tensor, padding_mask: torch.BoolTensor, criterion: Callable[..., torch.Tensor]):
+    def masked_loss(pred: Optional[torch.Tensor], target: torch.Tensor, padding_mask: torch.BoolTensor, criterion: Callable[..., torch.Tensor], bce_loss: bool = False):
         "计算掩码区域的损失，仅对有效帧求平均"
-        # 计算逐元素损失 [batch_size, seq_len, ...]
-        elementwise_loss = criterion(pred, target, reduction="none")
-
-        # 重塑损失张量以便统一 variance 和 piano_roll 掩码应用逻辑
+        # 重塑预测、目标、填充掩码张量以便统一 variance 和 piano_roll 掩码应用逻辑
         # [batch_size, seq_len, feature_dim]，其中 feature_dim 可能为 1 或 88
-        loss_reshaped = elementwise_loss.view(*elementwise_loss.shape[:2], -1)
+        pred = pred.view(*pred.shape[:2], -1)
+        target = target.view(*pred.shape[:2], -1)
+        padding_mask = padding_mask.unsqueeze(2).expand_as(pred)
 
-        # 扩展掩码以匹配损失张量的形状
-        expanded_mask = padding_mask.unsqueeze(2).expand_as(loss_reshaped)
+        # 如果是二元交叉熵损失，则计算正样本权重，避免正负样本不均衡
+        if bce_loss:
+            # 计算正负样本数量和正样本权重
+            pos_num = target.masked_fill(padding_mask, 0).sum()
+            neg_num = (~target).masked_fill(padding_mask, 0).sum()
+            pos_weight = neg_num / pos_num.clamp(1)  # 防止除零
+
+            # 创建带正样本权重的损失函数
+            criterion = lambda *args, fn=criterion, **kwargs: fn(*args, **kwargs, pos_weight=pos_weight)
+
+        # 计算逐元素损失 [batch_size, seq_len, ...]
+        elementwise_loss = criterion(pred, target.to(dtype=pred.dtype), reduction="none")
 
         # 将填充区域的损失置零
-        masked_loss = loss_reshaped.masked_fill(expanded_mask, 0)
+        masked_loss = elementwise_loss.masked_fill(padding_mask, 0)
 
         # 计算损失平均值
-        return masked_loss.sum(dim=[1, 2]) / (~expanded_mask).sum(dim=[1, 2])
+        return masked_loss.sum(dim=[1, 2]) / (~padding_mask).sum(dim=[1, 2])
 
     # 计算各分量损失
-    piano_roll_loss = masked_loss(piano_roll_pred, piano_roll_target.to(dtype=piano_roll_pred.dtype), padding_mask, F.binary_cross_entropy_with_logits)
+    piano_roll_loss = masked_loss(piano_roll_pred, piano_roll_target, padding_mask, F.binary_cross_entropy_with_logits, True)
     note_count_loss, pitch_mean_loss, pitch_range_loss = [
         masked_loss(pred * variance_weight, target * variance_weight, padding_mask, F.mse_loss)
         for pred, target in [
