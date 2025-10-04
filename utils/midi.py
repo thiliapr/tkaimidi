@@ -110,6 +110,9 @@ def midi_to_notes(midi_file: mido.MidiFile, pitch_range: int = 127) -> list[tupl
     # 提取音符和时间序列
     pitches, times = zip(*notes)
 
+    # 使第一个音符一开始就播放
+    times = [time - times[0] for time in times]
+
     # 对时间四舍五入
     times = [int(interval / TIME_PRECISION + 0.5) for interval in times]
 
