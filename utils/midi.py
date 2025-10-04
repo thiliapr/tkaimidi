@@ -116,8 +116,14 @@ def midi_to_notes(midi_file: mido.MidiFile, pitch_range: int = 127) -> list[tupl
     # 对时间四舍五入
     times = [int(interval / TIME_PRECISION + 0.5) for interval in times]
 
-    # 计算时间的最大公约数，压缩时间轴
+    # 计算时间的最大公约数
     time_gcd = math.gcd(*times)
+
+    # 如果时间全为 0，返回空列表
+    if time_gcd == 0:
+        return []
+
+    # 压缩时间轴
     times = [time // time_gcd for time in times]
 
     # 去除重复的音符
@@ -166,13 +172,13 @@ def notes_to_piano_roll(notes: list[tuple[int]]) -> np.ndarray:
     """
     将音符序列转换为钢琴卷帘矩阵表示。
 
-    该函数接收一个包含音符和相对时间间隔的列表，将其转换为一个二维布尔矩阵（钢琴卷帘）。
+    该函数接收一个包含音符和绝对时间的列表，将其转换为一个二维布尔矩阵（钢琴卷帘）。
     矩阵的行表示时间步，列表示音高（钢琴 88 个音），矩阵中的 True 值表示在对应时间点有音符开始。
-    首先提取所有音符的音高和时间间隔，计算每个音符的绝对开始时间，然后创建一个全零矩阵，
+    首先提取所有音符的音高和时间，计算每个音符的绝对开始时间，然后创建一个全零矩阵，
     最后在对应的时间步和音高位置标记为 True。
 
     Args:
-        notes: 包含音符和相对时间间隔的列表，每个元素为元组 (音高, 时间间隔)
+        notes: 包含音符和绝对时间的列表，每个元素为元组 (音高, 时间间隔)
 
     Returns:
         一个二维布尔数组，表示钢琴卷帘，形状为 [总时间步数, 88]
