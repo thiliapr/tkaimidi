@@ -166,7 +166,7 @@ class MultiheadAttention(nn.Module):
 
         # 调整查询、键、值形状为 [batch_size, seq_len, num_heads, dim_head]，
         # 并重排维度为 PyTorch 注意力要求的形状 [batch_size, num_heads, seq_len, dim_head]
-        queries, keys, values = [x.view(batch_size, -1, self.num_heads, self.dim_head).transpose(1, 2) for x in [queries, keys, values]]
+        queries, keys, values = [x.reshape(batch_size, -1, self.num_heads, self.dim_head).transpose(1, 2) for x in [queries, keys, values]]
 
         # 应用 RoPE 到 Q/K
         cache_len = 0 if kv_cache is None else kv_cache[0].size(2)
@@ -510,7 +510,7 @@ class MidiNet(nn.Module):
         x = self.pitch_projection(x.flatten(1, 2))  # [batch_size * seq_len, dim_model]
 
         # 恢复批次和序列维度
-        x = x.view(batch_size, seq_len, -1)  # [batch_size, seq_len, dim_model]
+        x = x.reshape(batch_size, seq_len, -1)  # [batch_size, seq_len, dim_model]
 
         # 编码器
         encoder_kv_cache = []
