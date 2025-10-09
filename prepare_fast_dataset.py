@@ -23,7 +23,7 @@ def convert(
     smoothing_iterations: int,
     time_stretch_count: int,
     max_stretch_factor: int
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+) -> list[list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]]:
     """
     将 MIDI 文件集合转换为机器学习可用的数据集格式
 
@@ -54,7 +54,7 @@ def convert(
         包含四个 NumPy 数组的元组列表，分别表示钢琴卷帘矩阵、音符数量数组、平均音高数组和音高范围数组
 
     Examples:
-        >>> dataset = convert(midi_files, 1989, 64, 16, 2)
+        >>> dataset = convert(midi_files, 1989, 64, 33, 17, 1, 16, 4, 4)
         >>> len(dataset)
         8964
     """
@@ -84,6 +84,7 @@ def convert(
         stretch_factors = range(1, min(max_frames // times[-1], max_stretch_factor) + 1)
 
         # 随机选择指定数量的拉伸因子进行数据增强
+        file_variants = []
         for stretch_factor in random.sample(stretch_factors, k=min(time_stretch_count, len(stretch_factors))):
             # 应用时间拉伸变换
             stretched_times = [time * stretch_factor for time in times]
@@ -130,19 +131,24 @@ def convert(
                     for feature in [note_counts, pitch_means, pitch_ranges]
                 ]
 
-            # 将特征元组添加到数据集
-            dataset.append([piano_roll, note_counts, pitch_means, pitch_ranges])
+            # 将特征元组添加到文件变体列表
+            file_variants.append([piano_roll, note_counts, pitch_means, pitch_ranges])
+        
+        # 将特征元组添加到数据集
+        dataset.append(file_variants)
 
     # 计算最小最大值用于归一化
-    note_count_min, note_count_max = np.percentile(np.concatenate([data[1] for data in dataset]), [1, 99])
-    pitch_mean_min, pitch_mean_max = np.percentile(np.concatenate([data[2] for data in dataset]), [1, 99])
-    pitch_range_min, pitch_range_max = np.percentile(np.concatenate([data[3] for data in dataset]), [1, 99])
+    (note_count_min, note_count_max), (pitch_mean_min, pitch_mean_max), (pitch_range_min, pitch_range_max) = [
+        np.percentile(np.concatenate([variant[idx] for data in dataset for variant in data]), [1, 99])
+        for idx in [1, 2, 3]
+    ]
 
     # 归一化音符数量、平均音高、音高范围
-    for idx, (_, note_counts, pitch_means, pitch_ranges) in enumerate(dataset):
-        dataset[idx][1] = ((note_counts - note_count_min) / (note_count_max - note_count_min + 1e-8)).astype(np.float32)
-        dataset[idx][2] = ((pitch_means - pitch_mean_min) / (pitch_mean_max - pitch_mean_min + 1e-8)).astype(np.float32)
-        dataset[idx][3] = ((pitch_ranges - pitch_range_min) / (pitch_range_max - pitch_range_min + 1e-8)).astype(np.float32)
+    for file_idx, variants in enumerate(dataset):
+        for variant_idx, (_, note_counts, pitch_means, pitch_ranges) in enumerate(variants):
+            dataset[file_idx][variant_idx][1] = ((note_counts - note_count_min) / (note_count_max - note_count_min + 1e-8)).astype(np.float32)
+            dataset[file_idx][variant_idx][2] = ((pitch_means - pitch_mean_min) / (pitch_mean_max - pitch_mean_min + 1e-8)).astype(np.float32)
+            dataset[file_idx][variant_idx][3] = ((pitch_ranges - pitch_range_min) / (pitch_range_max - pitch_range_min + 1e-8)).astype(np.float32)
 
     return dataset
 
@@ -224,7 +230,7 @@ def main(args: argparse.Namespace):
         # 转换为字典形式，并记录序列的长度
         data = {}
         length = []
-        for task_id, (piano_roll, note_counts, pitch_means, pitch_ranges) in enumerate(subset):
+        for task_id, (piano_roll, note_counts, pitch_means, pitch_ranges) in enumerate(variant for file in subset for variant in file):
             data |= {
                 f"{task_id}:piano_roll": piano_roll,
                 f"{task_id}:note_counts": note_counts,
