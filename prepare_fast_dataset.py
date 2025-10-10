@@ -139,7 +139,7 @@ def convert(
 
     # 计算最小最大值用于归一化
     (note_count_min, note_count_max), (pitch_mean_min, pitch_mean_max), (pitch_range_min, pitch_range_max) = [
-        np.percentile(np.concatenate([variant[idx] for data in dataset for variant in data]), [1, 99])
+        np.percentile(np.concatenate([variant[idx] for data in dataset for variant in data]), [0, 100])
         for idx in [1, 2, 3]
     ]
 
