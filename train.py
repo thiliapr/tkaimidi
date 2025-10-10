@@ -332,6 +332,14 @@ def visualize_music_comparison(
         ax.plot(pred_data, color="blue", label="Predicted")
         ax.plot(target_data, color="green", label="True")
 
+        # 绘制预测与真实差距区间
+        ax.fill_between(
+            range(len(pred_data)),
+            [min(data) for data in zip(pred_data, target_data)],
+            [max(data) for data in zip(pred_data, target_data)],
+            alpha=0.7
+        )
+
         # 在右上角显示图例
         ax.legend(loc="upper right")
 
