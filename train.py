@@ -651,6 +651,7 @@ def main(args: argparse.Namespace):
         # 绘制验证损失分布直方图，记录验证损失
         for loss_idx, loss_name in enumerate(["Piano Roll", "Note Count", "Pitch Mean", "Pitch Range"]):
             loss_values = [all_loss[loss_idx] for all_loss in val_loss]
+            print(loss_values)
             writer.add_histogram(f"Validate/{loss_name} Loss Distribution", np.array(loss_values), current_epoch)
             writer.add_scalars(f"Loss/{loss_name}", {"Valid": np.array(loss_values).mean()}, len(train_loader) // args.accumulation_steps * (current_epoch + 1))
 
