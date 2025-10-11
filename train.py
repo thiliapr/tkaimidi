@@ -402,6 +402,7 @@ def train(
 
         # 自动混合精度环境
         with autocast(device.type, dtype=torch.float16):
+            import pdb; pdb.set_trace()
             piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1], encoder_only=encoder_only)  # 模型前向传播（使用教师强制）
             all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:], (model.variance_bins - 1) * 2)  # 计算损失
             piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() / accumulation_steps for loss in all_loss)  # 计算整个批次的损失
@@ -651,7 +652,6 @@ def main(args: argparse.Namespace):
         # 绘制验证损失分布直方图，记录验证损失
         for loss_idx, loss_name in enumerate(["Piano Roll", "Note Count", "Pitch Mean", "Pitch Range"]):
             loss_values = [all_loss[loss_idx] for all_loss in val_loss]
-            print(loss_values)
             writer.add_histogram(f"Validate/{loss_name} Loss Distribution", np.array(loss_values), current_epoch)
             writer.add_scalars(f"Loss/{loss_name}", {"Valid": np.array(loss_values).mean()}, len(train_loader) // args.accumulation_steps * (current_epoch + 1))
 
