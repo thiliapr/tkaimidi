@@ -12,7 +12,7 @@ import torch
 import numpy as np
 from torch import optim
 from utils.checkpoint import save_checkpoint
-from utils.constants import DEFAULT_DIM_FEEDFORWARD, DEFAULT_DIM_HEAD, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_NUM_PITCH_LAYERS, DEFAULT_PITCH_CONV1_KERNEL, DEFAULT_PITCH_CONV2_KERNEL, DEFAULT_PITCH_DIM_FEEDFORWARD, DEFAULT_PITCH_DIM_HEAD, DEFAULT_PITCH_NUM_HEADS, DEFAULT_VARIANCE_BINS, DEFAULT_NUM_NOTE_COUNT_LAYERS, DEFAULT_NUM_PITCH_MEAN_LAYERS, DEFAULT_NUM_PITCH_RANGE_LAYERS
+from utils.constants import DEFAULT_DIM_FEEDFORWARD, DEFAULT_DIM_HEAD, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_NUM_PITCH_LAYERS, DEFAULT_PITCH_CONV1_KERNEL, DEFAULT_PITCH_CONV2_KERNEL, DEFAULT_PITCH_DIM_FEEDFORWARD, DEFAULT_PITCH_DIM_MODEL, DEFAULT_VARIANCE_BINS, DEFAULT_NUM_NOTE_COUNT_LAYERS, DEFAULT_NUM_PITCH_MEAN_LAYERS, DEFAULT_NUM_PITCH_RANGE_LAYERS
 from utils.model import MidiNet, MidiNetConfig
 
 
@@ -55,8 +55,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="初始化一个检查点")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点保存目录路径")
-    parser.add_argument("-pnh", "--pitch-num-heads", type=int, default=DEFAULT_PITCH_NUM_HEADS, help="音高特征编码器注意力头的数量，默认为 %(default)s")
-    parser.add_argument("-pdh", "--pitch-dim-head", type=int, default=DEFAULT_PITCH_DIM_HEAD, help="音高特征编码器每个注意力头的维度，默认为 %(default)s")
+    parser.add_argument("-pdm", "--pitch-dim-model", type=int, default=DEFAULT_PITCH_DIM_MODEL, help="音高特征编码器的主模型维度，默认为 %(default)s")
     parser.add_argument("-pdf", "--pitch-dim-feedforward", type=int, default=DEFAULT_PITCH_DIM_FEEDFORWARD, help="音高特征编码器前馈网络的隐藏层维度，默认为 %(default)s")
     parser.add_argument("-nh", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="编-解码器注意力头的数量，默认为 %(default)s")
     parser.add_argument("-dh", "--dim-head", type=int, default=DEFAULT_DIM_HEAD, help="编-解码器每个注意力头的维度，默认为 %(default)s")
@@ -84,8 +83,7 @@ def main(args: argparse.Namespace):
 
     # 初始化模型
     model = MidiNet(MidiNetConfig(
-        args.pitch_num_heads,
-        args.pitch_dim_head,
+        args.pitch_dim_model,
         args.pitch_dim_feedforward,
         args.num_heads,
         args.dim_head,
@@ -110,7 +108,6 @@ def main(args: argparse.Namespace):
 
     # 保存为检查点
     save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), scaler.state_dict(), {
-        "pitch_num_heads": args.pitch_num_heads,
         "num_heads": args.num_heads,
         "completed_epochs": 0,
     })

@@ -60,7 +60,7 @@ class MultiheadAttention(nn.Module):
     Inputs:
         qkv: 查询、键、值张量，形状为 [batch_size, seq_len, dim_model]
         padding_mask: 填充掩码，形状为 [batch_size, seq_len]，True 表示填充位置
-        is_causal: 是否使用因果掩码，仅在 kv_cache 为 None 时有效
+        is_causal: 是否使用因果掩码
         kv_cache: 键值缓存元组 (keys_cache, values_cache)，仅应在推理阶段使用
 
     Outputs:
@@ -182,7 +182,7 @@ class MultiheadAttention(nn.Module):
         attn_mask = torch.zeros(batch_size, seq_len, keys.size(2), dtype=bool, device=qkv.device)
         if padding_mask is not None:
             attn_mask |= padding_mask.unsqueeze(1) | padding_mask.unsqueeze(2)
-        if kv_cache is None and is_causal:
+        if is_causal:
             attn_mask |= ~torch.tril(torch.ones(seq_len, seq_len, dtype=bool, device=qkv.device))
 
         # 显式转化为 float 类型掩码，避免版本兼容性问题
@@ -206,15 +206,13 @@ class MultiheadAttention(nn.Module):
 
 class PitchFeatureEncoderLayer(nn.Module):
     """
-    音高特征编码层，基于 Transformer 架构实现特征编码
-    包含多头自注意力机制和卷积前馈网络，使用残差连接和归一化
+    音高特征编码层，基于卷积实现特征编码
+    包含卷积前馈网络，使用残差连接和归一化
 
     工作流程：
     1. 输入张量首先通过 ScaleNorm 进行归一化
-    2. 使用多头自注意力机制计算注意力权重并生成注意力输出
-    3. 将原始输入与注意力输出进行缩放残差连接
-    4. 再次通过 ScaleNorm 归一化后，使用两个卷积层进行前馈处理
-    5. 将前馈输出与原始输入进行缩放残差连接，得到最终输出
+    2. 通过 ScaleNorm 归一化后，使用两个卷积层进行前馈处理
+    3. 将前馈输出与原始输入进行缩放残差连接，得到最终输出
 
     Inputs:
         x: 输入特征张量，形状为 [batch_size, 88, dim_model]
@@ -223,19 +221,14 @@ class PitchFeatureEncoderLayer(nn.Module):
         编码后的特征张量，形状与输入相同
     """
 
-    def __init__(self, dim_head: int, num_heads: int, dim_feedforward: int, conv1_kernel_size: int, conv2_kernel_size: int, dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, dim_model: int, dim_feedforward: int, conv1_kernel_size: int, conv2_kernel_size: int, dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
-        dim_model = dim_head * num_heads  # 总模型维度
-
-        # 自注意力和前馈网络
-        self.attention = MultiheadAttention(dim_head, num_heads, 88 * 4, dropout, device=device)
+        # 前馈网络
         self.conv1 = nn.Conv1d(dim_model, dim_feedforward, conv1_kernel_size, padding="same", device=device)
         self.conv2 = nn.Conv1d(dim_feedforward, dim_model, conv2_kernel_size, padding="same", device=device)
 
         # 归一化与缩放
-        self.attention_norm = ScaleNorm(dim_model, device=device)
         self.feedforward_norm = ScaleNorm(dim_model, device=device)
-        self.attention_scale = nn.Parameter(torch.zeros(1, device=device))
         self.feedforward_scale = nn.Parameter(torch.zeros(1, device=device))
 
         # Dropout 层
@@ -247,10 +240,6 @@ class PitchFeatureEncoderLayer(nn.Module):
             nn.init.zeros_(module.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # 多头注意力计算
-        attn_output, _ = self.attention(self.attention_norm(x), None, False, None)
-        x = x + self.dropout(attn_output * self.attention_scale)
-
         # 前馈网络计算
         ff_output = self.conv2(F.mish(self.conv1(self.feedforward_norm(x).transpose(1, 2)))).transpose(1, 2)
         x = x + self.dropout(ff_output * self.feedforward_scale)
@@ -314,7 +303,7 @@ class GPTBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor, kv_cache: Optional[AttentionKVCache]) -> tuple[torch.Tensor, AttentionKVCache]:
         # 多头注意力计算
-        attn_output, kv_cache = self.attention(self.attention_norm(x), padding_mask, True, kv_cache)
+        attn_output, kv_cache = self.attention(self.attention_norm(x), padding_mask, kv_cache is None, kv_cache)
         x = x + self.dropout(attn_output * self.attention_scale)
 
         # 前馈网络计算
@@ -384,9 +373,8 @@ class MidiNetConfig(NamedTuple):
     MidiNet 的配置类，包含模型的超参数设置。
 
     Attributes:
-        pitch_num_heads: 音高特征编码器注意力头的数量
-        pitch_dim_head:  音高特征编码器每个注意力头的维度
-        pitch_dim_feedforward:  音高特征编码器前馈网络的隐藏层维度
+        pitch_dim_model: 音高特征编码器的模型主维度
+        pitch_dim_feedforward: 音高特征编码器前馈网络的隐藏层维度
         num_heads: 编-解码器注意力头的数量
         dim_head: 编-解码器每个注意力头的维度
         dim_feedforward: 编-解码器前馈网络的隐藏层维度
@@ -400,8 +388,7 @@ class MidiNetConfig(NamedTuple):
         num_encoder_layers: 编码器层的数量
         num_decoder_layers: 解码器层的数量
     """
-    pitch_num_heads: int
-    pitch_dim_head: int
+    pitch_dim_model: int
     pitch_dim_feedforward: int
     num_heads: int
     dim_head: int
@@ -449,7 +436,7 @@ class MidiNet(nn.Module):
         >>> print(note_pred.shape)  # torch.Size([2, 100, 88])
     """
 
-    def __init__(self, config: MidiNetConfig, pitch_dropout: float = 0, encoder_dropout: float = 0., decoder_dropout: float = 0., variance_predictor_dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, config: MidiNetConfig, tmpname_dropout: float = 0., pitch_dropout: float = 0, encoder_dropout: float = 0., decoder_dropout: float = 0., variance_predictor_dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
         dim_model = config.dim_head * config.num_heads  # 总模型维度
         self.variance_bins = config.variance_bins
@@ -459,10 +446,9 @@ class MidiNet(nn.Module):
         # 但事实上，我们压根没什么关注绝对音高，我们更加关注的音程信息
         # 比如 C4、G4 是纯五度关系，而 D4、A4 也是纯五度关系，如果使用 88 个不同的嵌入，模型就难以认识到它们的相对音高关系，它只会把 C4、G4、D4、A4 看成四个不同的音高
         # 所以我们需要只使用一个嵌入（区分有无音符），然后通过 RoPE 位置编码注入捕捉音程关系
-        pitch_dim_model = config.pitch_dim_head * config.pitch_num_heads
-        self.note_embedding = nn.Parameter(torch.Tensor(pitch_dim_model, device=device))
-        self.pitch_feature_encoder = nn.ModuleList(PitchFeatureEncoderLayer(config.pitch_dim_head, config.pitch_num_heads, config.pitch_dim_feedforward, config.pitch_conv1_kernel, config.pitch_conv2_kernel, pitch_dropout, device) for _ in range(config.num_pitch_layers))
-        self.pitch_projection = nn.Linear(88 * pitch_dim_model, dim_model)
+        self.note_embedding = nn.Parameter(torch.Tensor(config.pitch_dim_model, device=device))
+        self.pitch_feature_encoder = nn.ModuleList(PitchFeatureEncoderLayer(config.pitch_dim_model, config.pitch_dim_feedforward, config.pitch_conv1_kernel, config.pitch_conv2_kernel, pitch_dropout, device) for _ in range(config.num_pitch_layers))
+        self.pitch_projection = nn.Linear(88 * config.pitch_dim_model, dim_model)
 
         # 编码器、解码器
         self.encoder = nn.ModuleList(GPTBlock(config.dim_head, config.num_heads, config.dim_feedforward, encoder_dropout, device) for _ in range(config.num_encoder_layers))

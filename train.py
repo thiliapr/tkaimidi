@@ -434,7 +434,7 @@ def train(
             ]:
                 writer.add_scalars(f"Loss/{loss_name}", {"Train": loss_value}, global_step)
 
-            # 记录 Transformer 层的注意力和前馈网络的缩放
+            # 记录残差缩放因子
             for module_name, module in [
                 ("Pitch Feature Encoder", model.pitch_feature_encoder),
                 ("Encoder", model.encoder),
@@ -444,10 +444,14 @@ def train(
                 ("Decoder", model.decoder),
             ]:
                 for layer_idx, layer in enumerate(module):
-                    writer.add_scalars(f"Scale/{module_name}", {
-                        f"{layer_idx}.feedforward": layer.feedforward_scale.abs().item(),
-                        f"{layer_idx}.attention": layer.attention_scale.abs().item()
-                    }, global_step)
+                    if hasattr(layer, "attention_scale"):
+                        writer.add_scalars(f"Scale/{module_name}", {
+                            f"{layer_idx}.feedforward": layer.feedforward_scale.abs().item(),
+                            f"{layer_idx}.attention": layer.attention_scale.abs().item()
+                        }, global_step)
+                    # 音高特征编码器没有注意力机制，只需要记录前馈网络缩放因子
+                    else:
+                        writer.add_scalars(f"Scale/{module_name}", {f"{layer_idx}": layer.feedforward_scale.abs().item()}, global_step)
 
             # 重置累积损失
             acc_piano_roll_loss = acc_note_counts_loss = acc_pitch_means_loss = acc_pitch_ranges_loss = 0
@@ -647,7 +651,7 @@ def main(args: argparse.Namespace):
         # 绘制验证损失分布直方图，记录验证损失
         for loss_idx, loss_name in enumerate(["Piano Roll", "Note Count", "Pitch Mean", "Pitch Range"]):
             loss_values = [all_loss[loss_idx] for all_loss in val_loss]
-            writer.add_histogram(f"Epoch {current_epoch + 1}/Validate/{loss_name} Loss Distribution", np.array(loss_values))
+            writer.add_histogram(f"Validate/{loss_name} Loss Distribution", np.array(loss_values), current_epoch)
             writer.add_scalars(f"Loss/{loss_name}", {"Valid": np.array(loss_values).mean()}, len(train_loader) // args.accumulation_steps * (current_epoch + 1))
 
     # 关闭 SummaryWriter 实例，确保所有记录的数据被写入磁盘并释放资源
