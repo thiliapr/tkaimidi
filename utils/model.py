@@ -492,7 +492,7 @@ class MidiNet(nn.Module):
         # 将音高信息与嵌入结合，仅保留存在的音高对应的嵌入
         x = x.unsqueeze(2) * self.note_embedding.unsqueeze(0)  # [batch_size * seq_len, 88, pitch_dim_model]
 
-        # 通过带 RoPE 的注意力机制捕获音高间的相对关系
+        # 通过卷积捕获音高间的相对关系
         for layer in self.pitch_feature_encoder:
             x = layer(x)
 
