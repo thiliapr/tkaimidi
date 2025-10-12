@@ -109,7 +109,7 @@ class MultiheadAttention(nn.Module):
         Returns:
             应用旋转位置编码后的张量，形状与输入相同
         """
-        # 计算需要应用RoPE的序列长度
+        # 计算需要应用 RoPE 的序列长度
         required_seq_len = x.size(2) + offset
 
         # 检查并更新旋转频率缓存
@@ -445,7 +445,7 @@ class MidiNet(nn.Module):
         # 这里为什么不用 nn.Embedding(88, dim_model) 呢？因为这会使模型认为 88 个音高都是不同的
         # 但事实上，我们压根没什么关注绝对音高，我们更加关注的音程信息
         # 比如 C4、G4 是纯五度关系，而 D4、A4 也是纯五度关系，如果使用 88 个不同的嵌入，模型就难以认识到它们的相对音高关系，它只会把 C4、G4、D4、A4 看成四个不同的音高
-        # 所以我们需要只使用一个嵌入（区分有无音符），然后通过 RoPE 位置编码注入捕捉音程关系
+        # 所以我们需要只使用一个嵌入（区分有无音符），然后通过卷积捕捉音程关系
         self.note_embedding = nn.Parameter(torch.Tensor(config.pitch_dim_model, device=device))
         self.pitch_feature_encoder = nn.ModuleList(PitchFeatureEncoderLayer(config.pitch_dim_model, config.pitch_dim_feedforward, config.pitch_conv1_kernel, config.pitch_conv2_kernel, pitch_dropout, device) for _ in range(config.num_pitch_layers))
         self.pitch_projection = nn.Linear(88 * config.pitch_dim_model, dim_model)
