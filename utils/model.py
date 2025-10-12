@@ -283,7 +283,7 @@ class GPTBlock(nn.Module):
         # 而第二个卷积层所需要的 x[-5] 来自第一个卷积层的 x[-7]，也就是说，需要给第一个卷积层提供 seq_len=7 的 x
         # 如果是多个 GPTBlock 层叠加，计算量将会变得非常大，那么我不就增量了个寂寞？
         # 而且整个模型会变得十分 ... 逻辑混乱，让我们使用 Linear 而不是 Conv 使其保持简单
-        self.attention = MultiheadAttention(dim_head, num_heads, dropout, device=device)
+        self.attention = MultiheadAttention(dim_head, num_heads, 10000., dropout, device=device)
         self.linear1 = nn.Linear(dim_model, dim_feedforward, device=device)
         self.linear2 = nn.Linear(dim_feedforward, dim_model, device=device)
 
