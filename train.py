@@ -460,7 +460,7 @@ def train(
         progress_bar.update()
 
         # 定期记录训练预测结果
-        if ((step + 1) % (accumulation_steps * logging_interval) == 0) or ((accumulation_steps * logging_interval) > num_steps and (step + 1) % num_steps == 0):
+        if ((step + 1) % (accumulation_steps * logging_interval) == 0) or (logging_interval > num_steps and (step + 1) % (accumulation_steps * num_steps) == 0):
             # 提取预测结果和目标值（去除填充部分）
             results = [
                 x[0, :(~padding_mask).sum(dim=1)[0]].detach().cpu().numpy()
