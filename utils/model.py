@@ -241,7 +241,7 @@ class PitchFeatureEncoderLayer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # 前馈网络计算
-        ff_output = self.conv2(F.mish(self.conv1(self.feedforward_norm(x).transpose(1, 2)))).transpose(1, 2)
+        ff_output = self.conv2(self.dropout(F.mish(self.conv1(self.feedforward_norm(x).transpose(1, 2))))).transpose(1, 2)
         x = x + self.dropout(ff_output * self.feedforward_scale)
         return x
 
@@ -303,12 +303,12 @@ class GPTBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor, kv_cache: Optional[AttentionKVCache]) -> tuple[torch.Tensor, AttentionKVCache]:
         # 多头注意力计算
-        attn_output, kv_cache = self.attention(self.attention_norm(x), padding_mask, kv_cache is None, kv_cache)
-        x = x + self.dropout(attn_output * self.attention_scale)
+        attn_output, kv_cache = self.dropout(self.attention(self.attention_norm(x), padding_mask, kv_cache is None, kv_cache))
+        x = x + attn_output * self.attention_scale
 
         # 前馈网络计算
-        ff_output = self.linear2(F.mish(self.linear1(self.feedforward_norm(x))))
-        x = x + self.dropout(ff_output * self.feedforward_scale)
+        ff_output = self.linear2(self.dropout(F.mish(self.linear1(self.feedforward_norm(x)))))
+        x = x + ff_output * self.feedforward_scale
         return x, kv_cache
 
 
