@@ -206,32 +206,31 @@ class MultiheadAttention(nn.Module):
 
 class PitchFeatureEncoderLayer(nn.Module):
     """
-    音高特征编码层，基于卷积实现特征编码
-    包含卷积前馈网络，使用残差连接和归一化
+    音高特征编码层，基于一维卷积实现特征编码
+    使用门控卷积机制和残差连接，增强特征表达能力
 
     工作流程：
-    1. 输入张量首先通过 ScaleNorm 进行归一化
-    2. 通过 ScaleNorm 归一化后，使用两个卷积层进行前馈处理
-    3. 将前馈输出与原始输入进行缩放残差连接，得到最终输出
+    1. 对输入特征进行层归一化处理
+    2. 通过卷积层生成门控信号和特征值
+    3. 使用SiLU激活函数实现门控机制
+    4. 通过第二个卷积层进行特征变换
+    5. 与原始输入进行残差连接，保留原始信息
 
     Inputs:
         x: 输入特征张量，形状为 [batch_size, 88, dim_model]
 
     Outputs:
-        编码后的特征张量，形状与输入相同
+        编码后的特征张量，形状与输入相同 [batch_size, 88, dim_model]
     """
 
     def __init__(self, dim_model: int, dim_feedforward: int, conv1_kernel_size: int, conv2_kernel_size: int, dropout: float = 0., device: Optional[torch.device] = None):
         super().__init__()
         # 前馈网络
-        self.conv1 = nn.Conv1d(dim_model, dim_feedforward, conv1_kernel_size, padding="same", device=device)
+        self.conv1 = nn.Conv1d(dim_model, dim_feedforward * 2, conv1_kernel_size, padding="same", device=device)
         self.conv2 = nn.Conv1d(dim_feedforward, dim_model, conv2_kernel_size, padding="same", device=device)
 
-        # 归一化与缩放
-        self.feedforward_norm = ScaleNorm(dim_model, device=device)
-        self.feedforward_scale = nn.Parameter(torch.zeros(1, device=device))
-
-        # Dropout 层
+        # 归一化与 Dropout
+        self.norm = ScaleNorm(dim_model, device=device)
         self.dropout = nn.Dropout(dropout)
 
         # 初始化权重
@@ -240,21 +239,44 @@ class PitchFeatureEncoderLayer(nn.Module):
             nn.init.zeros_(module.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # 前馈网络计算
-        ff_output = self.conv2(self.dropout(F.mish(self.conv1(self.feedforward_norm(x).transpose(1, 2))))).transpose(1, 2)
-        x = x + self.dropout(ff_output * self.feedforward_scale)
+        # 保留原始输入用于残差连接
+        residual = x
+
+        # 预归一化并转置维度以适应卷积操作 [batch_size, dim_model, 88]
+        x = self.norm(x).transpose(1, 2)
+
+        # 经过第一个卷积层，分割为门控信号和特征值 [batch_size, dim_feedforward, 88]
+        gate, value = self.conv1(x).chunk(2, dim=1)
+
+        # 应用门控机制
+        x = self.dropout(value * F.silu(gate))
+
+        # 第二个卷积层并转回原始维度 [batch_size, 88, dim_model]
+        x = self.conv2(x).transpose(1, 2)  # [batch_size, 88, dim_model]
+
+        # 残差连接
+        x = residual + x
         return x
 
 
 class GPTBlock(nn.Module):
     """
-    GPTBlock 是一个基于多头注意力和前馈网络的模块，主要用于处理序列数据。它包含自注意力机制和前馈网络，并使用缩放归一化来增强模型的稳定性。
+    GPT模型的基础构建块，包含多头自注意力机制和前馈神经网络
+    该模块实现了 Transformer 的解码器结构，支持增量推理和填充掩码
 
-    工作流程如下：
-        1. 输入张量通过多头注意力机制进行处理，计算注意力输出。
-        2. 将注意力输出与输入张量相加。
-        3. 输入张量经过前馈网络处理，得到新的表示。
-        4. 将前馈网络输出与注意力输出相加。
+    工作流程：
+    1. 输入张量首先经过层归一化，然后进入多头自注意力层
+    2. 注意力输出与原始输入进行残差连接
+    3. 结果再次经过层归一化，进入前馈神经网络
+    4. 前馈网络输出与残差连接再次结合
+    5. 整个过程使用Dropout进行正则化防止过拟合
+
+    Args:
+        dim_head: 每个注意力头的维度大小
+        num_heads: 注意力头的数量
+        dim_feedforward: 前馈神经网络的隐藏层维度
+        dropout: Dropout 概率值，用于防止模型过拟合
+        device: 模型运行的设备，如 CPU 或 GPU
 
     Args:
         dim_head: 每个注意力头的维度。
@@ -284,14 +306,12 @@ class GPTBlock(nn.Module):
         # 如果是多个 GPTBlock 层叠加，计算量将会变得非常大，那么我不就增量了个寂寞？
         # 而且整个模型会变得十分 ... 逻辑混乱，让我们使用 Linear 而不是 Conv 使其保持简单
         self.attention = MultiheadAttention(dim_head, num_heads, 10000., dropout, device=device)
-        self.linear1 = nn.Linear(dim_model, dim_feedforward, device=device)
+        self.linear1 = nn.Linear(dim_model, dim_feedforward * 2, device=device)
         self.linear2 = nn.Linear(dim_feedforward, dim_model, device=device)
 
         # 归一化
         self.attention_norm = ScaleNorm(dim_model, device=device)
         self.feedforward_norm = ScaleNorm(dim_model, device=device)
-        self.attention_scale = nn.Parameter(torch.zeros(1, device=device))
-        self.feedforward_scale = nn.Parameter(torch.zeros(1, device=device))
 
         # Dropout 层
         self.dropout = nn.Dropout(dropout)
@@ -303,12 +323,16 @@ class GPTBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor, kv_cache: Optional[AttentionKVCache]) -> tuple[torch.Tensor, AttentionKVCache]:
         # 多头注意力计算
-        attn_output, kv_cache = self.dropout(self.attention(self.attention_norm(x), padding_mask, kv_cache is None, kv_cache))
-        x = x + attn_output * self.attention_scale
+        attn_output, kv_cache = self.attention(self.attention_norm(x), padding_mask, kv_cache is None, kv_cache)
+        x = x + self.dropout(attn_output)
 
         # 前馈网络计算
-        ff_output = self.linear2(self.dropout(F.mish(self.linear1(self.feedforward_norm(x)))))
-        x = x + ff_output * self.feedforward_scale
+        residual = x  # 保存残差连接
+        x = self.feedforward_norm(x)  # 预归一化
+        gate, value = self.linear1(x).chunk(2, dim=-1)  # [batch_size, seq_len, dim_feedforward]
+        x = self.dropout(value * F.silu(gate))  # 应用门控机制
+        x = self.linear2(x)  # [batch_size, seq_len, dim_model]
+        x = residual + x  # 残差连接
         return x, kv_cache
 
 
