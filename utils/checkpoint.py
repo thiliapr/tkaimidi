@@ -122,8 +122,7 @@ def extract_config(model_state: dict[str, Any], num_heads: int) -> MidiNetConfig
         >>> state_dict = torch.load("model.pth")
         >>> config = extract_config(state_dict, 1)  # 假设单头注意力
     """
-    pitch_dim_model = model_state["note_embedding"].size(0)
-    _, pitch_dim_feedforward, pitch_conv1_kernel = model_state["pitch_feature_encoder.0.conv2.weight"].shape
+    pitch_dim_model, pitch_dim_feedforward, pitch_conv1_kernel = model_state["pitch_feature_encoder.0.conv2.weight"].shape
     pitch_conv2_kernel = model_state["pitch_feature_encoder.0.conv2.weight"].size(2)
     dim_head = model_state["pitch_projection.weight"].size(0) // num_heads
     dim_feedforward = model_state["encoder.0.linear2.weight"].size(1)
