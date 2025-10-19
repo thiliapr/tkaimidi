@@ -437,6 +437,24 @@ def train(
             # 重置累积损失
             acc_piano_roll_loss = acc_note_counts_loss = acc_pitch_means_loss = acc_pitch_ranges_loss = 0
 
+            # 记录各模块残差连接缩放因子
+            for module_name, module in [
+                ("Encoder", model.encoder),
+                ("Decoder", model.decoder),
+                ("Note Count Predictor", model.note_count_predictor.layers),
+                ("Pitch Mean Predictor", model.pitch_mean_predictor.layers),
+                ("Pitch Range Predictor", model.pitch_range_predictor.layers),
+            ]:
+                writer.add_scalars(f"Scale/{module_name}", {
+                    f"{layer_idx}.{submodule_name}": scale.abs().item()
+                    for layer_idx, layer in enumerate(module)
+                    for submodule_name, scale in [("Attention", layer.attention_scale), ("Feedforward", layer.feedforward_scale)]
+                })
+            writer.add_scalars("Scale/Pitch Feature Encoder", {
+                f"{layer_idx}": layer.scale.abs().item()
+                for layer_idx, layer in enumerate(model.pitch_feature_encoder)
+            })
+
             # 定期记录训练预测结果
             if ((global_step + 1) % logging_interval == 0) or ((accumulation_steps * logging_interval) > num_steps and (step + 1) == num_steps):
                 # 提取预测结果和目标值（去除填充部分）
