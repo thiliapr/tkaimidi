@@ -36,9 +36,9 @@ class ScaleNorm(nn.Module):
         output = scale_norm(x)  # 返回经过缩放归一化后的张量
     """
 
-    def __init__(self, dim: int, device: Optional[torch.device] = None):
+    def __init__(self, dim: int):
         super().__init__()
-        self.scale = nn.Parameter(torch.ones(1, device=device) * (dim ** 0.5))  # 可学习的缩放因子，初始化为dim的平方根
+        self.scale = nn.Parameter(torch.ones(1) * (dim ** 0.5))  # 可学习的缩放因子，初始化为 dim 的平方根
 
     def forward(self, x):
         norm = torch.linalg.vector_norm(x, dim=-1, keepdim=True).clamp(min=torch.finfo(x.dtype).eps)  # 计算L2范数并防止为零
@@ -68,7 +68,7 @@ class MultiheadAttention(nn.Module):
         updated_kv_cache: 更新后的键值缓存元组
     """
 
-    def __init__(self, dim_head: int, num_heads: int, rope_base: float = 10000., dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, dim_head: int, num_heads: int, rope_base: float = 10000., dropout: float = 0):
         super().__init__()
         self.dim_head = dim_head
         self.num_heads = num_heads
@@ -76,16 +76,16 @@ class MultiheadAttention(nn.Module):
         dim_model = dim_head * num_heads  # 总模型维度 = 头数 * 每头维度
 
         # 查询、键值投影矩阵
-        self.qkv_proj = nn.Linear(dim_model, dim_model * 3, device=device)
+        self.qkv_proj = nn.Linear(dim_model, dim_model * 3)
 
         # 输出投影矩阵，将多头输出合并回原始维度
-        self.out_proj = nn.Linear(dim_model, dim_model, device=device)
+        self.out_proj = nn.Linear(dim_model, dim_model)
 
         # RoPE 旋转频率
-        self.inv_freq = nn.Buffer(1.0 / (rope_base ** (torch.arange(0, dim_head, 2, device=device) / dim_head)), persistent=False)
+        self.inv_freq = nn.Buffer(1.0 / (rope_base ** (torch.arange(0, dim_head, 2) / dim_head)), persistent=False)
 
         # freqs_cis 缓存
-        self.freqs_cis_cache = nn.Buffer(torch.empty(0, dim_head // 2, device=device), persistent=False)
+        self.freqs_cis_cache = nn.Buffer(torch.empty(0, dim_head // 2), persistent=False)
 
         # 使用 Xavier 均匀分布初始化查询、键、值、投影权重
         for module in [self.qkv_proj, self.out_proj]:
@@ -223,14 +223,15 @@ class PitchFeatureEncoderLayer(nn.Module):
         编码后的特征张量，形状与输入相同 [batch_size, 88, dim_model]
     """
 
-    def __init__(self, dim_model: int, dim_feedforward: int, conv1_kernel_size: int, conv2_kernel_size: int, dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, dim_model: int, dim_feedforward: int, conv1_kernel_size: int, conv2_kernel_size: int, dropout: float = 0.):
         super().__init__()
         # 前馈网络
-        self.conv1 = nn.Conv1d(dim_model, dim_feedforward * 2, conv1_kernel_size, padding="same", device=device)
-        self.conv2 = nn.Conv1d(dim_feedforward, dim_model, conv2_kernel_size, padding="same", device=device)
+        self.conv1 = nn.Conv1d(dim_model, dim_feedforward * 2, conv1_kernel_size, padding="same")
+        self.conv2 = nn.Conv1d(dim_feedforward, dim_model, conv2_kernel_size, padding="same")
 
-        # 归一化与 Dropout
-        self.norm = ScaleNorm(dim_model, device=device)
+        # 归一化与缩放、Dropout
+        self.norm = ScaleNorm(dim_model)
+        self.scale = nn.Parameter(torch.zeros(1))
         self.dropout = nn.Dropout(dropout)
 
         # 初始化权重
@@ -254,8 +255,8 @@ class PitchFeatureEncoderLayer(nn.Module):
         # 第二个卷积层并转回原始维度 [batch_size, 88, dim_model]
         x = self.conv2(x).transpose(1, 2)  # [batch_size, 88, dim_model]
 
-        # 残差连接
-        x = residual + x
+        # 缩放残差连接
+        x = residual + x * self.scale
         return x
 
 
@@ -269,21 +270,13 @@ class GPTBlock(nn.Module):
     2. 注意力输出与原始输入进行残差连接
     3. 结果再次经过层归一化，进入前馈神经网络
     4. 前馈网络输出与残差连接再次结合
-    5. 整个过程使用Dropout进行正则化防止过拟合
-
-    Args:
-        dim_head: 每个注意力头的维度大小
-        num_heads: 注意力头的数量
-        dim_feedforward: 前馈神经网络的隐藏层维度
-        dropout: Dropout 概率值，用于防止模型过拟合
-        device: 模型运行的设备，如 CPU 或 GPU
+    5. 整个过程使用 Dropout 进行正则化防止过拟合
 
     Args:
         dim_head: 每个注意力头的维度。
         num_heads: 注意力头的数量。
         dim_feedforward: 前馈网络的隐藏层维度。
         dropout: Dropout 概率，用于防止过拟合。
-        device: 可选的设备参数，用于指定模型运行的设备。
 
     Inputs:
         x: 输入张量，形状为 (batch_size, seq_len, dim_model)
@@ -294,7 +287,7 @@ class GPTBlock(nn.Module):
         返回处理后的张量，形状与输入相同；和键值缓存。
     """
 
-    def __init__(self, dim_head: int, num_heads: int, dim_feedforward: int, dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, dim_head: int, num_heads: int, dim_feedforward: int, dropout: float = 0.):
         super().__init__()
         dim_model = dim_head * num_heads  # 总模型维度
 
@@ -305,13 +298,15 @@ class GPTBlock(nn.Module):
         # 而第二个卷积层所需要的 x[-5] 来自第一个卷积层的 x[-7]，也就是说，需要给第一个卷积层提供 seq_len=7 的 x
         # 如果是多个 GPTBlock 层叠加，计算量将会变得非常大，那么我不就增量了个寂寞？
         # 而且整个模型会变得十分 ... 逻辑混乱，让我们使用 Linear 而不是 Conv 使其保持简单
-        self.attention = MultiheadAttention(dim_head, num_heads, 10000., dropout, device=device)
-        self.linear1 = nn.Linear(dim_model, dim_feedforward * 2, device=device)
-        self.linear2 = nn.Linear(dim_feedforward, dim_model, device=device)
+        self.attention = MultiheadAttention(dim_head, num_heads, 10000., dropout)
+        self.linear1 = nn.Linear(dim_model, dim_feedforward * 2)
+        self.linear2 = nn.Linear(dim_feedforward, dim_model)
 
-        # 归一化
-        self.attention_norm = ScaleNorm(dim_model, device=device)
-        self.feedforward_norm = ScaleNorm(dim_model, device=device)
+        # 归一化与缩放
+        self.attention_norm = ScaleNorm(dim_model)
+        self.feedforward_norm = ScaleNorm(dim_model)
+        self.attention_scale = nn.Parameter(torch.zeros(1))
+        self.feedforward_scale = nn.Parameter(torch.zeros(1))
 
         # Dropout 层
         self.dropout = nn.Dropout(dropout)
@@ -324,7 +319,7 @@ class GPTBlock(nn.Module):
     def forward(self, x: torch.Tensor, padding_mask: torch.BoolTensor, kv_cache: Optional[AttentionKVCache]) -> tuple[torch.Tensor, AttentionKVCache]:
         # 多头注意力计算
         attn_output, kv_cache = self.attention(self.attention_norm(x), padding_mask, kv_cache is None, kv_cache)
-        x = x + self.dropout(attn_output)
+        x = x + self.dropout(attn_output * self.attention_scale)
 
         # 前馈网络计算
         residual = x  # 保存残差连接
@@ -332,7 +327,7 @@ class GPTBlock(nn.Module):
         gate, value = self.linear1(x).chunk(2, dim=-1)  # [batch_size, seq_len, dim_feedforward]
         x = self.dropout(value * F.silu(gate))  # 应用门控机制
         x = self.linear2(x)  # [batch_size, seq_len, dim_model]
-        x = residual + x  # 残差连接
+        x = residual + x * self.feedforward_scale  # 残差连接
         return x, kv_cache
 
 
@@ -355,7 +350,6 @@ class VariancePredictor(nn.Module):
         dim_feedforward: 前馈神经网络的隐藏层维度
         num_layers: GPTBlock 层的数量
         dropout: Dropout 概率，用于防止过拟合
-        device: 模型运行的设备
 
     Inputs:
         x: 输入张量，形状为 [batch_size, seq_len, dim_model]
@@ -367,13 +361,13 @@ class VariancePredictor(nn.Module):
         layers_kv_cache: 各层的键值缓存列表
     """
 
-    def __init__(self, dim_head: int, num_heads: int, dim_feedforward: int, num_layers: int, dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, dim_head: int, num_heads: int, dim_feedforward: int, num_layers: int, dropout: float = 0.):
         super().__init__()
         # 创建 GPT-2 块组成的序列
-        self.layers = nn.ModuleList(GPTBlock(dim_head, num_heads, dim_feedforward, dropout, device) for _ in range(num_layers))
+        self.layers = nn.ModuleList(GPTBlock(dim_head, num_heads, dim_feedforward, dropout) for _ in range(num_layers))
 
         # 输出层将多头注意力输出映射为单维度预测
-        self.output_layer = nn.Linear(dim_head * num_heads, 1, device=device)
+        self.output_layer = nn.Linear(dim_head * num_heads, 1)
 
         # 初始化权重
         nn.init.xavier_uniform_(self.output_layer.weight)
@@ -460,7 +454,7 @@ class MidiNet(nn.Module):
         >>> print(note_pred.shape)  # torch.Size([2, 100, 88])
     """
 
-    def __init__(self, config: MidiNetConfig, tmpname_dropout: float = 0., pitch_dropout: float = 0, encoder_dropout: float = 0., decoder_dropout: float = 0., variance_predictor_dropout: float = 0., device: Optional[torch.device] = None):
+    def __init__(self, config: MidiNetConfig, pitch_dropout: float = 0, encoder_dropout: float = 0., decoder_dropout: float = 0., variance_predictor_dropout: float = 0.):
         super().__init__()
         dim_model = config.dim_head * config.num_heads  # 总模型维度
         self.variance_bins = config.variance_bins
@@ -470,26 +464,26 @@ class MidiNet(nn.Module):
         # 但事实上，我们压根没什么关注绝对音高，我们更加关注的音程信息
         # 比如 C4、G4 是纯五度关系，而 D4、A4 也是纯五度关系，如果使用 88 个不同的嵌入，模型就难以认识到它们的相对音高关系，它只会把 C4、G4、D4、A4 看成四个不同的音高
         # 所以我们需要只使用一个嵌入（区分有无音符），然后通过卷积捕捉音程关系
-        self.note_embedding = nn.Parameter(torch.Tensor(config.pitch_dim_model, device=device))
-        self.pitch_feature_encoder = nn.ModuleList(PitchFeatureEncoderLayer(config.pitch_dim_model, config.pitch_dim_feedforward, config.pitch_conv1_kernel, config.pitch_conv2_kernel, pitch_dropout, device) for _ in range(config.num_pitch_layers))
+        self.note_embedding = nn.Parameter(torch.Tensor(config.pitch_dim_model,))
+        self.pitch_feature_encoder = nn.ModuleList(PitchFeatureEncoderLayer(config.pitch_dim_model, config.pitch_dim_feedforward, config.pitch_conv1_kernel, config.pitch_conv2_kernel, pitch_dropout) for _ in range(config.num_pitch_layers))
         self.pitch_projection = nn.Linear(88 * config.pitch_dim_model, dim_model)
 
         # 编码器、解码器
-        self.encoder = nn.ModuleList(GPTBlock(config.dim_head, config.num_heads, config.dim_feedforward, encoder_dropout, device) for _ in range(config.num_encoder_layers))
-        self.decoder = nn.ModuleList(GPTBlock(config.dim_head, config.num_heads, config.dim_feedforward, decoder_dropout, device) for _ in range(config.num_decoder_layers))
+        self.encoder = nn.ModuleList(GPTBlock(config.dim_head, config.num_heads, config.dim_feedforward, encoder_dropout) for _ in range(config.num_encoder_layers))
+        self.decoder = nn.ModuleList(GPTBlock(config.dim_head, config.num_heads, config.dim_feedforward, decoder_dropout) for _ in range(config.num_decoder_layers))
 
         # 音符数量、音高平均值、音高范围预测器和嵌入
         self.note_count_predictor, self.note_count_embedding, self.pitch_mean_predictor, self.pitch_mean_embedding, self.pitch_range_predictor, self.pitch_range_embedding = [
             module
             for num_layers in [config.num_note_count_layers, config.num_pitch_mean_layers, config.num_pitch_range_layers]
             for module in [
-                VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, num_layers, variance_predictor_dropout, device=device),
-                nn.Embedding(config.variance_bins, dim_model, device=device)
+                VariancePredictor(config.dim_head, config.num_heads, config.dim_feedforward, num_layers, variance_predictor_dropout,),
+                nn.Embedding(config.variance_bins, dim_model,)
             ]
         ]
 
         # 音符预测器
-        self.note_predictor = nn.Linear(dim_model, 88, device=device)
+        self.note_predictor = nn.Linear(dim_model, 88,)
 
         # 初始化权重
         nn.init.uniform_(self.note_embedding)
