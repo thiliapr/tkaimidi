@@ -418,8 +418,8 @@ def train(
 
         # 达到累积步数时更新参数
         if (step + 1) % accumulation_steps == 0:
-            # scaler.unscale_(optimizer)  # 先将梯度反缩放回原始量级，为裁剪做准备
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # 在原始梯度量级上进行裁剪
+            scaler.unscale_(optimizer)  # 先将梯度反缩放回原始量级，为裁剪做准备
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # 在原始梯度量级上进行裁剪
             scaler.step(optimizer)  # 更新模型参数
             scaler.update()  # 调整缩放因子
             optimizer.zero_grad()  # 清空梯度
@@ -432,28 +432,13 @@ def train(
                 ("Pitch Mean", acc_pitch_means_loss),
                 ("Pitch Range", acc_pitch_ranges_loss),
             ]:
-                writer.add_scalars(f"Loss/{loss_name}", {"Train": loss_value}, global_step)
+                writer.add_scalar(f"Train/{loss_name} Loss", loss_value, global_step)
 
             # 重置累积损失
             acc_piano_roll_loss = acc_note_counts_loss = acc_pitch_means_loss = acc_pitch_ranges_loss = 0
 
-            # 记录各模块残差连接缩放因子
-            for module_name, module in [
-                ("Encoder", model.encoder),
-                ("Decoder", model.decoder),
-                ("Note Count Predictor", model.note_count_predictor.layers),
-                ("Pitch Mean Predictor", model.pitch_mean_predictor.layers),
-                ("Pitch Range Predictor", model.pitch_range_predictor.layers),
-            ]:
-                writer.add_scalars(f"Scale/{module_name}", {
-                    f"{layer_idx}.{submodule_name}": scale.abs().item()
-                    for layer_idx, layer in enumerate(module)
-                    for submodule_name, scale in [("Attention", layer.attention_scale), ("Feedforward", layer.feedforward_scale)]
-                })
-            writer.add_scalars("Scale/Pitch Feature Encoder", {
-                f"{layer_idx}": layer.scale.abs().item()
-                for layer_idx, layer in enumerate(model.pitch_feature_encoder)
-            })
+            # 记录模型梯度情况
+            writer.add_scalar(f"Train/Grad Norm", grad_norm.item(), global_step)
 
             # 定期记录训练预测结果
             if ((global_step + 1) % logging_interval == 0) or ((accumulation_steps * logging_interval) > num_steps and (step + 1) == num_steps):
@@ -650,8 +635,8 @@ def main(args: argparse.Namespace):
         # 绘制验证损失分布直方图，记录验证损失
         for loss_idx, loss_name in enumerate(["Piano Roll", "Note Count", "Pitch Mean", "Pitch Range"]):
             loss_values = [all_loss[loss_idx] for all_loss in val_loss]
-            writer.add_histogram(f"Validate Loss Distribution/{loss_name}", np.array(loss_values), current_epoch)
-            writer.add_scalars(f"Loss/{loss_name}", {"Valid": np.array(loss_values).mean()}, len(train_loader) // args.accumulation_steps * (current_epoch + 1))
+            writer.add_histogram(f"Validate/{loss_name} Loss Distribution", np.array(loss_values), current_epoch)
+            writer.add_scalar(f"Validate/{loss_name} Loss", np.array(loss_values).mean(), len(train_loader) // args.accumulation_steps * (current_epoch + 1))
 
     # 关闭 SummaryWriter 实例，确保所有记录的数据被写入磁盘并释放资源
     writer.close()
