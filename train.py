@@ -293,7 +293,7 @@ def main(args: argparse.Namespace):
     current_steps = ckpt_info["completed_steps"]
     acc_loss = 0
     while True:
-        if current_steps - ckpt_info["completed_steps"] >= args.val_per_steps * args.num_val_cycles:
+        if current_steps - ckpt_info["completed_steps"] >= args.val_per_steps * args.num_val_cycles * args.accumulation_steps:
             break
 
         # 为当前 epoch 设置采样器
@@ -301,7 +301,7 @@ def main(args: argparse.Namespace):
         val_sampler.set_epoch(current_steps)
 
         for sequence, padding_mask in train_loader:
-            if current_steps - ckpt_info["completed_steps"] >= args.val_per_steps * args.num_val_cycles:
+            if current_steps - ckpt_info["completed_steps"] >= args.val_per_steps * args.num_val_cycles * args.accumulation_steps:
                 break
 
             # 将数据移至目标设备
@@ -342,27 +342,27 @@ def main(args: argparse.Namespace):
                 writer.add_scalar("GradNorm/Train", grad_norm.item(), current_steps // args.accumulation_steps - 1)
                 acc_loss = 0
 
-                # 每隔一定步数进行验证
-                if current_steps // args.accumulation_steps % args.val_per_steps == 0:
-                    (logged_pred, logged_target), val_losses = validate(model, val_loader, device)
-                    model.train()  # 切换回训练模式
+            # 每隔一定步数进行验证
+            if current_steps % (args.accumulation_steps * args.val_per_steps) == 0:
+                (logged_pred, logged_target), val_losses = validate(model, val_loader, device)
+                model.train()  # 切换回训练模式
 
-                    # 记录验证损失
-                    val_loss_avg = sum(val_losses) / len(val_losses)
-                    writer.add_scalar("Loss/Validate", val_loss_avg, current_steps // args.accumulation_steps)
+                # 记录验证损失
+                val_loss_avg = sum(val_losses) / len(val_losses)
+                writer.add_scalar("Loss/Validate", val_loss_avg, current_steps // args.accumulation_steps)
 
-                    # 记录预测-目标对比图
-                    logged_pred = F.softmax(logged_pred[:args.probability_maps_length], dim=-1)
-                    logged_target = F.one_hot(logged_target[:args.probability_maps_length], num_classes=logged_pred.size(-1))
+                # 记录预测-目标对比图
+                logged_pred = F.softmax(logged_pred[:args.probability_maps_length], dim=-1)
+                logged_target = F.one_hot(logged_target[:args.probability_maps_length], num_classes=logged_pred.size(-1))
 
-                    # 生成对比图
-                    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
-                    ax1.set_title("Predicted Probability Maps")
-                    ax2.set_title("Difference (Target - Predicted)")
-                    plt.colorbar(ax1.imshow(logged_pred.cpu().T, aspect="auto", origin="lower", cmap="viridis", extent=[0, logged_pred.size(0), -1.5 - (logged_pred.size(-1) - 2) // 2, (logged_pred.size(-1) - 2) // 2 + 0.5]), ax=ax1)
-                    plt.colorbar(ax2.imshow((logged_target - logged_pred).cpu().T, aspect="auto", origin="lower", cmap=LinearSegmentedColormap.from_list("b_white_r", ["blue", "black", "red"]), vmin=-1, vmax=1, extent=[0, logged_pred.size(1), -1.5 - (logged_pred.size(-1) - 2) // 2, (logged_pred.size(-1) - 2) // 2 + 0.5]), ax=ax2)
-                    writer.add_figure(f"Prediction vs Target/Iteration {current_steps // args.accumulation_steps}", fig, current_steps // args.accumulation_steps)
-                    plt.close(fig)
+                # 生成对比图
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
+                ax1.set_title("Predicted Probability Maps")
+                ax2.set_title("Difference (Target - Predicted)")
+                plt.colorbar(ax1.imshow(logged_pred.cpu().T, aspect="auto", origin="lower", cmap="viridis", extent=[0, logged_pred.size(0), -1.5 - (logged_pred.size(-1) - 2) // 2, (logged_pred.size(-1) - 2) // 2 + 0.5]), ax=ax1)
+                plt.colorbar(ax2.imshow((logged_target - logged_pred).cpu().T, aspect="auto", origin="lower", cmap=LinearSegmentedColormap.from_list("b_white_r", ["blue", "black", "red"]), vmin=-1, vmax=1, extent=[0, logged_pred.size(1), -1.5 - (logged_pred.size(-1) - 2) // 2, (logged_pred.size(-1) - 2) // 2 + 0.5]), ax=ax2)
+                writer.add_figure(f"Prediction vs Target/Iteration {current_steps // args.accumulation_steps}", fig, current_steps // args.accumulation_steps)
+                plt.close(fig)
 
     # 关闭进度条和 SummaryWriter
     progress_bar.close()
