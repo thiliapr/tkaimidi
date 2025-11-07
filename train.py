@@ -8,7 +8,7 @@ import random
 import pathlib
 import argparse
 from typing import Optional
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -18,11 +18,11 @@ from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, Sampler, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
-from generate import plot_piano_roll
+from matplotlib.colors import LinearSegmentedColormap
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_DECODER_DROPOUT, DEFAULT_ENCODER_DROPOUT, DEFAULT_LEARNING_RATE, DEFAULT_LOGGING_INTERVAL, DEFAULT_PIANO_ROLL_LENGTH, DEFAULT_PITCH_DROPOUT, DEFAULT_TRAIN_MAX_BATCH_TOKENS, DEFAULT_VAL_MAX_BATCH_TOKENS, DEFAULT_VARIANCE_PREDICTOR_DROPOUT, DEFAULT_WEIGHT_DECAY
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_PROBABILITY_MAPS_LENGTH, DEFAULT_TRAIN_MAX_BATCH_TOKENS, DEFAULT_VAL_MAX_BATCH_TOKENS, DEFAULT_DROPOUT
 from utils.model import MidiNet
-from utils.toolkit import convert_to_tensor, create_padding_mask
+from utils.toolkit import create_padding_mask
 
 # 解除线程数量限制
 os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(os.cpu_count())
@@ -37,28 +37,19 @@ class MidiDataset(Dataset):
         dataset_file: 快速训练数据集文件
 
     Yields:
-        - 钢琴卷帘
-        - 音符数量（密度）
-        - 平均音高
-        - 音高范围（标准差）
+        旋律
     """
 
     def __init__(self, dataset_file: os.PathLike):
-        # 获取所有音频特征
+        # 获取所有旋律
         self.data_samples = np.load(dataset_file)
 
-    def __getitem__(self, index: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        return (
-            np.concatenate([np.zeros([1, 88], dtype=bool), self.data_samples[f"{index}:piano_roll"]], axis=0),  # 添加全零帧作为起始帧
-            self.data_samples[f"{index}:note_counts"],
-            self.data_samples[f"{index}:pitch_means"],
-            self.data_samples[f"{index}:pitch_ranges"]
-        )
+    def __getitem__(self, index: int) -> np.ndarray:
+        return self.data_samples[f"{index}"]
 
     def __len__(self) -> int:
-        # 每个样本有 4 个特征，然后这个文件还储存了每个序列的长度，也就是 1 个特征
-        # 所以用特征总数减去 1 再除以 4 就是样本数
-        return (len(self.data_samples) - 1) // 4
+        # 这个文件储存了每个序列的长度，所以用总数减去 1 就是样本数
+        return len(self.data_samples) - 1
 
 
 class MidiDatasetSampler(Sampler[list[int]]):
@@ -142,353 +133,66 @@ class MidiDatasetSampler(Sampler[list[int]]):
         return len(self.batches)
 
 
-def sequence_collate_fn(batch: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]) -> tuple[
-    torch.BoolTensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.BoolTensor,
-]:
+def sequence_collate_fn(batch: list[np.ndarray]) -> tuple[torch.LongTensor, torch.BoolTensor]:
     """
     处理变长序列数据的批次整理函数
-    将输入的多个变长序列样本整理为批次张量，包括钢琴卷帘、音符数量、平均音高、音高范围，并生成相应的填充掩码和序列长度信息
+    将输入的多个变长序列样本整理为批次张量，并生成相应的填充掩码和序列长度信息
 
     工作流程：
     1. 解压批次数据并将每个特征转换为 PyTorch 张量
-    2. 为钢琴卷帘创建填充掩码
+    2. 创建填充掩码
     3. 计算序列的实际长度
     4. 对所有序列进行填充对齐处理
     5. 返回整理后的批次数据
 
     Args:
-        batch: 包含多个样本的列表，每个样本是包含钢琴卷帘、音符数量、平均音高、音高范围特征的元组
+        batch: 包含多个样本的列表
 
     Returns:
-        包含整理后批次数据的元组，包括填充后的钢琴卷帘、音符数量、平均音高、音高范围，以及填充掩码
+        包含整理后批次数据的元组，包括填充后的旋律序列合填充掩码
 
     Examples:
         >>> from torch.utils.data import DataLoader
         >>> dataset = MidiDataset("dataset.npz")
         >>> dataloader = DataLoader(dataset, batch_size=32, collate_fn=sequence_collate_fn)
-        >>> for piano_roll, note_counts, pitch_means, pitch_ranges, padding_mask in dataloader:
+        >>> for sequence, padding_mask in dataloader:
         >>>     ...
     """
     # 解压批次数据并将每个特征列表转换为张量列表
-    piano_roll, note_counts, pitch_means, pitch_ranges = [convert_to_tensor(item) for item in zip(*batch)]
+    sequence = [torch.tensor(item) for item in batch]
 
     # 创建填充掩码用于标识有效数据位置
-    padding_mask = create_padding_mask(piano_roll)
+    padding_mask = create_padding_mask(sequence)
 
     # 对变长序列进行填充对齐，使批次内所有样本长度一致
-    piano_roll, note_counts, pitch_means, pitch_ranges = [torch.nn.utils.rnn.pad_sequence(item, batch_first=True) for item in [piano_roll, note_counts, pitch_means, pitch_ranges]]
+    sequence = torch.nn.utils.rnn.pad_sequence(sequence, batch_first=True)
 
     # 返回批次数据
-    return (
-        piano_roll,
-        note_counts,
-        pitch_means,
-        pitch_ranges,
-        padding_mask,
-    )
-
-
-def midinet_loss(
-    piano_roll_pred: torch.Tensor,
-    note_count_pred: torch.Tensor,
-    pitch_mean_pred: torch.Tensor,
-    pitch_range_pred: torch.Tensor,
-    piano_roll_target: torch.Tensor,
-    note_count_target: torch.Tensor,
-    pitch_mean_target: torch.Tensor,
-    pitch_range_target: torch.Tensor,
-    padding_mask: torch.BoolTensor,
-    variance_weight: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    计算 MidiNet 模型的复合损失函数，包含钢琴卷帘、音符数量、音高均值和音高范围四个损失分量
-    该函数通过掩码机制处理变长序列，仅对有效帧计算损失，忽略填充区域
-    使用二元交叉熵计算钢琴卷帘损失，使用均方误差计算其他三个回归损失分量
-
-    Args:
-        piano_roll_pred: 预测的钢琴卷帘矩阵，形状为 [batch_size, seq_len, 88]
-        note_count_pred: 预测的音符数量，形状为 [batch_size, seq_len]
-        pitch_mean_pred: 预测的平均音高，形状为 [batch_size, seq_len]
-        pitch_range_pred: 预测的音高范围，形状为 [batch_size, seq_len]
-        piano_roll_target: 目标的钢琴卷帘矩阵，形状为 [batch_size, seq_len, 88]
-        note_count_target: 目标的音符数量，形状为 [batch_size, seq_len]
-        pitch_mean_target: 目标的平均音高，形状为 [batch_size, seq_len]
-        pitch_range_target: 目标的音高范围，形状为 [batch_size, seq_len]
-        padding_mask: 填充掩码，True 表示填充位置，形状为 [batch_size, seq_len]
-        variance_weight: 用于缩放回归损失的权重因子
-
-    Returns:
-        返回四个损失张量的元组：(钢琴卷帘损失, 音符数量损失, 音高均值损失, 音高范围损失)
-    """
-    def masked_loss(pred: Optional[torch.Tensor], target: torch.Tensor, padding_mask: torch.BoolTensor, criterion: Callable[..., torch.Tensor], bce_loss: bool = False):
-        "计算掩码区域的损失，仅对有效帧求平均"
-        # 重塑预测、目标、填充掩码张量以便统一 variance 和 piano_roll 掩码应用逻辑
-        # [batch_size, seq_len, feature_dim]，其中 feature_dim 可能为 1 或 88
-        pred = pred.view(*pred.shape[:2], -1)
-        target = target.view(*pred.shape[:2], -1)
-        padding_mask = padding_mask.unsqueeze(2).expand_as(pred)
-
-        # 如果是二元交叉熵损失，则计算正样本权重，避免正负样本不均衡
-        if bce_loss:
-            # 计算正负样本数量和正样本权重
-            pos_num = target.masked_fill(padding_mask, 0).sum()
-            neg_num = (~target).masked_fill(padding_mask, 0).sum()
-            pos_weight = neg_num / pos_num.clamp(1)  # 防止除零
-
-            # 创建带正样本权重的损失函数
-            criterion = lambda *args, fn=criterion, **kwargs: fn(*args, **kwargs, pos_weight=pos_weight)
-
-        # 计算逐元素损失 [batch_size, seq_len, ...]
-        elementwise_loss = criterion(pred, target.to(dtype=pred.dtype), reduction="none")
-
-        # 将填充区域的损失置零
-        masked_loss = elementwise_loss.masked_fill(padding_mask, 0)
-
-        # 计算损失平均值
-        return masked_loss.sum(dim=[1, 2]) / (~padding_mask).sum(dim=[1, 2])
-
-    # 计算各分量损失
-    piano_roll_loss = masked_loss(piano_roll_pred, piano_roll_target, padding_mask, F.binary_cross_entropy_with_logits, True)
-    note_count_loss, pitch_mean_loss, pitch_range_loss = [
-        masked_loss(pred * variance_weight, target * variance_weight, padding_mask, F.mse_loss)
-        for pred, target in [
-            (note_count_pred, note_count_target),
-            (pitch_mean_pred, pitch_mean_target),
-            (pitch_range_pred, pitch_range_target),
-        ]
-    ]
-
-    # 返回各分量损失
-    return piano_roll_loss, note_count_loss, pitch_mean_loss, pitch_range_loss
-
-
-def visualize_music_comparison(
-    prediction: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    target: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    title: str,
-    variance_weight: int,
-    writer: SummaryWriter
-):
-    """
-    可视化音乐生成结果的对比图，包括钢琴卷帘图和统计特征对比
-    创建包含预测结果和真实标签对比的完整可视化图表，并将其添加到 TensorBoard 的 SummaryWriter 中
-
-    工作流程：
-    1. 创建包含5个子图的画布，分别用于显示预测钢琴卷帘、真实钢琴卷帘、音符数量对比、音高均值对比、音高范围对比
-    2. 绘制预测和真实的钢琴卷帘图
-    3. 绘制三个统计特征（音符数量、音高均值、音高范围）的预测值与真实值对比曲线
-    4. 将完整的图表添加到 TensorBoard 的 SummaryWriter 中用于可视化监控
-
-    Args:
-        prediction: 模型预测结果的四元组，包含 (钢琴卷帘矩阵, 音符数量序列, 音高均值序列, 音高范围序列)
-        target: 真实标签的四元组，包含与 prediction 相同结构的真实数据
-        title: 图表在 TensorBoard 中显示的标题
-        variance_weight: 用于缩放统计特征的权重因子
-        writer: TensorBoard 的 SummaryWriter 对象，用于记录图表
-
-    Returns:
-        无返回值
-
-    Examples:
-        >>> pred_data = piano_roll_pred, note_count_pred, pitch_mean_pred, pitch_range_pred
-        >>> target_data = piano_roll_true, note_count_true, pitch_mean_true, pitch_range_true
-        >>> visualize_music_comparison(pred_data, target_data, "Epoch_1", 64, writer)
-    """
-    # 创建图像和坐标轴
-    figure, (pred_piano_roll_ax, target_piano_roll_ax, note_count_ax, pitch_mean_ax, pitch_range_ax) = plt.subplots(5, 1, figsize=(12, 30))
-
-    # 将统计特征扩大到 variance_bins 尺度
-    prediction, target = [
-        features[:1] + [feature * variance_weight for feature in features[1:]]
-        for features in [prediction, target]
-    ]
-
-    # 绘制预测和真实的钢琴卷帘对比图
-    for ax, figure_title, piano_roll, note_count, pitch_mean, pitch_range in [
-        (pred_piano_roll_ax, "Predicted Piano Roll", *prediction),
-        (target_piano_roll_ax, "True Piano Roll", *target)
-    ]:
-        # 设置标题
-        ax.set_title(figure_title)
-
-        # 绘制钢琴卷帘
-        plot_piano_roll(piano_roll, note_count, pitch_mean, pitch_range, ax)
-
-    # 绘制统计特征对比图：音符数量、音高均值、音高范围
-    for ax, label, pred_data, target_data in [
-        (note_count_ax, "Note Count", prediction[1], target[1]),
-        (pitch_mean_ax, "Pitch Mean", prediction[2], target[2]),
-        (pitch_range_ax, "Pitch Range", prediction[3], target[3]),
-    ]:
-        # 设置 x 轴范围与预测数据长度一致
-        ax.set_xlim(0, len(pred_data))
-        ax.set_title(f"{label} - Predicted vs True")
-
-        # 绘制预测曲线（蓝色）和真实曲线（绿色）
-        ax.plot(pred_data, color="blue", label="Predicted")
-        ax.plot(target_data, color="green", label="True")
-
-        # 绘制预测与真实差距区间
-        ax.fill_between(
-            range(len(pred_data)),
-            [min(data) for data in zip(pred_data, target_data)],
-            [max(data) for data in zip(pred_data, target_data)],
-            alpha=0.7
-        )
-
-        # 在右上角显示图例
-        ax.legend(loc="upper right")
-
-    # 添加图像到 writer
-    writer.add_figure(title, figure)
-
-
-def train(
-    model: MidiNet,
-    dataloader: DataLoader,
-    optimizer: optim.AdamW,
-    scaler: GradScaler,
-    completed_iters: int,
-    writer: SummaryWriter,
-    piano_roll_length: int,
-    logging_interval: int,
-    accumulation_steps: int = 1,
-    encoder_only: bool = False,
-    decoder_only: bool = False,
-    device: torch.device = "cpu"
-):
-    """
-    训练 MidiNet 模型的主函数，支持梯度累积和混合精度训练
-    该函数执行完整的训练循环，包括前向传播、损失计算、反向传播和参数更新
-    同时记录训练过程中的损失值和可视化结果，便于监控训练进度
-
-    Args:
-        model: 待训练的 MidiNet 模型实例
-        dataloader: 训练数据加载器
-        optimizer: 模型优化器
-        scaler: 混合精度梯度缩放器
-        completed_iters: 已经完成多少次迭代，记录损失用
-        writer: TensorBoard 日志写入器，用于记录训练过程
-        piano_roll_length: 可视化时钢琴卷帘的最大显示长度
-        logging_interval: 记录日志和生成可视化的间隔步数
-        accumulation_steps: 梯度累积步数
-        encoder_only: 如果为 True，则只训练编码器部分
-        decoder_only: 如果为 True，则只训练解码器部分
-        device: 训练设备（默认使用 CPU）
-    """
-    # 设置模型为训练模式
-    model.train()
-
-    # 计算前向传播多少次
-    num_steps = len(dataloader) // accumulation_steps * accumulation_steps
-
-    # 创建进度条，显示训练进度
-    progress_bar = tqdm(total=num_steps, desc="Train")
-
-    # 当前累积步骤的总损失
-    acc_piano_roll_loss = acc_note_counts_loss = acc_pitch_means_loss = acc_pitch_ranges_loss = 0
-
-    # 提前清空梯度
-    optimizer.zero_grad()
-
-    # 遍历整个训练集
-    for step, batch in zip(range(num_steps), dataloader):
-        # 数据移至目标设备
-        piano_roll, note_counts, pitch_means, pitch_ranges, padding_mask = [item.to(device=device) for item in batch]
-
-        # 自动混合精度环境
-        with autocast(device.type, dtype=torch.float16):
-            piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], note_counts, pitch_means, pitch_ranges, padding_mask[:, :-1], encoder_only=encoder_only)  # 模型前向传播（使用教师强制）
-            all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:], (model.variance_bins - 1) * 2)  # 计算损失
-            piano_roll_loss, note_counts_loss, pitch_means_loss, pitch_ranges_loss = (loss.mean() / accumulation_steps for loss in all_loss)  # 计算整个批次的损失
-            value = piano_roll_loss * (not encoder_only) + (note_counts_loss + pitch_means_loss + pitch_ranges_loss) * (not decoder_only)
-
-        # 梯度缩放与反向传播
-        scaler.scale(value).backward()
-
-        # 更新累积损失
-        acc_piano_roll_loss += piano_roll_loss.item()
-        acc_note_counts_loss += note_counts_loss.item()
-        acc_pitch_means_loss += pitch_means_loss.item()
-        acc_pitch_ranges_loss += pitch_ranges_loss.item()
-
-        # 达到累积步数时更新参数
-        if (step + 1) % accumulation_steps == 0:
-            scaler.unscale_(optimizer)  # 先将梯度反缩放回原始量级，为裁剪做准备
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # 在原始梯度量级上进行裁剪
-            scaler.step(optimizer)  # 更新模型参数
-            scaler.update()  # 调整缩放因子
-            optimizer.zero_grad()  # 清空梯度
-            global_step = completed_iters + ((step + 1) // accumulation_steps) - 1  # 计算全局步数
-
-            # 记录损失
-            for loss_name, loss_value in [
-                ("Piano Roll", acc_piano_roll_loss),
-                ("Note Count", acc_note_counts_loss),
-                ("Pitch Mean", acc_pitch_means_loss),
-                ("Pitch Range", acc_pitch_ranges_loss),
-            ]:
-                writer.add_scalar(f"Train/{loss_name} Loss", loss_value, global_step)
-
-            # 重置累积损失
-            acc_piano_roll_loss = acc_note_counts_loss = acc_pitch_means_loss = acc_pitch_ranges_loss = 0
-
-            # 记录模型梯度情况
-            writer.add_scalar(f"Train/Grad Norm", grad_norm.item(), global_step)
-
-            # 定期记录训练预测结果
-            if ((global_step + 1) % logging_interval == 0) or ((accumulation_steps * logging_interval) > num_steps and (step + 1) == num_steps):
-                # 提取预测结果和目标值（去除填充部分）
-                results = [
-                    x[0, :(~padding_mask).sum(dim=1)[0]].detach().cpu().numpy()
-                    for x in [F.sigmoid(piano_roll_pred), piano_roll[:, 1:], note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
-                ]
-
-                # 分离预测值和目标值
-                pred, target = results[::2], results[1::2]
-
-                # 随机截取指定长度的钢琴卷帘用于可视化
-                start_pos = random.randint(0, max(0, len(pred[0]) - piano_roll_length))
-                pred, target = [
-                    [feature[start_pos:start_pos + piano_roll_length] for feature in items]
-                    for items in [pred, target]
-                ]
-
-                # 绘制在训练集上，预测钢琴卷帘和目标钢琴卷帘对比图
-                visualize_music_comparison(pred, target, f"Piano Roll/Train/Iteration {global_step + 1}", model.variance_bins - 1, writer)
-
-        # 更新进度条
-        progress_bar.update()
+    return sequence, padding_mask
 
 
 @torch.inference_mode()
 def validate(
     model: MidiNet,
     dataloader: DataLoader,
-    encoder_only: bool = False,
     device: torch.device = "cpu"
-) -> tuple[tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]], list[tuple[float, float, float, float]]]:
+) -> tuple[tuple[torch.Tensor, torch.Tensor], list[float]]:
     """
-    在验证集上评估 MidiNet 模型的性能，计算模型在验证集上的各项损失值
+    在验证集上评估 MidiNet 模型的性能，计算模型在验证集上的损失值
     使用推理模式禁用梯度计算，节省内存并加速验证过程
     支持自动混合精度计算，在保持精度的同时提升计算效率
 
     Args:
         model: 要验证的 MidiNet 模型实例
         dataloader: 验证集的数据加载器，提供批次数据
-        encoder_only: 如果为 True，则只使用编码器部分进行验证
         device: 计算设备，用于指定模型和数据所在的硬件设备
 
     Returns:
-        tuple[tuple[预测, 目标], list[tuple[钢琴卷帘损失, 音符数量损失, 音高均值损失, 音高范围损失]]]
+        tuple[tuple[预测, 目标], list[每个样本的损失]]
 
     Examples:
-        >>> validation_results = validate(model, val_loader, 1.0, torch.device("cuda"))
-        >>> piano_roll_loss_avg = sum(result[1][0] for result in validation_results) / len(validation_results)
+        >>> validation_results = validate(model, val_loader, "cuda")
+        >>> loss_avg = sum(result[1] for result in validation_results) / len(validation_results)
     """
     # 设置模型为评估模式
     model.eval()
@@ -500,27 +204,22 @@ def validate(
     # 遍历验证集所有批次数据，显示进度条
     for batch_idx, batch in enumerate(tqdm(dataloader, total=len(dataloader), desc="Validate")):
         # 数据移至目标设备
-        piano_roll, note_counts, pitch_means, pitch_ranges, padding_mask = [item.to(device=device) for item in batch]
+        sequence, padding_mask = [item.to(device=device) for item in batch]
 
         # 自动混合精度环境
-        with autocast(device.type, dtype=torch.float16):
+        with autocast(device, dtype=torch.float16):
             # 模型前向传播（不使用教师强制）
-            piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, _ = model(piano_roll[:, :-1], padding_mask=padding_mask[:, :-1], encoder_only=encoder_only)
+            outputs, _ = model(sequence[:, :-1], padding_mask=padding_mask[:, :-1])
 
             # 计算损失
-            all_loss = midinet_loss(piano_roll_pred, note_counts_pred, pitch_means_pred, pitch_ranges_pred, piano_roll[:, 1:], note_counts, pitch_means, pitch_ranges, padding_mask[:, 1:], (model.variance_bins - 1) * 2)
+            loss = F.cross_entropy(outputs.flatten(0, 1), sequence[:, 1:].flatten(), reduction="none").reshape(outputs.shape[:-1]).masked_fill(padding_mask[:, 1:], 0).sum(dim=1) / (~padding_mask).sum(dim=1)
 
         # 记录当前批次的损失信息
-        for batch_idx in range(piano_roll.size(0)):
-            loss_results.append(tuple(loss[batch_idx].item() for loss in all_loss))
+        loss_results.extend(loss.tolist())
 
-        # 如果没有记录任何预测，并且随机数大于 0.5 或者已经是最后一个批次，则记录目标和损失
-        if logged_pred is None and (random.random() > 0.5 or batch_idx == len(dataloader) - 1):
-            results = [
-                x[0, :(~padding_mask).sum(dim=1)[0]].cpu().numpy()
-                for x in [F.sigmoid(piano_roll_pred), piano_roll[:, 1:], note_counts_pred, note_counts, pitch_means_pred, pitch_means, pitch_ranges_pred, pitch_ranges]
-            ]
-            logged_pred, logged_target = results[::2], results[1::2]
+        # 如果没有记录任何预测，并且抽选到该批次或者已经是最后一个批次，则记录目标和损失
+        if logged_pred is None and (random.randint(0, len(dataloader) - 1) == 0 or batch_idx == len(dataloader) - 1):
+            logged_pred, logged_target = outputs[0], sequence[0, 1:]
 
     return (logged_pred, logged_target), loss_results
 
@@ -536,40 +235,29 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
         包含解析后的参数的命名空间对象。
     """
     parser = argparse.ArgumentParser(description="训练 TkTTS 模型")
-    parser.add_argument("num_epochs", type=int, help="训练的总轮数")
+    parser.add_argument("num_val_cycles", type=int, help="训练过程中进行多少次验证")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="加载和保存检查点的路径")
     parser.add_argument("-t", "--train-dataset", type=pathlib.Path, required=True, help="训练集文件路径")
     parser.add_argument("-v", "--val-dataset", type=pathlib.Path, required=True, help="验证集文件路径")
     parser.add_argument("-tt", "--train-max-batch-tokens", default=DEFAULT_TRAIN_MAX_BATCH_TOKENS, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-tv", "--val-max-batch-tokens", default=DEFAULT_VAL_MAX_BATCH_TOKENS, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
-    parser.add_argument("-lr", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="学习率，默认为 %(default)s")
-    parser.add_argument("-wd", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="权重衰减系数，默认为 %(default)s")
-    parser.add_argument("-de", "--encoder-dropout", default=DEFAULT_ENCODER_DROPOUT, type=float, help="编码器 Dropout 概率，默认为 %(default)s")
-    parser.add_argument("-dd", "--decoder-dropout", default=DEFAULT_DECODER_DROPOUT, type=float, help="解码器 Dropout 概率，默认为 %(default)s")
-    parser.add_argument("-dv", "--variance-predictor-dropout", default=DEFAULT_VARIANCE_PREDICTOR_DROPOUT, type=float, help="变异性预测器 Dropout 概率，默认为 %(default)s")
-    parser.add_argument("-dp", "--pitch-dropout", default=DEFAULT_PITCH_DROPOUT, type=float, help="音高特征编码器 Dropout 概率，默认为 %(default)s")
+    parser.add_argument("-vp", "--val-per-steps", default=1024, type=int, help="每训练多少步进行一次验证，默认为 %(default)s")
+    parser.add_argument("-dr", "--dropout", default=DEFAULT_DROPOUT, type=float, help="Dropout 概率，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
-    parser.add_argument("-pr", "--piano-roll-length", default=DEFAULT_PIANO_ROLL_LENGTH, type=int, help="记录预测-目标钢琴卷帘时，最大允许的长度，超过该长度的钢琴卷帘将会被截取，默认为 %(default)s")
-    parser.add_argument("-li", "--logging-interval", default=DEFAULT_LOGGING_INTERVAL, type=int, help="训练时，记录日志和生成可视化的间隔步数，默认为 %(default)s")
-    parser.add_argument("-eo", "--encoder-only", action="store_true", help="如果设置该标志，则只训练编码器部分")
-    parser.add_argument("-do", "--decoder-only", action="store_true", help="如果设置该标志，则只训练解码器部分")
+    parser.add_argument("-pm", "--probability-maps-length", default=DEFAULT_PROBABILITY_MAPS_LENGTH, type=int, help="记录预测-目标对比时，最大允许的长度，超过该长度将会被截取，默认为 %(default)s")
     return parser.parse_args(args)
 
 
 def main(args: argparse.Namespace):
-    # 检查参数合法性
-    if args.encoder_only and args.decoder_only:
-        raise ValueError("不能同时设置 --encoder-only 和 --decoder-only")
-
     # 设置当前进程的设备
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 读取检查点
     print("读取检查点 ...")
     model_state, model_config, ckpt_info, optimizer_state, scaler_state = load_checkpoint_train(args.ckpt_path)
 
     # 创建模型并加载状态
-    model = MidiNet(model_config, args.pitch_dropout, args.encoder_dropout, args.decoder_dropout, args.variance_predictor_dropout)
+    model = MidiNet(model_config, args.dropout)
     model.load_state_dict(model_state)
 
     # 转移模型到设备
@@ -578,17 +266,6 @@ def main(args: argparse.Namespace):
     # 创建优化器并加载状态
     optimizer = optim.AdamW(model.parameters())
     optimizer.load_state_dict(optimizer_state)
-
-    # 设置学习率、权重衰减系数
-    for group in optimizer.param_groups:
-        group["lr"] = args.learning_rate
-        group["weight_decay"] = args.weight_decay
-
-    # 如果只训练解码器，则冻结编码器相关参数
-    if args.decoder_only:
-        for module in [model.note_embedding, model.pitch_feature_encoder, model.encoder, model.note_count_predictor, model.pitch_mean_predictor, model.pitch_range_predictor]:
-            for parameter in module.parameters():
-                parameter.requires_grad_(False)
 
     # 创建混合精度梯度缩放器并加载状态
     scaler = GradScaler(device)
@@ -610,39 +287,89 @@ def main(args: argparse.Namespace):
     writer = SummaryWriter(args.ckpt_path / f"logdir/default")
 
     # 开始训练
-    for epoch in range(args.num_epochs):
-        # 计算累积 Epoch 数
-        current_epoch = ckpt_info["completed_epochs"] + epoch
+    optimizer.zero_grad()  # 提前清零梯度
+    model.train()  # 设置模型为训练模式
+    progress_bar = tqdm(total=args.val_per_steps * args.num_val_cycles, desc="Train")
+    current_steps = ckpt_info["completed_steps"]
+    acc_loss = acc_grad_norm = 0
+    while True:
+        if current_steps - ckpt_info["completed_steps"] >= args.val_per_steps * args.num_val_cycles:
+            break
 
-        # 训练一轮模型
-        train_sampler.set_epoch(current_epoch)
-        train(model, train_loader, optimizer, scaler, len(train_loader) // args.accumulation_steps * current_epoch, writer, args.piano_roll_length, args.logging_interval, args.accumulation_steps, args.encoder_only, args.decoder_only, device)
+        # 为当前 epoch 设置采样器
+        train_sampler.set_epoch(current_steps)
+        val_sampler.set_epoch(current_steps)
 
-        # 验证模型效果
-        val_sampler.set_epoch(current_epoch)
-        (val_pred, val_target), val_loss = validate(model, val_loader, args.encoder_only, device)
+        for sequence, padding_mask in train_loader:
+            if current_steps - ckpt_info["completed_steps"] >= args.val_per_steps * args.num_val_cycles:
+                break
+        
+            # 将数据移至目标设备
+            sequence, padding_mask = [item.to(device=device) for item in (sequence, padding_mask)]
 
-        # 随机截取指定长度的钢琴卷帘用于可视化
-        start_pos = random.randint(0, max(0, len(val_pred[0]) - args.piano_roll_length))
-        val_pred, val_target = [
-            [feature[start_pos:start_pos + args.piano_roll_length] for feature in items]
-            for items in [val_pred, val_target]
-        ]
+            # 自动混合精度环境
+            with autocast(device, dtype=torch.float16):
+                # 模型前向传播，使用教师强制
+                outputs, _ = model(sequence[:, :-1], padding_mask=padding_mask[:, :-1])
 
-        # 绘制在验证集上，预测钢琴卷帘和目标钢琴卷帘对比图
-        visualize_music_comparison(val_pred, val_target, f"Piano Roll/Validate/Epoch {current_epoch + 1}", model.variance_bins - 1, writer)
+                # 计算损失
+                loss = F.cross_entropy(outputs.flatten(0, 1), sequence[:, 1:].flatten(), reduction="none").reshape(outputs.shape[:-1]).masked_fill(padding_mask[:, 1:], 0).sum() / (~padding_mask).sum()
 
-        # 绘制验证损失分布直方图，记录验证损失
-        for loss_idx, loss_name in enumerate(["Piano Roll", "Note Count", "Pitch Mean", "Pitch Range"]):
-            loss_values = [all_loss[loss_idx] for all_loss in val_loss]
-            writer.add_histogram(f"Validate/{loss_name} Loss Distribution", np.array(loss_values), current_epoch)
-            writer.add_scalar(f"Validate/{loss_name} Loss", np.array(loss_values).mean(), len(train_loader) // args.accumulation_steps * (current_epoch + 1))
+                # 梯度累积
+                loss = loss / args.accumulation_steps
+                acc_loss += loss.item()
 
-    # 关闭 SummaryWriter 实例，确保所有记录的数据被写入磁盘并释放资源
+            # 反向传播
+            scaler.scale(loss).backward()
+
+            # 梯度裁剪
+            scaler.unscale_(optimizer)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            acc_grad_norm += grad_norm.item() / args.accumulation_steps
+
+            # 进度条更新
+            progress_bar.update()
+
+            # 每隔一定步数更新一次参数
+            current_steps += 1
+            if current_steps % args.accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
+                # 记录训练指标
+                writer.add_scalar("Loss/Train", acc_loss, current_steps // args.accumulation_steps - 1)
+                writer.add_scalar("GradNorm/Train", acc_grad_norm, current_steps // args.accumulation_steps - 1)
+                acc_loss = acc_grad_norm = 0
+
+            # 每隔一定步数进行验证
+            if current_steps // args.accumulation_steps % args.val_per_steps == 0:
+                (logged_pred, logged_target), val_losses = validate(model, val_loader, device)
+                model.train()  # 切换回训练模式
+
+                # 记录验证损失
+                val_loss_avg = sum(val_losses) / len(val_losses)
+                writer.add_scalar("Loss/Validate", val_loss_avg, current_steps // args.accumulation_steps)
+
+                # 记录预测-目标对比图
+                logged_pred = F.softmax(logged_pred[:args.probability_maps_length], dim=-1)
+                logged_target = F.one_hot(logged_target[:args.probability_maps_length], num_classes=logged_pred.size(-1))
+
+                # 生成对比图
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
+                ax1.set_title("Predicted Probability Maps")
+                ax2.set_title("Difference (Target - Predicted)")
+                plt.colorbar(ax1.imshow(logged_pred.T, aspect="auto", origin="lower", cmap="viridis", extent=[0, logged_pred.size(0), -1.5 - (logged_pred.size(-1) - 2) // 2, (logged_pred.size(-1) - 2) // 2 + 0.5]), ax=ax1)
+                plt.colorbar(ax2.imshow((logged_target - logged_pred).T, aspect="auto", origin="lower", cmap=LinearSegmentedColormap.from_list("b_white_r", ["blue", "black", "red"]), vmin=-1, vmax=1, extent=[0, logged_pred.size(1), -1.5 - (logged_pred.size(-1) - 2) // 2, (logged_pred.size(-1) - 2) // 2 + 0.5]), ax=ax2)
+                writer.add_figure(f"Prediction vs Target/Iteration {current_steps // args.accumulation_steps}", fig, current_steps // args.accumulation_steps)
+                plt.close(fig)
+
+    # 关闭进度条和 SummaryWriter
+    progress_bar.close()
     writer.close()
 
     # 保存当前模型的检查点
-    ckpt_info["completed_epochs"] += args.num_epochs
+    ckpt_info["completed_steps"] = current_steps
     save_checkpoint(
         args.ckpt_path,
         model.cpu().state_dict(),

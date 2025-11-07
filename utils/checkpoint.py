@@ -16,11 +16,11 @@ class MidiNetInfo(TypedDict):
     模型的额外信息，也就是不能从状态字典中推断出来的信息
 
     Args:
-        num_heads: 编-解码器注意力头的数量
-        completed_epochs: 总共训练了多少个 Epoch
+        num_heads: 注意力头的数量
+        completed_steps: 总共训练了多少步
     """
     num_heads: int
-    completed_epochs: int
+    completed_steps: int
 
 
 def save_checkpoint(
@@ -112,7 +112,6 @@ def extract_config(model_state: dict[str, Any], num_heads: int) -> MidiNetConfig
 
     Args:
         model_state: 保存模型参数的状态字典
-        pitch_num_heads: 音高特征编码器的注意力头数量
         num_heads: 编-解码器的注意力头数量
 
     Returns:
@@ -122,15 +121,7 @@ def extract_config(model_state: dict[str, Any], num_heads: int) -> MidiNetConfig
         >>> state_dict = torch.load("model.pth")
         >>> config = extract_config(state_dict, 1)  # 假设单头注意力
     """
-    pitch_conv1_kernel = model_state["pitch_feature_encoder.0.conv1.weight"].size(2)
-    pitch_dim_model, pitch_dim_feedforward, pitch_conv2_kernel = model_state["pitch_feature_encoder.0.conv2.weight"].shape
-    dim_head = model_state["pitch_projection.weight"].size(0) // num_heads
-    dim_feedforward = model_state["encoder.0.linear2.weight"].size(1)
-    varaince_bins = model_state["pitch_mean_embedding.weight"].size(0)
-    num_pitch_layers = len({key.split(".")[1] for key in model_state if key.startswith("pitch_feature_encoder.")})
-    num_note_count_layers = len({key.split(".")[2] for key in model_state if key.startswith("note_count_predictor.layers.")})
-    num_pitch_mean_layers = len({key.split(".")[2] for key in model_state if key.startswith("pitch_mean_predictor.layers.")})
-    num_pitch_range_layers = len({key.split(".")[2] for key in model_state if key.startswith("pitch_range_predictor.layers.")})
-    num_encoder_layers = len({key.split(".")[1] for key in model_state if key.startswith("encoder.")})
-    num_decoder_layers = len({key.split(".")[1] for key in model_state if key.startswith("decoder.")})
-    return MidiNetConfig(pitch_dim_model, pitch_dim_feedforward, num_heads, dim_head, dim_feedforward, pitch_conv1_kernel, pitch_conv2_kernel, varaince_bins, num_pitch_layers, num_note_count_layers, num_pitch_mean_layers, num_pitch_range_layers, num_encoder_layers, num_decoder_layers)
+    dim_head = model_state["layers.0.linear2.weight"].size(0) // num_heads
+    dim_feedforward = model_state["layers.0.linear2.weight"].size(1)
+    num_layers = len({key.split(".")[1] for key in model_state if key.startswith("layers.")})
+    return MidiNetConfig(num_heads, dim_head, dim_feedforward, num_layers)

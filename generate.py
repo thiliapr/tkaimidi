@@ -6,15 +6,15 @@
 import argparse
 import pathlib
 from typing import Optional
-from matplotlib import pyplot as plt
 import mido
 import torch
-import numpy as np
 from tqdm import tqdm
+from matplotlib import pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 from torch.nn import functional as F
 from utils.checkpoint import load_checkpoint
 from utils.model import MidiNet
-from utils.midi import midi_to_notes, notes_to_piano_roll, piano_roll_to_notes, notes_to_track
+from utils.midi import midi_to_notes, notes_to_sequence, sequence_to_notes, notes_to_track
 
 
 @torch.inference_mode()
@@ -23,121 +23,43 @@ def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progres
     使用 MidiNet 模型逐步生成音乐帧序列。
 
     该函数通过自回归方式生成指定数量的音乐帧。每步生成一帧，并将该帧作为下一时间步的输入。
-    同时记录生成过程中的音符数量、音高均值和音高范围等统计信息。
     生成过程使用 KV Cache 优化，避免重复计算。
 
     Args:
         model: 用于音乐生成的神经网络模型
-        prompt: 初始提示序列，钢琴卷帘，形状为[批次大小, 序列长度, 88]
+        prompt: 初始音乐提示序列，作为生成的起点
         num_frames: 需要生成的帧数
         show_progress: 是否显示进度条
 
     Returns:
-        生成的完整序列、音符数量预测、音高均值预测、音高范围预测
+        包含完整生成序列和所有预测概率的元组
 
     Examples:
-        >>> prompt = torch.randn(1, 10, 88)
-        >>> output, note_counts, pitch_means, pitch_ranges = generate(model, prompt, 100)
+        >>> initial_prompt = torch.randn(1, 10, 88)
+        >>> output, probability_maps = generate(model, prompt, 100)
     """
-    # 在提示序列前添加全零起始帧，并保存初始提示长度用于截断
-    prompt_len = 1 + prompt.size(1)
-    prompt = torch.cat([
-        torch.zeros(prompt.size(0), 1, 88, device=prompt.device),
-        prompt
-    ], dim=1)
-
-    # 初始化 KV Cache 和预测结果容器
+    # 初始化 KV Cache 和预测概率图
     kv_cache = None
-    note_count_preds = torch.empty(1, 0, device=prompt.device)
-    pitch_mean_preds = torch.empty(1, 0, device=prompt.device)
-    pitch_range_preds = torch.empty(1, 0, device=prompt.device)
+    probability_maps = torch.empty((prompt.size(0), 0, model.embedding.weight.size(0)), device=prompt.device)
 
     # 逐步生成 num_frames 帧
     for _ in tqdm(range(num_frames), disable=not show_progress):
         # 首次使用完整提示，后续仅使用最后一帧
         model_input = prompt if kv_cache is None else prompt[:, -1:]
-        note_pred, note_count_pred, pitch_mean_pred, pitch_range_pred, kv_cache = model(
+        logits, kv_cache = model(
             model_input,
             kv_cache=kv_cache
         )
 
-        # 收集预测结果
-        note_count_preds = torch.cat([note_count_preds, note_count_pred], dim=1)
-        pitch_mean_preds = torch.cat([pitch_mean_preds, pitch_mean_pred], dim=1)
-        pitch_range_preds = torch.cat([pitch_range_preds, pitch_range_pred], dim=1)
+        # 从候选采样
+        probs = F.softmax(logits, dim=-1)
+        next_token = torch.multinomial(probs[:, -1], 1)
 
         # 将预测添加到序列中
-        prompt = torch.cat([prompt, F.sigmoid(note_pred)], dim=1)
+        probability_maps = torch.cat([probability_maps, probs], dim=1)
+        prompt = torch.cat([prompt, next_token], dim=1)
 
-    return prompt[:, prompt_len:], note_count_preds, pitch_mean_preds, pitch_range_preds
-
-
-def plot_piano_roll(piano_roll: np.ndarray, note_count: np.ndarray, pitch_mean: np.ndarray, pitch_range: np.ndarray, ax: plt.Axes):
-    """
-    绘制钢琴卷帘可视化图表，展示音符分布和音高趋势
-
-    该函数创建一个综合可视化界面，包含两个主要部分：
-    1. 钢琴卷帘网格：用矩形块表示每个时间点上激活的音符
-    2. 音符统计特征曲线：显示音符密度、平均音高和音高范围的变化趋势
-
-    工作流程：
-    - 设置坐标轴范围和基本参数
-    - 遍历钢琴卷帘矩阵，为每个激活的音符绘制矩形块
-    - 绘制音符密度、平均音高曲线和音高范围填充区域
-
-    Args:
-        piano_roll: 钢琴卷帘数据，形状为 [时间步数, 88]
-        note_count: 每个时间步的平均密度
-        pitch_mean: 每个时间步的平均音高
-        pitch_range: 每个时间步的音高范围
-        ax: Matplotlib 坐标轴对象，用于绘制图形
-
-    Returns:
-        无返回值，直接在输入的坐标轴上绘制图形
-
-    Examples:
-        >>> fig, ax = plt.subplots(figsize=(12, 6))
-        >>> plot_piano_roll(piano_roll_data, note_count, pitch_mean, pitch_range, ax)
-        >>> plt.show()
-    """
-    # 统计最大、最小音高，并绘制钢琴卷帘音符
-    max_pitch, min_pitch = 0, 87
-    for time, pitch_row in enumerate(piano_roll):
-        for pitch in np.where(pitch_row > 0.5)[0]:
-            # 统计音高
-            max_pitch = max(max_pitch, int(pitch))
-            min_pitch = min(min_pitch, int(pitch))
-
-            # 为每个激活的音符绘制矩形块
-            ax.add_patch(plt.Rectangle((time, pitch - 0.4), 1, 0.8, facecolor="skyblue", edgecolor="black", alpha=0.9 * pitch_row[pitch]))
-
-    # 设置坐标轴范围
-    ax.set_xlim(0, len(piano_roll))
-    ax.set_ylim(min_pitch - 0.5, max_pitch + 0.5)
-
-    # 创建共享 x 轴的第二个 y 轴
-    varaince_ax = ax.twinx()
-
-    # 绘制平均音高曲线
-    pitch_x = np.arange(len(piano_roll)) + 0.5  # 使音高均值对齐音符
-    varaince_ax.plot(pitch_x, pitch_mean, label="Pitch Mean", color="blue", alpha=0.5)
-    varaince_ax.plot(pitch_x, note_count, label="Note Count", color="red", alpha=0.5)
-
-    # 绘制音高范围填充区域
-    varaince_ax.fill_between(
-        pitch_x,
-        pitch_mean - pitch_range / 2,
-        pitch_mean + pitch_range / 2,
-        alpha=0.2
-    )
-
-    # 创造图例
-    varaince_ax.legend(loc="upper right")
-
-    # 设置标签
-    ax.set_xlabel("Time Step")
-    ax.set_ylabel("MIDI Note Number")
-    varaince_ax.set_ylabel("Pitch Statistics")
+    return prompt, probability_maps
 
 
 def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
@@ -155,7 +77,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("num_frames", type=int, help="需要生成的帧数")
     parser.add_argument("output_path", type=pathlib.Path, help="MIDI 文件保存路径。生成的 MIDI 文件将会保存到这里。")
     parser.add_argument("-m", "--midi-path", type=pathlib.Path, help="指定的 MIDI 文件，将作为生成的音乐的前面部分。如果未指定，将从头开始生成。")
-    parser.add_argument("-s", "--show-piano-roll", action="store_true", help="是否显示生成过程中音高均值和音高范围的钢琴卷帘图表")
+    parser.add_argument("-s", "--show-probability-maps", action="store_true", help="是否显示生成过程中音高均值和音高范围的钢琴卷帘图表")
     return parser.parse_args(args)
 
 
@@ -174,31 +96,45 @@ def main(args: argparse.Namespace):
     model = model.to(device).eval()
 
     # 加载音乐生成的提示部分
-    prompt_notes = []  # 默认空提示音符列表
+    prompt_notes = [(0, 0)]  # 默认空提示音符列表
     if args.midi_path:
         try:
-            prompt_notes = midi_to_notes(mido.MidiFile(args.midi_path), 87)
+            prompt_notes = midi_to_notes(mido.MidiFile(args.midi_path))
         except Exception as e:
             print(f"加载指定的 MIDI 文件时出错: {e}\n将使用空提示音符生成")
 
     # 转换为钢琴卷轴、添加批次维度并开始生成
-    piano_roll, note_count, pitch_mean, pitch_range = generate(
+    prompt_sequence = torch.tensor(notes_to_sequence(prompt_notes), device=device)
+    sequence, probability_maps = generate(
         model,
-        torch.tensor(notes_to_piano_roll(prompt_notes), device=device).unsqueeze(0),
+        prompt_sequence.unsqueeze(0),
         args.num_frames
     )
 
-    # 删除批次维度并转化为 NumPy 数组
-    piano_roll, note_count, pitch_mean, pitch_range = [x.squeeze(0).cpu().numpy() for x in (piano_roll, note_count, pitch_mean, pitch_range)]
-
-    # 如果需要，绘制频率图表
-    if args.show_piano_roll:
-        _, ax = plt.subplots(figsize=(12, 6))
-        plot_piano_roll(piano_roll, note_count, pitch_mean, pitch_range, ax)
+    # 如果需要，绘制预测图表
+    if args.show_probability_maps:
+        _, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
+        ax1.set_title("Probability Maps")
+        ax2.set_title("Difference (Target - Predicted)")
+        plt.colorbar(ax1.imshow(
+            probability_maps.squeeze(0).T,
+            aspect="auto",
+            origin="lower",
+            cmap="viridis",
+            extent=[0, probability_maps.size(1), -1.5 - (probability_maps.size(-1) - 2) // 2, (probability_maps.size(-1) - 2) // 2 + 0.5],
+        ), ax=ax1)
+        plt.colorbar(ax2.imshow(
+            (F.one_hot(prompt_sequence[1:], num_classes=probability_maps.size(2)) - probability_maps[0, :prompt_sequence.size(0) - 1]).T,
+            aspect="auto",
+            origin="lower",
+            cmap=LinearSegmentedColormap.from_list("b_white_r", ["blue", "black", "red"]),
+            vmin=-1, vmax=1,
+            extent=[0, prompt_sequence.size(0) - 1, -1.5 - (probability_maps.size(-1) - 2) // 2, (probability_maps.size(-1) - 2) // 2 + 0.5],
+        ), ax=ax2)
         plt.show()
 
     # 转换为 MIDI 轨道并保存为文件
-    track = notes_to_track(piano_roll_to_notes(piano_roll))
+    track = notes_to_track(sequence_to_notes(sequence.squeeze(0).tolist()))
     mido.MidiFile(tracks=[track]).save(args.output_path)
 
 

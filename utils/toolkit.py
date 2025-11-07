@@ -30,27 +30,6 @@ def empty_cache():
         torch.cuda.empty_cache()
 
 
-def convert_to_tensor(items: list[Union[torch.Tensor, np.ndarray, list[Union[float, int]]]]) -> list[torch.Tensor]:
-    """
-    将多种类型的数值列表统一转换为 PyTorch 张量列表
-
-    该函数接受包含多种数值类型的列表，包括 PyTorch 张量、NumPy 数组和 Python 数值列表，
-    并将它们统一转换为PyTorch张量格式。转换过程保持原始数据的数值精度和维度结构。
-
-    Args:
-        items: 输入数据列表，可包含 PyTorch 张量、NumPy 数组或数值列表
-
-    Returns:
-        转换后的 PyTorch 张量列表
-
-    Examples:
-        >>> convert_to_tensor([np.array([1, 2]), [3.0, 4.0], torch.tensor([5, 6])])
-        [tensor([1, 2]), tensor([3., 4.]), tensor([5, 6])]
-    """
-    # 使用列表推导式批量转换所有输入项为 PyTorch 张量
-    return [torch.tensor(item) for item in items]
-
-
 def create_padding_mask(sequences: list[torch.Tensor]) -> torch.BoolTensor:
     """
     创建用于序列填充的布尔掩码张量

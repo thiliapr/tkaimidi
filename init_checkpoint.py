@@ -12,7 +12,7 @@ import torch
 import numpy as np
 from torch import optim
 from utils.checkpoint import save_checkpoint
-from utils.constants import DEFAULT_DIM_FEEDFORWARD, DEFAULT_DIM_HEAD, DEFAULT_NUM_DECODER_LAYERS, DEFAULT_NUM_ENCODER_LAYERS, DEFAULT_NUM_HEADS, DEFAULT_NUM_PITCH_LAYERS, DEFAULT_PITCH_CONV1_KERNEL, DEFAULT_PITCH_CONV2_KERNEL, DEFAULT_PITCH_DIM_FEEDFORWARD, DEFAULT_PITCH_DIM_MODEL, DEFAULT_VARIANCE_BINS, DEFAULT_NUM_NOTE_COUNT_LAYERS, DEFAULT_NUM_PITCH_MEAN_LAYERS, DEFAULT_NUM_PITCH_RANGE_LAYERS
+from utils.constants import DEFAULT_DIM_FEEDFORWARD, DEFAULT_DIM_HEAD, DEFAULT_LEARNING_RATE, DEFAULT_NUM_HEADS, DEFAULT_NUM_LAYERS, DEFAULT_WEIGHT_DECAY
 from utils.model import MidiNet, MidiNetConfig
 
 
@@ -55,20 +55,12 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="初始化一个检查点")
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点保存目录路径")
-    parser.add_argument("-pdm", "--pitch-dim-model", type=int, default=DEFAULT_PITCH_DIM_MODEL, help="音高特征编码器的主模型维度，默认为 %(default)s")
-    parser.add_argument("-pdf", "--pitch-dim-feedforward", type=int, default=DEFAULT_PITCH_DIM_FEEDFORWARD, help="音高特征编码器前馈网络的隐藏层维度，默认为 %(default)s")
-    parser.add_argument("-nh", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="编-解码器注意力头的数量，默认为 %(default)s")
-    parser.add_argument("-dh", "--dim-head", type=int, default=DEFAULT_DIM_HEAD, help="编-解码器每个注意力头的维度，默认为 %(default)s")
-    parser.add_argument("-df", "--dim-feedforward", type=int, default=DEFAULT_DIM_FEEDFORWARD, help="编-解码器前馈网络的隐藏层维度，默认为 %(default)s")
-    parser.add_argument("-pk1", "--pitch-kernel-size-1", type=int, default=DEFAULT_PITCH_CONV1_KERNEL, help="音高特征编码器前馈层第一个卷积核大小，默认为 %(default)s")
-    parser.add_argument("-pk2", "--pitch-kernel-size-2", type=int, default=DEFAULT_PITCH_CONV2_KERNEL, help="音高特征编码器前馈层第二个卷积核大小，默认为 %(default)s")
-    parser.add_argument("-vb", "--variance-bins", type=int, default=DEFAULT_VARIANCE_BINS, help="音符特征离散化的精细度，默认为 %(default)s")
-    parser.add_argument("-pl", "--num-pitch-layers", type=int, default=DEFAULT_NUM_PITCH_LAYERS, help="音高特征编码器层数，默认为 %(default)s")
-    parser.add_argument("-ncl", "--num-note-count-layers", type=int, default=DEFAULT_NUM_NOTE_COUNT_LAYERS, help="音符计数特征编码器层数，默认为 %(default)s")
-    parser.add_argument("-pml", "--num-pitch-mean-layers", type=int, default=DEFAULT_NUM_PITCH_MEAN_LAYERS, help="音高均值特征编码器层数，默认为 %(default)s")
-    parser.add_argument("-prl", "--num-pitch-range-layers", type=int, default=DEFAULT_NUM_PITCH_RANGE_LAYERS, help="音高范围特征编码器层数，默认为 %(default)s")
-    parser.add_argument("-el", "--num-encoder-layers", type=int, default=DEFAULT_NUM_ENCODER_LAYERS, help="编码器层数，默认为 %(default)s")
-    parser.add_argument("-dl", "--num-decoder-layers", type=int, default=DEFAULT_NUM_DECODER_LAYERS, help="解码器层数，默认为 %(default)s")
+    parser.add_argument("-nh", "--num-heads", type=int, default=DEFAULT_NUM_HEADS, help="注意力头的数量，默认为 %(default)s")
+    parser.add_argument("-dh", "--dim-head", type=int, default=DEFAULT_DIM_HEAD, help="每个注意力头的维度，默认为 %(default)s")
+    parser.add_argument("-df", "--dim-feedforward", type=int, default=DEFAULT_DIM_FEEDFORWARD, help="前馈网络的隐藏层维度，默认为 %(default)s")
+    parser.add_argument("-nl", "--num-layers", type=int, default=DEFAULT_NUM_LAYERS, help="GPTBlock 堆叠层数，默认为 %(default)s")
+    parser.add_argument("-lr", "--learning-rate", default=DEFAULT_LEARNING_RATE, type=float, help="优化器学习率，默认为 %(default)s")
+    parser.add_argument("-wd", "--weight-decay", default=DEFAULT_WEIGHT_DECAY, type=float, help="优化器权重衰减系数，默认为 %(default)s")
     parser.add_argument("-u", "--seed", default=8964, type=int, help="初始化检查点的种子，保证训练过程可复现，默认为 %(default)s")
     return parser.parse_args(args)
 
@@ -83,20 +75,10 @@ def main(args: argparse.Namespace):
 
     # 初始化模型
     model = MidiNet(MidiNetConfig(
-        args.pitch_dim_model,
-        args.pitch_dim_feedforward,
         args.num_heads,
         args.dim_head,
         args.dim_feedforward,
-        args.pitch_kernel_size_1,
-        args.pitch_kernel_size_2,
-        args.variance_bins,
-        args.num_pitch_layers,
-        args.num_note_count_layers,
-        args.num_pitch_mean_layers,
-        args.num_pitch_range_layers,
-        args.num_encoder_layers,
-        args.num_decoder_layers,
+        args.num_layers,
     ))
 
     # 初始化优化器和梯度缩放器
@@ -109,7 +91,7 @@ def main(args: argparse.Namespace):
     # 保存为检查点
     save_checkpoint(args.ckpt_path, model.state_dict(), optimizer.state_dict(), scaler.state_dict(), {
         "num_heads": args.num_heads,
-        "completed_epochs": 0,
+        "completed_steps": 0,
     })
 
     # 打印初始化成功信息

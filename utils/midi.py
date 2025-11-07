@@ -6,7 +6,7 @@
 import math
 import mido
 import numpy as np
-from utils.constants import TIME_PRECISION
+from utils.constants import TIME_PRECISION, PITCH_RANGE
 
 
 def notes_to_track(notes: list[tuple[int, int]]) -> mido.MidiTrack:
@@ -14,22 +14,35 @@ def notes_to_track(notes: list[tuple[int, int]]) -> mido.MidiTrack:
     将音符事件列表转换为 MIDI 轨道
 
     工作流程:
-        1. 生成 MIDI 事件队列: 为每个音符创建 note_on 和 note_off 事件，并按时间排序
-        2. 构建 MIDI 轨道: 计算每个事件的相对时间，创建 MIDI 消息，并添加到轨道中
-        3. 添加轨道结束标记
+        1. 转化为绝对音高: 计算每个音符的绝对音高，并进行居中处理
+        2. 生成 MIDI 事件队列: 为每个音符创建 note_on 和 note_off 事件，并按时间排序
+        3. 构建 MIDI 轨道: 计算每个事件的相对时间，创建 MIDI 消息，并添加到轨道中
+        4. 添加轨道结束标记
 
     Args:
-        notes: 包含音符事件的列表，每个元素为 (音高, 时间) 的元组
+        notes: 包含音符事件的列表，每个元素为 (相对音高, 相对时间) 的元组
 
     Returns:
         包含音符事件及结束标记的 MIDI 轨道
     """
+    # 转化为绝对音高
+    pitches, intervals = zip(*notes)
+    pitches = np.array(pitches)
+    pitches = np.cumsum(pitches)  # 计算绝对音高
+
+    # 音高居中处理
+    pitches += (127 - (pitches.max() + pitches.min())) // 2
+
     # 生成 MIDI 事件队列
     events = []
-    for pitch, time in notes:
+    current_time = 0  # 当前绝对时间
+    for pitch, inteval in zip(pitches, intervals):
+        # 计算当前绝对时间
+        current_time += inteval
+
         # 添加音符开启和关闭事件
-        events.append(("note_on", pitch, time * TIME_PRECISION))
-        events.append(("note_off", pitch, (time + 1) * TIME_PRECISION))
+        events.append(("note_on", pitch, current_time * TIME_PRECISION))
+        events.append(("note_off", pitch, (current_time + 1) * TIME_PRECISION))
 
     # 按事件发生时间排序，若时间相同则 note_on 优先于 note_off
     events.sort(key=lambda x: (x[2], x[0] == "note_off"))
@@ -58,24 +71,23 @@ def notes_to_track(notes: list[tuple[int, int]]) -> mido.MidiTrack:
     return mido.MidiTrack(track + [mido.MetaMessage("end_of_track")])
 
 
-def midi_to_notes(midi_file: mido.MidiFile, pitch_range: int = 127) -> list[tuple[int, int]]:
+def midi_to_notes(midi_file: mido.MidiFile) -> list[tuple[int, int]]:
     """
-    从 MIDI 文件中提取音符信息，包括音高和时间
+    从 MIDI 文件中提取音符信息，包括相对音高和相对时间
     处理过程包括：合并所有轨道、过滤打击乐音符、时间标准化、音高范围调整
     通过解析 MIDI 消息流，识别音符开始事件，排除打击乐通道，并对时间和音高进行标准化处理
 
     Args:
         midi_file: 输入的 MIDI 文件对象
-        pitch_range: 音高范围
 
     Returns:
-        包含音符信息的列表，每个元素为 (音高, 时间) 的元组
+        包含音符信息的列表，每个元素为 (相对音高, 相对时间) 的元组
 
     Examples:
         >>> midi = mido.MidiFile("example.mid")
         >>> notes = midi_to_notes(midi)
         >>> print(notes[:5])
-        [(24, 0), (44, 1), (64, 2), (84, 3), (104, 4)]
+        [(0, 0), (8, 1), (-9, 1), (6, 3), (-4, 1)]
     """
     notes = []  # 用于存储提取的音符信息（音高和时间）
     drum_channels = {9}  # 打击乐通道的集合，默认情况下，MIDI 通道 10（索引 9）为打击乐通道
@@ -126,112 +138,98 @@ def midi_to_notes(midi_file: mido.MidiFile, pitch_range: int = 127) -> list[tupl
     # 压缩时间轴
     times = [time // time_gcd for time in times]
 
-    # 去除重复的音符
-    notes = sorted({(pitch, time) for pitch, time in zip(pitches, times)}, key=lambda x: x[1])
+    # 每个时间只保留一个音符，方便提取主旋律
+    notes = {}
+    for pitch, time in zip(pitches, times):
+        notes[time] = max(pitch, notes.get(time, -1))  # 保留音高最高的音符
+    notes = sorted(notes.items())
 
-    # 将音高平移至 0 基准
-    pitches, times = zip(*notes)
-    pitches = np.array(pitches)
-    pitches -= pitches.min()
+    # 计算每个音符相对于之前音符的要音高和时间
+    times, pitches = zip(*notes)
+    pitches = [0] + [now - prev for prev, now in zip(pitches[:-1], pitches[1:])]
+    intervals = [0] + [now - prev for prev, now in zip(times[:-1], times[1:])]
 
-    # 如果音高超出范围，进行压缩调整
-    if pitches.max() > pitch_range:
-        # 压缩音高范围到 [-inf, pitch_range]
-        # 使音高最大值为 pitch_range，由于之前 pitches.min() 为 0，音高最小值一定会变成负数
-        pitches = pitches - pitches.max() + pitch_range
-
-        # 将音高向上平移，直到音高最小值为 0，选择能使最多音符有效的偏移量
-        pitches += max(
-            range(1 - pitches.min()),
-            key=lambda offset: ((0 <= (pitches + offset)) & ((pitches + offset) <= pitch_range)).sum()
-        )
-
-    # 重新构建音符列表
-    notes = [
-        (pitch.item(), time)
-        for pitch, time in zip(pitches, times)
-        if 0 <= pitch <= pitch_range
-    ]
-
-    # 音高居中处理
-    pitches, times = zip(*notes)
-    pitches = np.array(pitches)
-    pitches -= pitches.min()
-    pitches += (pitch_range - pitches.max()) // 2
+    # 如果音高变化幅度过大，则进行八度平移，限制在指定范围内
+    adjusted_pitches = []
+    octave_shift_accumulator = 0  # 累计八度偏移量
+    for pitch in pitches:
+        if abs(pitch) > PITCH_RANGE:
+            # 如果音高变化超出范围，进行八度平移
+            shift_direction = (1 if pitch < 0 else -1)  # 确定平移方向，音高为负则向上平移，音高为正则向下平移
+            octaves_to_shift = math.ceil((abs(pitch) - PITCH_RANGE) / 12)  # 计算需要平移的八度数
+            adjusted_pitches.append(pitch + shift_direction * octaves_to_shift * 12)  # 每个八度包含 12 个半音
+            octave_shift_accumulator += shift_direction * octaves_to_shift  # 记录相比原音符偏离了多少个八度
+        else:
+            # 尝试恢复部分八度偏移
+            shift_direction = 1 if octave_shift_accumulator < 0 else -1  # 确定平移方向，使累计偏移绝对值减小
+            max_recoverable = min(int((PITCH_RANGE - shift_direction * pitch) / 12), abs(octave_shift_accumulator))
+            adjusted_pitches.append(pitch + shift_direction * max_recoverable * 12)
+            octave_shift_accumulator += shift_direction * max_recoverable
 
     # 构建最终音符列表
-    notes = [
-        (pitch.item(), time)
-        for pitch, time in zip(pitches, times)
-    ]
-
+    notes = [(pitch, interval) for pitch, interval in zip(adjusted_pitches, intervals)]
     return notes
 
 
-def notes_to_piano_roll(notes: list[tuple[int]]) -> np.ndarray:
+def notes_to_sequence(notes: list[tuple[int, int]]) -> list[int]:
     """
-    将音符序列转换为钢琴卷帘矩阵表示。
-
-    该函数接收一个包含音符和绝对时间的列表，将其转换为一个二维布尔矩阵（钢琴卷帘）。
-    矩阵的行表示时间步，列表示音高（钢琴 88 个音），矩阵中的 True 值表示在对应时间点有音符开始。
-    首先提取所有音符的音高和时间，计算每个音符的绝对开始时间，然后创建一个全零矩阵，
-    最后在对应的时间步和音高位置标记为 True。
+    将音符列表转换为序列表示
+    
+    将音符的 (相对音高, 时间间隔) 元组列表转换为整数序列，其中:
+    - 0 表示时间间隔(休止符)
+    - 非 0 值表示音符，值为 (音高 + pitch_range + 1)
+    - 无论是音符还是休止符，他们都占据一个时间单位
+    这种表示方法便于后续的序列处理和模型训练
 
     Args:
-        notes: 包含音符和绝对时间的列表，每个元素为元组 (音高, 时间间隔)
+        notes: 音符列表，每个元素为 (相对音高, 时间间隔)
 
     Returns:
-        一个二维布尔数组，表示钢琴卷帘，形状为 [总时间步数, 88]
+        整数序列，0 表示时间间隔，非 0 值表示音符开始
 
     Examples:
-        >>> notes = [(60, 0), (67, 0), (64, 1)]
-        >>> piano_roll = notes_to_piano_roll(notes)
-        >>> piano_roll.shape
-        (2, 88)
+        >>> notes = [(0, 0), (5, 2), (-3, 1)]
+        >>> notes_to_sequence(notes, 127)
+        [128, 0, 133, 125]
     """
-    # 空音符列表时直接返回空钢琴卷帘
-    if not notes:
-        return np.empty((0, 88), dtype=bool)
-
-    # 将音符列表解包为音高序列和时间间隔序列
-    _, times = zip(*notes)
-
-    # 初始化钢琴卷帘矩阵（时间步×音高）
-    piano_roll = np.zeros((times[-1] + 1, 88), dtype=bool)
-
-    # 在对应时间步和音高位置标记音符弹奏
-    for pitch, time_step in notes:
-        piano_roll[time_step, pitch] = True
-
-    return piano_roll
+    sequence = []
+    for pitch, interval in notes:
+        # 添加时间间隔(用 0 表示)
+        sequence.extend([0] * (interval - 1))
+        # 添加音符开始标记，音高值偏移以避免与 0 冲突
+        sequence.append(pitch + PITCH_RANGE + 1)
+    return sequence
 
 
-def piano_roll_to_notes(piano_roll: np.ndarray, pitch_offset: int = 20) -> list[tuple[int, int]]:
+def sequence_to_notes(sequence: list[int]) -> list[tuple[int, int]]:
     """
-    将钢琴卷帘矩阵转换为音符序列。
+    将序列表示转换回音符列表
 
-    该函数接收一个二维布尔矩阵（钢琴卷帘），提取其中所有标记为 True 的位置，
-    这些位置表示在对应时间步有音符开始。然后按时间步排序这些音符，计算每个音符
-    与前一个音符之间的相对时间间隔，最后返回包含音高和相对时间间隔的列表。
+    将整数序列反向转换为音符的 (相对音高, 时间间隔) 元组列表，
+    这是 notes_to_sequence 的逆操作
 
     Args:
-        piano_roll: 二维布尔数组，表示钢琴卷帘，形状为 [总时间步数, 128]
-        pitch_offset: 音高偏移量，默认为 20，将音高值向上平移以适应钢琴 88 键范围
+        sequence: 整数序列，0 表示休止符，非 0 值表示音符
 
     Returns:
-        一个包含音符和相对时间间隔的列表，每个元素为元组(音高，时间间隔)
+        音符列表，每个元素为 (相对音高, 时间间隔)
 
     Examples:
-        >>> piano_roll = np.zeros((2, 128), dtype=bool)
-        >>> piano_roll[0, 60] = True
-        >>> piano_roll[0, 67] = True
-        >>> piano_roll[1, 64] = True
-        >>> piano_roll_to_notes(piano_roll)
-        [(60, 0), (67, 0), (64, 1)]
+        >>> sequence = [128, 0, 0, 133, 0, 125]
+        >>> sequence_to_notes(sequence, 127)
+        [(0, 0), (5, 2), (-3, 1)]
     """
-    result = []  # 存储最终的音符序列
-    # 遍历每个时间步
-    for time, pitch_row in enumerate(piano_roll):
-        for pitch in np.where(pitch_row)[0]:
-            result.append((pitch + pitch_offset, time))
-    return result
+    notes = []
+    current_interval = 0  # 当前累计的时间间隔
+
+    for value in sequence:
+        if value == 0:
+            # 遇到 0 表示时间间隔，累计间隔计数
+            current_interval += 1
+        else:
+            # 遇到非 0 值表示音符开始，计算原始音高并添加音符
+            original_pitch = value - PITCH_RANGE - 1
+            notes.append((original_pitch, current_interval))
+            current_interval = 1  # 重置时间间隔计数
+
+    return notes
