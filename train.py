@@ -291,7 +291,7 @@ def main(args: argparse.Namespace):
     model.train()  # 设置模型为训练模式
     progress_bar = tqdm(total=args.val_per_steps * args.num_val_cycles, desc="Train")
     current_steps = ckpt_info["completed_steps"]
-    acc_loss = acc_grad_norm = 0
+    acc_loss = 0
     while True:
         if current_steps - ckpt_info["completed_steps"] >= args.val_per_steps * args.num_val_cycles:
             break
@@ -322,25 +322,25 @@ def main(args: argparse.Namespace):
             # 反向传播
             scaler.scale(loss).backward()
 
-            # 梯度裁剪
-            scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            acc_grad_norm += grad_norm.item() / args.accumulation_steps
-
             # 进度条更新
             progress_bar.update()
 
             # 每隔一定步数更新一次参数
             current_steps += 1
             if current_steps % args.accumulation_steps == 0:
+                # 梯度裁剪
+                scaler.unscale_(optimizer)
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+                # 更新参数
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
 
                 # 记录训练指标
                 writer.add_scalar("Loss/Train", acc_loss, current_steps // args.accumulation_steps - 1)
-                writer.add_scalar("GradNorm/Train", acc_grad_norm, current_steps // args.accumulation_steps - 1)
-                acc_loss = acc_grad_norm = 0
+                writer.add_scalar("GradNorm/Train", grad_norm.item(), current_steps // args.accumulation_steps - 1)
+                acc_loss = 0
 
                 # 每隔一定步数进行验证
                 if current_steps // args.accumulation_steps % args.val_per_steps == 0:
