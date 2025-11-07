@@ -289,7 +289,7 @@ def main(args: argparse.Namespace):
     # 开始训练
     optimizer.zero_grad()  # 提前清零梯度
     model.train()  # 设置模型为训练模式
-    progress_bar = tqdm(total=args.val_per_steps * args.num_val_cycles, desc="Train")
+    progress_bar = tqdm(total=args.val_per_steps * args.num_val_cycles * args.accumulation_steps, desc="Train")
     current_steps = ckpt_info["completed_steps"]
     acc_loss = 0
     while True:
