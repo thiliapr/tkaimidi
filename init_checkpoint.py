@@ -82,7 +82,7 @@ def main(args: argparse.Namespace):
     ))
 
     # 初始化优化器和梯度缩放器
-    optimizer = optim.AdamW(model.parameters())
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scaler = torch.amp.GradScaler("cpu", 1)
 
     # 删除之前的 SummaryWriter，为以后训练可视化模型初始化状态准备
