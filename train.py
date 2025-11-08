@@ -44,6 +44,9 @@ class MidiDataset(Dataset):
         # 获取所有旋律
         self.data_samples = np.load(dataset_file)
 
+    def get_lengths(self) -> list[int]:
+        return self.data_samples["length"].tolist()
+
     def __getitem__(self, index: int) -> np.ndarray:
         return self.data_samples[f"{index}"]
 
@@ -80,12 +83,11 @@ class MidiDatasetSampler(Sampler[list[int]]):
         self.batches: list[list[int]]
 
         # 预计算所有样本的索引和长度
-        length = dataset.data_samples["length"].tolist()
+        length = dataset.get_lengths()
         self.index_and_lengths = [
             (idx, length[idx])
             for idx in range(len(dataset))
         ]
-        self.index_to_length = dict(self.index_and_lengths)
 
     def set_epoch(self, epoch: int) -> None:
         """
@@ -212,12 +214,12 @@ def validate(
             outputs, _ = model(sequence[:, :-1], padding_mask=padding_mask[:, :-1])
 
             # 计算损失
-            loss = F.cross_entropy(outputs.flatten(0, 1), sequence[:, 1:].flatten(), reduction="none").reshape(outputs.shape[:-1]).masked_fill(padding_mask[:, 1:], 0).sum(dim=1) / (~padding_mask).sum(dim=1)
+            loss = F.cross_entropy(outputs.flatten(0, 1), sequence[:, 1:].flatten(), reduction="none").reshape(outputs.shape[:-1]).masked_fill(padding_mask[:, 1:], 0).sum(dim=1) / (~padding_mask[:, 1:]).sum(dim=1)
 
         # 记录当前批次的损失信息
         loss_results.extend(loss.tolist())
 
-        # 如果没有记录任何预测，并且抽选到该批次或者已经是最后一个批次，则记录目标和损失
+        # 如果没有记录任何预测，并且抽选到该批次或者已经是最后一个批次，则记录该批次的预测-目标
         if logged_pred is None and (random.randint(0, len(dataloader) - 1) == 0 or batch_idx == len(dataloader) - 1):
             logged_pred, logged_target = outputs[0], sequence[0, 1:]
 
@@ -313,7 +315,7 @@ def main(args: argparse.Namespace):
                 outputs, _ = model(sequence[:, :-1], padding_mask=padding_mask[:, :-1])
 
                 # 计算损失
-                loss = F.cross_entropy(outputs.flatten(0, 1), sequence[:, 1:].flatten(), reduction="none").reshape(outputs.shape[:-1]).masked_fill(padding_mask[:, 1:], 0).sum() / (~padding_mask).sum()
+                loss = F.cross_entropy(outputs.flatten(0, 1), sequence[:, 1:].flatten(), reduction="none").reshape(outputs.shape[:-1]).masked_fill(padding_mask[:, 1:], 0).sum() / (~padding_mask[:, 1:]).sum()
 
                 # 梯度累积
                 loss = loss / args.accumulation_steps
@@ -341,6 +343,11 @@ def main(args: argparse.Namespace):
                 writer.add_scalar("Loss/Train", acc_loss, current_steps // args.accumulation_steps - 1)
                 writer.add_scalar("GradNorm/Train", grad_norm.item(), current_steps // args.accumulation_steps - 1)
                 acc_loss = 0
+
+                # 记录每层的缩放因子
+                for layer_idx, layer in enumerate(model.layers):
+                    writer.add_scalar(f"Scale/Layer {layer_idx} Feedforward", layer.feedforward_scale.item(), current_steps // args.accumulation_steps)
+                    writer.add_scalar(f"Scale/Layer {layer_idx} Attention", layer.attention_scale.item(), current_steps // args.accumulation_steps)
 
             # 每隔一定步数进行验证
             if current_steps % (args.accumulation_steps * args.val_per_steps) == 0:
