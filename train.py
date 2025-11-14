@@ -361,15 +361,15 @@ def main(args: argparse.Namespace):
                 # 记录预测-目标对比图
                 for pred, target, result_type in [(outputs[0], sequence[0, 1:], "Train"), (val_pred, val_target, "Validate")]:
                     # 处理长度过长的情况
-                    pred = F.softmax(pred[:args.probability_maps_length], dim=-1)
-                    target = F.one_hot(target[:args.probability_maps_length], num_classes=pred.size(-1))
+                    pred = F.softmax(pred.detach().cpu()[:args.probability_maps_length], dim=-1)
+                    target = F.one_hot(target.detach().cpu()[:args.probability_maps_length], num_classes=pred.size(-1))
 
                     # 生成对比图
                     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
                     ax1.set_title("Predicted Probability Maps")
                     ax2.set_title("Difference (Target - Predicted)")
-                    plt.colorbar(ax1.imshow(pred.cpu().T, aspect="auto", origin="lower", cmap="viridis", extent=[0, pred.size(0), -1.5 - (pred.size(-1) - 2) // 2, (pred.size(-1) - 2) // 2 + 0.5]), ax=ax1)
-                    plt.colorbar(ax2.imshow((target - pred).cpu().T, aspect="auto", origin="lower", cmap=LinearSegmentedColormap.from_list("b_white_r", ["blue", "black", "red"]), vmin=-1, vmax=1, extent=[0, pred.size(1), -1.5 - (pred.size(-1) - 2) // 2, (pred.size(-1) - 2) // 2 + 0.5]), ax=ax2)
+                    plt.colorbar(ax1.imshow(pred.T, aspect="auto", origin="lower", cmap="viridis", extent=[0, pred.size(0), -1.5 - (pred.size(-1) - 2) // 2, (pred.size(-1) - 2) // 2 + 0.5]), ax=ax1)
+                    plt.colorbar(ax2.imshow((target - pred).T, aspect="auto", origin="lower", cmap=LinearSegmentedColormap.from_list("b_white_r", ["blue", "black", "red"]), vmin=-1, vmax=1, extent=[0, pred.size(1), -1.5 - (pred.size(-1) - 2) // 2, (pred.size(-1) - 2) // 2 + 0.5]), ax=ax2)
                     writer.add_figure(f"Prediction vs Target/{result_type} Iteration {current_steps // args.accumulation_steps}", fig, current_steps // args.accumulation_steps)
                     plt.close(fig)
 
