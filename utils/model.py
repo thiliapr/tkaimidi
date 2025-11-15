@@ -204,8 +204,8 @@ class GPTBlock(nn.Module):
         # 归一化与缩放
         self.attention_norm = nn.LayerNorm(dim_model)
         self.feedforward_norm = nn.LayerNorm(dim_model)
-        self.attention_scale = nn.Parameter(torch.zeros(1))
-        self.feedforward_scale = nn.Parameter(torch.zeros(1))
+        self.attention_scale = nn.Parameter(torch.ones(1) * 1e-5)
+        self.feedforward_scale = nn.Parameter(torch.ones(1) * 1e-5)
 
         # Dropout 层
         self.dropout = nn.Dropout(dropout)
