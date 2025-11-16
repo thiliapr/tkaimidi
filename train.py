@@ -19,7 +19,7 @@ from torch.utils.data import Dataset, Sampler, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_PROBABILITY_MAPS_LENGTH, DEFAULT_TRAIN_MAX_BATCH_TOKENS, DEFAULT_VAL_MAX_BATCH_TOKENS, DEFAULT_DROPOUT, PITCH_RANGE
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_PROBABILITY_MAPS_LENGTH, DEFAULT_TRAIN_MAX_BATCH_TOKENS, DEFAULT_VAL_MAX_BATCH_TOKENS, DEFAULT_DROPOUT, PITCH_RANGE, DEFAULT_PITCH_PERTURB_PROB
 from utils.model import GPT
 
 # 解除线程数量限制
@@ -276,7 +276,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-v", "--val-dataset", type=pathlib.Path, required=True, help="验证集文件路径")
     parser.add_argument("-tt", "--train-max-batch-tokens", default=DEFAULT_TRAIN_MAX_BATCH_TOKENS, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-tv", "--val-max-batch-tokens", default=DEFAULT_VAL_MAX_BATCH_TOKENS, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
-    parser.add_argument("-pp", "--pitch-perturb-prob", default=0.2, type=float, help="输入序列中每个音符被随机替换音高的最大概率因子，默认为 %(default)s")
+    parser.add_argument("-pp", "--pitch-perturb-prob", default=DEFAULT_PITCH_PERTURB_PROB, type=float, help="输入序列中每个音符被随机替换音高的最大概率因子，默认为 %(default)s")
     parser.add_argument("-vp", "--val-per-steps", default=1024, type=int, help="每训练多少步进行一次验证，默认为 %(default)s")
     parser.add_argument("-dr", "--dropout", default=DEFAULT_DROPOUT, type=float, help="Dropout 概率，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
