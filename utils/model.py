@@ -7,7 +7,6 @@ from typing import NamedTuple, Optional
 import torch
 from torch import nn
 from torch.nn import functional as F
-from utils.constants import PITCH_RANGE
 
 AttentionKVCache = tuple[torch.Tensor, torch.Tensor]
 NetKVCache = list[AttentionKVCache]
