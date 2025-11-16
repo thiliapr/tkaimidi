@@ -18,11 +18,9 @@ from torch.amp import GradScaler, autocast
 from torch.utils.data import Dataset, Sampler, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 from utils.checkpoint import load_checkpoint_train, save_checkpoint
-from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_PROBABILITY_MAPS_LENGTH, DEFAULT_TRAIN_MAX_BATCH_TOKENS, DEFAULT_VAL_MAX_BATCH_TOKENS, DEFAULT_DROPOUT
-from utils.model import MidiNet
-from utils.toolkit import create_padding_mask
+from utils.constants import DEFAULT_ACCUMULATION_STEPS, DEFAULT_PROBABILITY_MAPS_LENGTH, DEFAULT_TRAIN_MAX_BATCH_TOKENS, DEFAULT_VAL_MAX_BATCH_TOKENS, DEFAULT_DROPOUT, PITCH_RANGE
+from utils.model import GPT
 
 # 解除线程数量限制
 os.environ["OMP_NUM_THREADS"] = os.environ["OPENBLAS_NUM_THREADS"] = os.environ["MKL_NUM_THREADS"] = os.environ["VECLIB_MAXIMUM_THREADS"] = os.environ["NUMEXPR_NUM_THREADS"] = str(os.cpu_count())
@@ -35,20 +33,52 @@ class MidiDataset(Dataset):
 
     Args:
         dataset_file: 快速训练数据集文件
+        pitch_perturb_prob: 随机替换音高的最大概率因子
 
     Yields:
-        旋律
+        输入和标签序列对
     """
 
-    def __init__(self, dataset_file: os.PathLike):
+    def __init__(self, dataset_file: os.PathLike, pitch_perturb_prob: float):
         # 获取所有旋律
         self.data_samples = np.load(dataset_file)
+        self.pitch_perturb_prob = pitch_perturb_prob
 
     def get_lengths(self) -> list[int]:
         return self.data_samples["length"].tolist()
 
-    def __getitem__(self, index: int) -> np.ndarray:
-        return self.data_samples[f"{index}"]
+    def __getitem__(self, index: int) -> tuple[list[int], list[int]]:
+        sequence = self.data_samples[f"{index}"]
+        input_sequence = sequence[:-1].copy()  # 输入序列: 从开始到倒数第二个音符
+        target_sequence = sequence[1:].copy()  # 目标序列: 从第二个音符到最后一个音符
+
+        # 动态调整音高扰动概率
+        current_perturb_prob = random.random() * self.pitch_perturb_prob
+
+        # 模拟瞎几把乱拽音符，但保持旋律整体结构
+        for idx in range(len(input_sequence)):
+            if random.random() < current_perturb_prob:
+                input_pitch = input_sequence[idx]
+                target_pitch = target_sequence[idx]
+
+                # 计算可移动的音高范围，确保被替换的音高和下一个音高都在合法范围内
+                lower_bound = -min(input_pitch, PITCH_RANGE * 2 - target_pitch)
+                upper_bound = min(PITCH_RANGE * 2 - input_pitch, target_pitch)
+
+                # 随机生成音高扰动值
+                pitch_perturbation = random.randint(lower_bound, upper_bound)
+
+                # 在当前位置拽动音符，改变音高
+                input_sequence[idx] += pitch_perturbation
+
+                # 调整目标序列，告诉模型虽然这里被拽乱了，但下一个音符应该回到正轨
+                target_sequence[idx] -= pitch_perturbation
+
+                # 调整下一个输入，保持后续旋律的连贯过渡
+                if idx + 1 < len(input_sequence):
+                    input_sequence[idx + 1] -= pitch_perturbation
+
+        return input_sequence, target_sequence
 
     def __len__(self) -> int:
         # 这个文件储存了每个序列的长度，所以用总数减去 1 就是样本数
@@ -135,7 +165,7 @@ class MidiDatasetSampler(Sampler[list[int]]):
         return len(self.batches)
 
 
-def sequence_collate_fn(batch: list[np.ndarray]) -> tuple[torch.LongTensor, torch.BoolTensor]:
+def sequence_collate_fn(batch: list[tuple[list[int], list[int]]]) -> tuple[torch.LongTensor, torch.LongTensor, torch.BoolTensor]:
     """
     处理变长序列数据的批次整理函数
     将输入的多个变长序列样本整理为批次张量，并生成相应的填充掩码和序列长度信息
@@ -155,27 +185,30 @@ def sequence_collate_fn(batch: list[np.ndarray]) -> tuple[torch.LongTensor, torc
 
     Examples:
         >>> from torch.utils.data import DataLoader
-        >>> dataset = MidiDataset("dataset.npz")
+        >>> dataset = MidiDataset("dataset.npz", pitch_perturb_prob=0.1)
         >>> dataloader = DataLoader(dataset, batch_size=32, collate_fn=sequence_collate_fn)
-        >>> for sequence, padding_mask in dataloader:
-        >>>     ...
+        >>> for inputs, labels, padding_mask in dataloader:
+        >>>     logits = model(inputs, padding_mask=padding_mask[:, :-1])
+        >>>     loss = F.cross_entropy(logits.flatten(0, 1), labels.flatten(), reduction="none").view(labels.shape).masked_fill(padding_mask[:, 1:], 0).sum() / (~padding_mask[:, 1:]).sum()
     """
-    # 解压批次数据并将每个特征列表转换为张量列表
-    sequence = [torch.tensor(item) for item in batch]
+    # 解压批次数据并转换为张量
+    inputs, labels = [[torch.tensor(sequence, dtype=torch.long) for sequence in todoname2] for todoname2 in zip(*batch)]
 
     # 创建填充掩码用于标识有效数据位置
-    padding_mask = create_padding_mask(sequence)
+    max_length = max(len(seq) for seq in inputs) + 1
+    sequence_lengths = torch.tensor([len(seq) + 1 for seq in inputs])
+    padding_mask = torch.arange(max_length).unsqueeze(0) >= sequence_lengths.unsqueeze(1)
 
     # 对变长序列进行填充对齐，使批次内所有样本长度一致
-    sequence = torch.nn.utils.rnn.pad_sequence(sequence, batch_first=True)
+    inputs, labels = [torch.nn.utils.rnn.pad_sequence(sequences, batch_first=True) for sequences in [inputs, labels]]
 
     # 返回批次数据
-    return sequence, padding_mask
+    return inputs, labels, padding_mask
 
 
 @torch.inference_mode()
 def validate(
-    model: MidiNet,
+    model: GPT,
     dataloader: DataLoader,
     device: torch.device = "cpu"
 ) -> tuple[tuple[torch.Tensor, torch.Tensor], list[float]]:
@@ -206,22 +239,22 @@ def validate(
     # 遍历验证集所有批次数据，显示进度条
     for batch_idx, batch in enumerate(tqdm(dataloader, total=len(dataloader), desc="Validate")):
         # 数据移至目标设备
-        sequence, padding_mask = [item.to(device=device) for item in batch]
+        inputs, labels, padding_mask = [item.to(device=device) for item in batch]
 
         # 自动混合精度环境
         with autocast(device, dtype=torch.float16):
             # 模型前向传播（不使用教师强制）
-            outputs, _ = model(sequence[:, :-1], padding_mask=padding_mask[:, :-1])
+            logits, _ = model(inputs, padding_mask=padding_mask[:, :-1])
 
             # 计算损失
-            loss = F.cross_entropy(outputs.flatten(0, 1), sequence[:, 1:].flatten(), reduction="none").reshape(outputs.shape[:-1]).masked_fill(padding_mask[:, 1:], 0).sum(dim=1) / (~padding_mask[:, 1:]).sum(dim=1)
+            loss = F.cross_entropy(logits.flatten(0, 1), labels.flatten(), reduction="none").reshape(labels.shape).masked_fill(padding_mask[:, 1:], 0).sum(dim=1) / (~padding_mask[:, 1:]).sum(dim=1)
 
         # 记录当前批次的损失信息
         loss_results.extend(loss.tolist())
 
         # 如果没有记录任何预测，并且抽选到该批次或者已经是最后一个批次，则记录该批次的预测-目标
         if logged_pred is None and (random.randint(0, len(dataloader) - 1) == 0 or batch_idx == len(dataloader) - 1):
-            logged_pred, logged_target = outputs[0], sequence[0, 1:]
+            logged_pred, logged_target = logits[0], labels[0]
 
     return (logged_pred, logged_target), loss_results
 
@@ -243,6 +276,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("-v", "--val-dataset", type=pathlib.Path, required=True, help="验证集文件路径")
     parser.add_argument("-tt", "--train-max-batch-tokens", default=DEFAULT_TRAIN_MAX_BATCH_TOKENS, type=int, help="训练时，每个批次的序列长度的和上限，默认为 %(default)s")
     parser.add_argument("-tv", "--val-max-batch-tokens", default=DEFAULT_VAL_MAX_BATCH_TOKENS, type=int, help="验证时，每个批次的序列长度的和上限，默认为 %(default)s")
+    parser.add_argument("-pp", "--pitch-perturb-prob", default=0.2, type=float, help="输入序列中每个音符被随机替换音高的最大概率因子，默认为 %(default)s")
     parser.add_argument("-vp", "--val-per-steps", default=1024, type=int, help="每训练多少步进行一次验证，默认为 %(default)s")
     parser.add_argument("-dr", "--dropout", default=DEFAULT_DROPOUT, type=float, help="Dropout 概率，默认为 %(default)s")
     parser.add_argument("-as", "--accumulation-steps", default=DEFAULT_ACCUMULATION_STEPS, type=int, help="梯度累积步数，默认为 %(default)s")
@@ -259,7 +293,7 @@ def main(args: argparse.Namespace):
     model_state, model_config, ckpt_info, optimizer_state, scaler_state = load_checkpoint_train(args.ckpt_path)
 
     # 创建模型并加载状态
-    model = MidiNet(model_config, args.dropout)
+    model = GPT(model_config, args.dropout)
     model.load_state_dict(model_state)
 
     # 转移模型到设备
@@ -275,18 +309,18 @@ def main(args: argparse.Namespace):
 
     # 加载训练数据集
     print("加载训练集 ...")
-    train_dataset = MidiDataset(args.train_dataset)
+    train_dataset = MidiDataset(args.train_dataset, args.pitch_perturb_prob)
     train_sampler = MidiDatasetSampler(train_dataset, args.train_max_batch_tokens)
     train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
     # 加载验证数据集
     print("加载验证集 ...")
-    val_dataset = MidiDataset(args.val_dataset)
+    val_dataset = MidiDataset(args.val_dataset, 0)
     val_sampler = MidiDatasetSampler(val_dataset, args.val_max_batch_tokens)
     val_loader = DataLoader(val_dataset, batch_sampler=val_sampler, collate_fn=sequence_collate_fn, num_workers=0)
 
     # 创建一个 SummaryWriter 实例，用于记录训练过程中的指标和可视化数据
-    writer = SummaryWriter(args.ckpt_path / f"logdir/default")
+    writer = SummaryWriter(args.ckpt_path / f"logdir")
 
     # 开始训练
     optimizer.zero_grad()  # 提前清零梯度
@@ -294,6 +328,7 @@ def main(args: argparse.Namespace):
     progress_bar = tqdm(total=args.val_per_steps * args.num_val_cycles * args.accumulation_steps, desc="Train")
     current_steps = ckpt_info["completed_steps"]
     acc_loss = 0
+    torch.autograd.set_detect_anomaly(True) 
     while True:
         if current_steps - ckpt_info["completed_steps"] >= args.val_per_steps * args.num_val_cycles * args.accumulation_steps:
             break
@@ -302,20 +337,20 @@ def main(args: argparse.Namespace):
         train_sampler.set_epoch(current_steps)
         val_sampler.set_epoch(current_steps)
 
-        for sequence, padding_mask in train_loader:
+        for batch in train_loader:
             if current_steps - ckpt_info["completed_steps"] >= args.val_per_steps * args.num_val_cycles * args.accumulation_steps:
                 break
 
             # 将数据移至目标设备
-            sequence, padding_mask = [item.to(device=device) for item in (sequence, padding_mask)]
+            inputs, labels, padding_mask = [item.to(device=device) for item in batch]
 
             # 自动混合精度环境
             with autocast(device, dtype=torch.float16):
                 # 模型前向传播，使用教师强制
-                outputs, _ = model(sequence[:, :-1], padding_mask=padding_mask[:, :-1])
+                logits, _ = model(inputs, padding_mask=padding_mask[:, :-1])
 
                 # 计算损失
-                loss = F.cross_entropy(outputs.flatten(0, 1), sequence[:, 1:].flatten(), reduction="none").reshape(outputs.shape[:-1]).masked_fill(padding_mask[:, 1:], 0).sum() / (~padding_mask[:, 1:]).sum()
+                loss = F.cross_entropy(logits.flatten(0, 1), labels.flatten(), reduction="none").reshape(labels.shape).masked_fill(padding_mask[:, 1:], 0).sum() / (~padding_mask[:, 1:]).sum()
 
                 # 梯度累积
                 loss = loss / args.accumulation_steps
@@ -346,20 +381,21 @@ def main(args: argparse.Namespace):
 
                 # 记录每层的缩放因子
                 for layer_idx, layer in enumerate(model.layers):
-                    writer.add_scalar(f"Scale/Layer {layer_idx} Feedforward", layer.feedforward_scale.item(), current_steps // args.accumulation_steps)
-                    writer.add_scalar(f"Scale/Layer {layer_idx} Attention", layer.attention_scale.item(), current_steps // args.accumulation_steps)
+                    writer.add_scalar(f"Scale/Layer #{layer_idx} Feedforward", layer.feedforward_scale.item(), current_steps // args.accumulation_steps)
+                    writer.add_scalar(f"Scale/Layer #{layer_idx} Attention", layer.attention_scale.item(), current_steps // args.accumulation_steps)
 
             # 每隔一定步数进行验证
             if current_steps % (args.accumulation_steps * args.val_per_steps) == 0:
                 (val_pred, val_target), val_losses = validate(model, val_loader, device)
                 model.train()  # 切换回训练模式
+                optimizer.zero_grad()  # 清零梯度
 
                 # 记录验证损失
                 val_loss_avg = sum(val_losses) / len(val_losses)
                 writer.add_scalar("Loss/Validate", val_loss_avg, current_steps // args.accumulation_steps)
 
                 # 记录预测-目标对比图
-                for pred, target, result_type in [(outputs[0], sequence[0, 1:], "Train"), (val_pred, val_target, "Validate")]:
+                for pred, target, result_type in [(logits[0], labels[0], "Train"), (val_pred, val_target, "Validate")]:
                     # 处理长度过长的情况
                     pred = F.softmax(pred.detach().cpu()[:args.probability_maps_length], dim=-1)
                     target = F.one_hot(target.detach().cpu()[:args.probability_maps_length], num_classes=pred.size(-1))
@@ -368,9 +404,11 @@ def main(args: argparse.Namespace):
                     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
                     ax1.set_title("Predicted Probability Maps")
                     ax2.set_title("Difference (Target - Predicted)")
-                    plt.colorbar(ax1.imshow(pred.T, aspect="auto", origin="lower", cmap="viridis", extent=[0, pred.size(0), -1.5 - (pred.size(-1) - 2) // 2, (pred.size(-1) - 2) // 2 + 0.5]), ax=ax1)
-                    plt.colorbar(ax2.imshow((target - pred).T, aspect="auto", origin="lower", cmap=LinearSegmentedColormap.from_list("b_white_r", ["blue", "black", "red"]), vmin=-1, vmax=1, extent=[0, pred.size(1), -1.5 - (pred.size(-1) - 2) // 2, (pred.size(-1) - 2) // 2 + 0.5]), ax=ax2)
-                    writer.add_figure(f"Prediction vs Target/{result_type} Iteration {current_steps // args.accumulation_steps}", fig, current_steps // args.accumulation_steps)
+                    for image, ax in [(pred, ax1), ((target - pred).abs(), ax2)]:
+                        ax.set_xlabel("Time Step")
+                        ax.set_ylabel("Relative Pitch")
+                        plt.colorbar(ax.imshow(image.T, aspect="auto", origin="lower", cmap="viridis", extent=[0, pred.size(0), -0.5 - pred.size(-1) // 2, pred.size(-1) // 2 + 0.5]), ax=ax)
+                    writer.add_figure(f"Prediction vs Target/{result_type} Iteration #{current_steps // args.accumulation_steps}", fig, current_steps // args.accumulation_steps)
                     plt.close(fig)
 
     # 关闭进度条和 SummaryWriter

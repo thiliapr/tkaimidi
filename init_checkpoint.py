@@ -12,8 +12,8 @@ import torch
 import numpy as np
 from torch import optim
 from utils.checkpoint import save_checkpoint
-from utils.constants import DEFAULT_DIM_FEEDFORWARD, DEFAULT_DIM_HEAD, DEFAULT_LEARNING_RATE, DEFAULT_NUM_HEADS, DEFAULT_NUM_LAYERS, DEFAULT_WEIGHT_DECAY
-from utils.model import MidiNet, MidiNetConfig
+from utils.constants import DEFAULT_DIM_FEEDFORWARD, DEFAULT_DIM_HEAD, DEFAULT_LEARNING_RATE, DEFAULT_NUM_HEADS, DEFAULT_NUM_LAYERS, DEFAULT_WEIGHT_DECAY, PITCH_RANGE
+from utils.model import GPT, GPTConfig
 
 
 def set_seed(seed: int):
@@ -74,7 +74,8 @@ def main(args: argparse.Namespace):
     set_seed(args.seed)
 
     # 初始化模型
-    model = MidiNet(MidiNetConfig(
+    model = GPT(GPTConfig(
+        PITCH_RANGE * 2 + 1,
         args.num_heads,
         args.dim_head,
         args.dim_feedforward,

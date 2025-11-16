@@ -8,10 +8,10 @@ from typing import Any, TypedDict
 from collections.abc import Mapping
 import orjson
 import torch
-from utils.model import MidiNetConfig
+from utils.model import GPTConfig
 
 
-class MidiNetInfo(TypedDict):
+class GPTInfo(TypedDict):
     """
     模型的额外信息，也就是不能从状态字典中推断出来的信息
 
@@ -28,7 +28,7 @@ def save_checkpoint(
     model_state: Mapping[str, Any],
     optimizer_state: Mapping[str, Any],
     scaler_state: Mapping[str, Any],
-    ckpt_info: MidiNetInfo
+    ckpt_info: GPTInfo
 ):
     """
     保存模型的检查点到指定路径，包括模型的权重以及训练的进度信息。
@@ -49,7 +49,7 @@ def save_checkpoint(
     (path / "info.json").write_bytes(orjson.dumps(ckpt_info))
 
 
-def load_checkpoint(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNetConfig, MidiNetInfo]:
+def load_checkpoint(path: pathlib.Path) -> tuple[Mapping[str, Any], GPTConfig, GPTInfo]:
     """
     从指定路径加载模型的检查点（用于推理）。
 
@@ -61,7 +61,7 @@ def load_checkpoint(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNetConfi
 
     Examples:
         >>> state_dict, model_config, ckpt_info = load_checkpoint(pathlib.Path("ckpt"))
-        >>> model = MidiNet(model_config, device=torch.device("cuda"))
+        >>> model = GPT(model_config, device=torch.device("cuda"))
         >>> model.load_state_dict(state_dict)
     """
     # 加载模型权重
@@ -75,7 +75,7 @@ def load_checkpoint(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNetConfi
     return model_state, model_config, ckpt_info
 
 
-def load_checkpoint_train(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNetConfig, MidiNetInfo, Mapping[str, Any], Mapping[str, Any]]:
+def load_checkpoint_train(path: pathlib.Path) -> tuple[Mapping[str, Any], GPTConfig, GPTInfo, Mapping[str, Any], Mapping[str, Any]]:
     """
     从指定路径加载模型的检查点（用于恢复训练状态）。
 
@@ -87,7 +87,7 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNe
 
     Examples:
         >>> model_state, model_config, ckpt_info, optimizer_state, scaler_state = load_checkpoint_train(pathlib.Path("ckpt"))
-        >>> model = MidiNet(model_config, deivce="cuda")
+        >>> model = GPT(model_config, deivce="cuda")
         >>> model.load_state_dict(model_state)
         >>> optimizer = optim.AdamW(model.parameters())
         >>> optimizer.load_state_dict(optimizer_state)
@@ -105,9 +105,9 @@ def load_checkpoint_train(path: pathlib.Path) -> tuple[Mapping[str, Any], MidiNe
     return model_state, model_config, ckpt_info, optimizer_state, scaler_state
 
 
-def extract_config(model_state: dict[str, Any], num_heads: int) -> MidiNetConfig:
+def extract_config(model_state: dict[str, Any], num_heads: int) -> GPTConfig:
     """
-    从模型状态字典中提取 MidiNet 模型的配置参数
+    从模型状态字典中提取 GPT 模型的配置参数
     通过分析 state_dict 中各层的维度大小和结构，自动推断出模型的超参数配置
 
     Args:
@@ -121,7 +121,8 @@ def extract_config(model_state: dict[str, Any], num_heads: int) -> MidiNetConfig
         >>> state_dict = torch.load("model.pth")
         >>> config = extract_config(state_dict, 1)  # 假设单头注意力
     """
+    vocab_size = model_state["embedding.weight"].size(0)
     dim_head = model_state["layers.0.linear2.weight"].size(0) // num_heads
     dim_feedforward = model_state["layers.0.linear2.weight"].size(1)
     num_layers = len({key.split(".")[1] for key in model_state if key.startswith("layers.")})
-    return MidiNetConfig(num_heads, dim_head, dim_feedforward, num_layers)
+    return GPTConfig(vocab_size, num_heads, dim_head, dim_feedforward, num_layers)

@@ -111,7 +111,7 @@ class MultiheadAttention(nn.Module):
         freqs_cis = freqs_cis.view(1, 1, -1, freqs_cis.shape[-1])
 
         # 应用旋转（复数乘法）
-        rotated_complex = complex_tensor * freqs_cis
+        rotated_complex = complex_tensor * freqs_cis.clone()
 
         # 转换回实数表示
         rotated_real = torch.view_as_real(rotated_complex)
@@ -226,23 +226,25 @@ class GPTBlock(nn.Module):
         return x, kv_cache
 
 
-class MidiNetConfig(NamedTuple):
+class GPTConfig(NamedTuple):
     """
-    MidiNet 的配置类，包含模型的超参数设置。
+    GPT 的配置类，包含模型的超参数设置。
 
     Attributes:
+        vocab_size: 词汇表大小
         num_heads: 注意力头的数量
         dim_head: 每个注意力头的维度
         dim_feedforward: 前馈网络的隐藏层维度
         num_layers: GPTBlock 堆叠层数
     """
+    vocab_size: int
     num_heads: int
     dim_head: int
     dim_feedforward: int
     num_layers: int
 
 
-class MidiNet(nn.Module):
+class GPT(nn.Module):
     """
     仿照 GPT 构造的模块
 
@@ -256,19 +258,18 @@ class MidiNet(nn.Module):
         updated_kv_cache: 更新后的键值缓存元组
     """
 
-    def __init__(self, config: MidiNetConfig, dropout: float = 0.):
+    def __init__(self, config: GPTConfig, dropout: float = 0.):
         super().__init__()
-        vocab_size = PITCH_RANGE * 2 + 2  # 音符词汇表大小，包括上下 PITCH_RANGE 个半音、不变的音和静音
         self.dim_model = config.dim_head * config.num_heads  # 总模型维度
 
         # 相对音高嵌入
-        self.embedding = nn.Embedding(vocab_size, self.dim_model)
+        self.embedding = nn.Embedding(config.vocab_size, self.dim_model)
 
         # GPTBlock 堆叠
         self.layers = nn.ModuleList(GPTBlock(config.dim_head, config.num_heads, config.dim_feedforward, dropout) for _ in range(config.num_layers))
 
         # 音符预测器
-        self.predictor = nn.Linear(self.dim_model, vocab_size)
+        self.predictor = nn.Linear(self.dim_model, config.vocab_size)
 
         # 初始化权重
         nn.init.zeros_(self.predictor.bias)

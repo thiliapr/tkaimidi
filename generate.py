@@ -10,15 +10,14 @@ import mido
 import torch
 from tqdm import tqdm
 from matplotlib import pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 from torch.nn import functional as F
 from utils.checkpoint import load_checkpoint
-from utils.model import MidiNet
-from utils.midi import midi_to_notes, notes_to_sequence, sequence_to_notes, notes_to_track
+from utils.model import GPT
+from utils.midi import midi_to_notes, notes_to_track
 
 
 @torch.inference_mode()
-def generate(model: MidiNet, prompt: torch.Tensor, num_frames: int, show_progress: bool = True):
+def generate(model: GPT, prompt: torch.Tensor, num_frames: int, show_progress: bool = True):
     """
     使用 MidiNet 模型逐步生成音乐帧序列。
 
@@ -76,6 +75,7 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("ckpt_path", type=pathlib.Path, help="检查点的路径")
     parser.add_argument("num_frames", type=int, help="需要生成的帧数")
     parser.add_argument("output_path", type=pathlib.Path, help="MIDI 文件保存路径。生成的 MIDI 文件将会保存到这里。")
+    parser.add_argument("-t", "--time-step", type=int, default=2, help="每个音符的时间间隔（以帧为单位），默认为 %(default)s 帧。")
     parser.add_argument("-m", "--midi-path", type=pathlib.Path, help="指定的 MIDI 文件，将作为生成的音乐的前面部分。如果未指定，将从头开始生成。")
     parser.add_argument("-s", "--show-probability-maps", action="store_true", help="是否显示生成过程中音高均值和音高范围的钢琴卷帘图表")
     return parser.parse_args(args)
@@ -87,24 +87,27 @@ def main(args: argparse.Namespace):
 
     # 加载模型的预训练检查点
     state_dict, model_config, _ = load_checkpoint(args.ckpt_path)
+    pitch_range = model_config.vocab_size // 2
 
     # 初始化模型并加载状态
-    model = MidiNet(model_config)
+    model = GPT(model_config)
     model.load_state_dict(state_dict)
 
     # 转移模型到设备并设置为评估模式
     model = model.to(device).eval()
 
     # 加载音乐生成的提示部分
-    prompt_notes = [(0, 0)]  # 默认空提示音符列表
+    prompt_sequence = [pitch_range]
     if args.midi_path:
         try:
             prompt_notes = midi_to_notes(mido.MidiFile(args.midi_path))
+            pitches = list(zip(*prompt_notes))[0]
+            prompt_sequence = [p + pitch_range for p in pitches]
         except Exception as e:
             print(f"加载指定的 MIDI 文件时出错: {e}\n将使用空提示音符生成")
 
     # 转换为钢琴卷轴、添加批次维度并开始生成
-    prompt_sequence = torch.tensor(notes_to_sequence(prompt_notes), device=device)
+    prompt_sequence = torch.tensor(prompt_sequence, device=device)
     sequence, probability_maps = generate(
         model,
         prompt_sequence.unsqueeze(0),
@@ -113,28 +116,23 @@ def main(args: argparse.Namespace):
 
     # 如果需要，绘制预测图表
     if args.show_probability_maps:
-        _, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
-        ax1.set_title("Probability Maps")
-        ax2.set_title("Difference (Target - Predicted)")
-        plt.colorbar(ax1.imshow(
-            probability_maps.squeeze(0).T,
-            aspect="auto",
-            origin="lower",
-            cmap="viridis",
-            extent=[0, probability_maps.size(1), -1.5 - (probability_maps.size(-1) - 2) // 2, (probability_maps.size(-1) - 2) // 2 + 0.5],
-        ), ax=ax1)
-        plt.colorbar(ax2.imshow(
-            (F.one_hot(prompt_sequence[1:], num_classes=probability_maps.size(2)) - probability_maps[0, :prompt_sequence.size(0) - 1]).T,
-            aspect="auto",
-            origin="lower",
-            cmap=LinearSegmentedColormap.from_list("b_white_r", ["blue", "black", "red"]),
-            vmin=-1, vmax=1,
-            extent=[0, prompt_sequence.size(0) - 1, -1.5 - (probability_maps.size(-1) - 2) // 2, (probability_maps.size(-1) - 2) // 2 + 0.5],
-        ), ax=ax2)
+        if prompt_sequence.size(0) > 1:
+            _, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
+            ax1.set_title("Probability Maps")
+            ax2.set_title("Difference (Target - Predicted)")
+            plt.colorbar(ax1.imshow(probability_maps.squeeze(0).T, aspect="auto", origin="lower", cmap="viridis", extent=[0, probability_maps.size(1), -0.5 - pitch_range, pitch_range + 0.5]), ax=ax1)
+            plt.colorbar(ax2.imshow((F.one_hot(prompt_sequence[1:], num_classes=probability_maps.size(2)) - probability_maps[0, :prompt_sequence.size(0) - 1]).abs().T, aspect="auto", origin="lower", cmap="viridis", extent=[0, prompt_sequence.size(0), -0.5 - pitch_range, pitch_range + 0.5]), ax=ax2)
+        else:
+            _, ax = plt.subplots(1, 1, figsize=(12, 6))
+            ax.set_title("Probability Maps")
+            plt.colorbar(ax.imshow(probability_maps.squeeze(0).T, aspect="auto", origin="lower", cmap="viridis", extent=[0, probability_maps.size(1), -0.5 - pitch_range, pitch_range + 0.5]), ax=ax)
         plt.show()
 
+    # 添加时间信息（持续时间为 1）
+    notes = [(p - pitch_range, args.time_step) for p in sequence.squeeze(0).tolist()]
+
     # 转换为 MIDI 轨道并保存为文件
-    track = notes_to_track(sequence_to_notes(sequence.squeeze(0).tolist()))
+    track = notes_to_track(notes)
     mido.MidiFile(tracks=[track]).save(args.output_path)
 
 

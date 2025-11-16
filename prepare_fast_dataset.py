@@ -10,33 +10,30 @@ from typing import Optional
 import mido
 import numpy as np
 from tqdm import tqdm
-from utils.midi import midi_to_notes, notes_to_sequence
+from utils.constants import PITCH_RANGE
+from utils.midi import midi_to_notes
 
 
 def convert(
     midi_files: list[pathlib.Path],
     max_frames: int,
-    min_notes: int,
-    time_stretch_count: int,
-    max_stretch_factor: int
-) -> list[list[np.ndarray]]:
+    min_frames: int,
+) -> list[np.ndarray]:
     """
     将 MIDI 文件集合转换为机器学习可用的数据集格式
-    该函数读取MIDI文件，提取音符序列，应用时间拉伸数据增强，并将结果转换为序列表示
-    处理流程包括：读取MIDI文件、过滤不合格文件、提取音高和时间信息、生成时间拉伸变体、转换为序列格式
+    该函数读取 MIDI 文件，提取音符序列，并将结果转换为序列表示
+    处理流程包括：读取 MIDI 文件、过滤不合格文件、提取音高、转换为序列格式
 
     Args:
         midi_files: MIDI文件路径列表
         max_frames: 允许的最大时间帧数，用于过滤过长的 MIDI 文件
-        min_notes: 要求的最小音符数量，用于过滤音符过少的 MIDI 文件
-        time_stretch_count: 时间拉伸变换的采样数量
-        max_stretch_factor: 最大时间拉伸因子
+        min_frames: 要求的最小时间帧数，用于过滤过短的 MIDI 文件
 
     Returns:
-        包含所有MIDI文件数据增强变体的嵌套列表，每个文件对应一个子列表
+        包含所有 MIDI 文件数据列表，每个文件对应一个数组
 
     Examples:
-        >>> dataset = convert(midi_files, 1989, 64, 4, 4)
+        >>> dataset = convert(midi_files, 1989, 64)
         >>> len(dataset)
         8964
     """
@@ -54,33 +51,15 @@ def convert(
         # 提取音符序列
         notes = midi_to_notes(midi_file)
 
-        # 提取音高和时间信息
-        pitches, intervals = zip(*notes)
-        total_duration = sum(intervals)
-        assert all(-24 <= p <= 24 for p in pitches)
-
         # 过滤不符合要求的文件
-        if len(notes) < min_notes or total_duration > max_frames:
+        if not (min_frames <= len(notes) <= max_frames):
             continue
 
-        # 生成时间拉伸因子范围，用于数据增强
-        stretch_factors = range(1, min(max_frames // total_duration, max_stretch_factor) + 1)
+        # 提取音高
+        pitches, _ = zip(*notes)
 
-        # 随机选择指定数量的拉伸因子进行数据增强
-        file_variants = []
-        for stretch_factor in random.sample(stretch_factors, k=min(time_stretch_count, len(stretch_factors))):
-            # 应用时间拉伸变换
-            stretched_intervals = [interval * stretch_factor for interval in intervals]
-            stretched_notes = list(zip(pitches, stretched_intervals))
-
-            # 转化为序列表示
-            sequence = notes_to_sequence(stretched_notes)
-
-            # 将特征元组添加到文件变体列表
-            file_variants.append(sequence)
-        
         # 将特征元组添加到数据集
-        dataset.append(file_variants)
+        dataset.append(np.array(pitches) + PITCH_RANGE)
 
     return dataset
 
@@ -101,8 +80,6 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("splits", type=str, nargs="+", help="输出文件名和拆分比例，格式为`filename:proportion`，如`train:9`和`val:1`")
     parser.add_argument("--min-notes", type=int, default=64, help="MIDI 文件中至少包含的音符数量，默认值为 %(default)s")
     parser.add_argument("--max-frames", type=int, default=4096, help="钢琴卷帘表示中允许的最大时间帧数，默认值为 %(default)s")
-    parser.add_argument("--time-stretch-count", type=int, default=4, help="每个 MIDI 文件随机采样的时间拉伸变换数量，默认值为 %(default)s")
-    parser.add_argument("--max-stretch-factor", type=int, default=4, help="时间拉伸的最大因子，默认值为 %(default)s")
     return parser.parse_args(args)
 
 
@@ -127,7 +104,7 @@ def main(args: argparse.Namespace):
     print(f"正在转换 {len(midi_files)} 个 MIDI 文件 ...")
 
     # 预处理数据
-    dataset = convert(midi_files, args.max_frames, args.min_notes, args.time_stretch_count, args.max_stretch_factor)
+    dataset = convert(midi_files, args.max_frames, args.min_notes)
 
     # 验证数据集大小是否满足拆分需求
     # 这里再次验证是因为之前预处理可能过滤了一部分无效数据，导致总数据量减少
@@ -152,7 +129,7 @@ def main(args: argparse.Namespace):
         # 转换为字典形式，并记录序列的长度
         data = {}
         length = []
-        for task_id, sequence in enumerate(variant for file in subset for variant in file):
+        for task_id, sequence in enumerate(subset):
             data |= {f"{task_id}": sequence}
             length.append(len(sequence))
 
