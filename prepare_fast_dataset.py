@@ -78,8 +78,8 @@ def parse_args(args: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("dataset", type=pathlib.Path, help="数据集的路径。该文件夹应包含 MIDI 格式数据")
     parser.add_argument("output_dir", type=pathlib.Path, help="处理后的特征数据集输出目录")
     parser.add_argument("splits", type=str, nargs="+", help="输出文件名和拆分比例，格式为`filename:proportion`，如`train:9`和`val:1`")
-    parser.add_argument("--min-notes", type=int, default=64, help="MIDI 文件中至少包含的音符数量，默认值为 %(default)s")
-    parser.add_argument("--max-frames", type=int, default=4096, help="钢琴卷帘表示中允许的最大时间帧数，默认值为 %(default)s")
+    parser.add_argument("--min-franes", type=int, default=64, help="要求的最小时间帧数，默认值为 %(default)s")
+    parser.add_argument("--max-frames", type=int, default=4096, help="允许的最大时间帧数，默认值为 %(default)s")
     return parser.parse_args(args)
 
 
@@ -104,7 +104,7 @@ def main(args: argparse.Namespace):
     print(f"正在转换 {len(midi_files)} 个 MIDI 文件 ...")
 
     # 预处理数据
-    dataset = convert(midi_files, args.max_frames, args.min_notes)
+    dataset = convert(midi_files, args.max_frames, args.min_frames)
 
     # 验证数据集大小是否满足拆分需求
     # 这里再次验证是因为之前预处理可能过滤了一部分无效数据，导致总数据量减少
