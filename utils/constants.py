@@ -5,7 +5,7 @@
 
 # 基本常识
 TIME_PRECISION = 120  # 时间精度
-PITCH_RANGE = 24
+PITCH_RANGE = 12
 
 # 模型参数
 DEFAULT_DIM_HEAD = 48
